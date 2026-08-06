@@ -13,24 +13,42 @@ class HomeController extends Controller
 { 
     public function web_hook(Request $request)
     {
+        // 1. التحقق الخاص بربط الـ Webhook مع منصة Meta (مهم جداً عند التفعيل)
+        if ($request->isMethod('get') && $request->has('hub_challenge')) {
+            return response($request->input('hub_challenge'), 200);
+        }
+
         $data = $request->all();
 
+        // 2. معالجة الرسائل الواردة
         if (isset($data['entry'][0]['changes'][0]['value']['messages'][0])) {
             $message = $data['entry'][0]['changes'][0]['value']['messages'][0];
             $senderPhoneNumber = $message['from']; 
             $senderName = $data['entry'][0]['changes'][0]['value']['contacts'][0]['profile']['name'] ?? 'عميل جديد';
+            
+            // جلب نص رسالة العميل
+            $userMessageText = trim($message['text']['body'] ?? '');
 
-            Log::info("Message received from: " . $senderPhoneNumber . " Name: " . $senderName);
+            Log::info("Message received from: {$senderPhoneNumber}, Name: {$senderName}, Message: {$userMessageText}");
 
-            // جلب آخر رسالة من الإدمن لهذا الرقم
-            $chat = Chat::where('phone', $senderPhoneNumber)
-                ->where("is_admin", true)
-                ->orderByDesc("id")
-                ->first();
+            // حفظ رسالة العميل في قاعدة البيانات
+            Chat::create([
+                'name' => $senderName,
+                'phone' => $senderPhoneNumber, 
+                'message' => $userMessageText,
+                'is_image' => false, 
+                'is_admin' => false,
+            ]);
 
-            // التحقق مما إذا كان هناك شات سابق وما إذا كانت آخر رسالة هي صورة
-            if ($chat && $chat->is_image) {
-                $this->sendReplyChat($senderPhoneNumber, $senderName);
+            if ($userMessageText == 'طلب') {
+                $this->sendFirstReplyChat($senderPhoneNumber, $senderName);
+
+            } elseif ($userMessageText == 'نعم') {
+                $this->sendSecondReplyChat($senderPhoneNumber, $senderName);
+
+            } elseif ($userMessageText == 'لا') {
+                $this->sendTakeOrderChat($senderPhoneNumber, $senderName);
+
             } else {
                 $this->sendImageMessage($senderPhoneNumber, $senderName);
             }
@@ -43,9 +61,8 @@ class HomeController extends Controller
     {
         $menus = Menue::get();
         $response = null;
-
-        // يفضل وضع YOUR_PHONE_NUMBER_ID في ملف .env
         $phoneNumberId = env('WHATSAPP_PHONE_NUMBER_ID', 'YOUR_PHONE_NUMBER_ID');
+        $token = env('WHATSAPP_ACCESS_TOKEN');
 
         foreach ($menus as $menu) {
             $imageUrl = url('storage/' . $menu->image);
@@ -57,11 +74,11 @@ class HomeController extends Controller
                 "type" => "image",
                 "image" => [
                     "link" => $imageUrl, 
-                    "caption" => "مرحبا بحضرتك ده المنيو بتاع المطعم تقدر دلوقت تطلب لو عاوز تطلب برجاء كتابة طلب"
+                    "caption" => "مرحبا بحضرتك ده المنيو بتاع المطعم، تقدر دلوقتي تطلب.. لو عاوز تطلب برجاء كتابة كلمة 'طلب'"
                 ]
             ];
 
-            $response = Http::withToken(env('WHATSAPP_ACCESS_TOKEN'))
+            $response = Http::withToken($token)
                 ->post("https://graph.facebook.com/v17.0/{$phoneNumberId}/messages", $payload);
             
             Chat::create([
@@ -76,9 +93,10 @@ class HomeController extends Controller
         return $response ? $response->json() : ['status' => 'no_menus'];
     }
  
-    private function sendReplyChat($userPhoneNumber, $senderName)
+    private function sendFirstReplyChat($userPhoneNumber, $senderName)
     {
         $phoneNumberId = env('WHATSAPP_PHONE_NUMBER_ID', 'YOUR_PHONE_NUMBER_ID');
+        $bodyText = "للحصول على عروض أكثر يمكنك الطلب عن طريق الموقع الإلكتروني.. للحصول على الموقع اكتب 'نعم'، للطلب من هنا اكتب 'لا'";
 
         $payload = [
             "messaging_product" => "whatsapp",
@@ -86,7 +104,36 @@ class HomeController extends Controller
             "to" => $userPhoneNumber,
             "type" => "text",
             "text" => [ 
-                "body" => "مرحبا بحضرتك ده لينك لاختيار الوجبة المناسبة" . PHP_EOL . "https://keeto.org/" 
+                "body" => $bodyText
+            ]
+        ];
+
+        $response = Http::withToken(env('WHATSAPP_ACCESS_TOKEN'))
+            ->post("https://graph.facebook.com/v17.0/{$phoneNumberId}/messages", $payload);
+        
+        Chat::create([
+            'name' => $senderName,
+            'phone' => $userPhoneNumber, 
+            'message' => $bodyText, // تم تصحيح المتغير هنا
+            'is_image' => false, 
+            'is_admin' => true,
+        ]);
+
+        return $response->json();
+    }
+
+    private function sendSecondReplyChat($userPhoneNumber, $senderName)
+    {
+        $phoneNumberId = env('WHATSAPP_PHONE_NUMBER_ID', 'YOUR_PHONE_NUMBER_ID');
+        $bodyText = "مرحبا بحضرتك، ده لينك الموقع الإلكتروني: \n https://keeto.org/";
+
+        $payload = [
+            "messaging_product" => "whatsapp",
+            "recipient_type" => "individual",
+            "to" => $userPhoneNumber,
+            "type" => "text",
+            "text" => [ 
+                "body" => $bodyText 
             ]
         ];
 
@@ -97,6 +144,35 @@ class HomeController extends Controller
             'name' => $senderName,
             'phone' => $userPhoneNumber, 
             'message' => 'Sent order link',
+            'is_image' => false, 
+            'is_admin' => true,
+        ]);
+
+        return $response->json();
+    }
+    
+    private function sendTakeOrderChat($userPhoneNumber, $senderName)
+    {
+        $phoneNumberId = env('WHATSAPP_PHONE_NUMBER_ID', 'YOUR_PHONE_NUMBER_ID');
+        $bodyText = "تحت أمرك، برجاء كتابة طلبك هنا وسيقوم أحد ممثلي خدمة العملاء بمراجعة الطلب معك فوراً.";
+
+        $payload = [
+            "messaging_product" => "whatsapp",
+            "recipient_type" => "individual",
+            "to" => $userPhoneNumber,
+            "type" => "text",
+            "text" => [ 
+                "body" => $bodyText
+            ]
+        ];
+
+        $response = Http::withToken(env('WHATSAPP_ACCESS_TOKEN'))
+            ->post("https://graph.facebook.com/v17.0/{$phoneNumberId}/messages", $payload);
+        
+        Chat::create([
+            'name' => $senderName,
+            'phone' => $userPhoneNumber, 
+            'message' => $bodyText,
             'is_image' => false, 
             'is_admin' => true,
         ]);
