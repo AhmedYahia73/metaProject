@@ -13,7 +13,7 @@ class HomeController extends Controller
 { 
     public function web_hook(Request $request)
     {
-        // 1. التحقق الخاص بربط الـ Webhook مع منصة Meta (مهم جداً عند التفعيل)
+        // 1. التحقق الخاص بربط الـ Webhook مع منصة Meta
         if ($request->isMethod('get') && $request->has('hub_challenge')) {
             return response($request->input('hub_challenge'), 200);
         }
@@ -40,16 +40,37 @@ class HomeController extends Controller
                 'is_admin' => false,
             ]);
 
-            if ($userMessageText == 'طلب') {
+            // --- التحديث الجديد: التحقق من احتواء الرسالة على كلمات تدل على الطلب ---
+            
+            // مصفوفة تحتوي على كل الكلمات المحتملة للطلب (يمكنك إضافة المزيد هنا)
+            $orderKeywords = ['طلب', 'اطلب', 'أطلب', 'طالب', 'اوردر', 'أوردر', 'order'];
+            $wantsToOrder = false;
+
+            // البحث داخل رسالة العميل عن أي من الكلمات المفتاحية
+            foreach ($orderKeywords as $keyword) {
+                // استخدام دالة str_contains لـ PHP 8
+                // أو نستخدم mb_strpos لدعم أفضل للغة العربية إذا كنت تستخدم إصدار قديم
+                if (mb_strpos($userMessageText, $keyword) !== false) {
+                    $wantsToOrder = true;
+                    break; // نوقف البحث بمجرد العثور على أول تطابق
+                }
+            }
+
+            // 3. توجيه الردود
+            if ($wantsToOrder) {
+                // إذا كانت الرسالة تحتوي على كلمة طلب أو مشابهاتها
                 $this->sendFirstReplyChat($senderPhoneNumber, $senderName);
 
-            } elseif ($userMessageText == 'نعم') {
+            } elseif ($userMessageText === 'نعم' || $userMessageText === 'اه' || $userMessageText === 'ايوه') {
+                // أضفت لك بعض المرونة هنا أيضاً في كلمة "نعم"
                 $this->sendSecondReplyChat($senderPhoneNumber, $senderName);
 
-            } elseif ($userMessageText == 'لا') {
+            } elseif ($userMessageText === 'لا' || $userMessageText === 'لاء') {
+                // مرونة في كلمة "لا"
                 $this->sendTakeOrderChat($senderPhoneNumber, $senderName);
 
             } else {
+                // الوضع الافتراضي (أي رسالة أخرى): إرسال المنيو
                 $this->sendImageMessage($senderPhoneNumber, $senderName);
             }
         }
@@ -114,7 +135,7 @@ class HomeController extends Controller
         Chat::create([
             'name' => $senderName,
             'phone' => $userPhoneNumber, 
-            'message' => $bodyText, // تم تصحيح المتغير هنا
+            'message' => $bodyText, 
             'is_image' => false, 
             'is_admin' => true,
         ]);
