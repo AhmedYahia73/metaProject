@@ -13,69 +13,79 @@ class HomeController extends Controller
 { 
     public function web_hook(Request $request)
     {
-        // 1. التحقق الخاص بربط الـ Webhook مع منصة Meta
-        if ($request->isMethod('get') && $request->has('hub_challenge')) {
-            return response($request->input('hub_challenge'), 200);
-        }
+        try {
+            // 1. التحقق الخاص بربط الـ Webhook مع منصة Meta
+            if ($request->isMethod('get') && $request->has('hub_challenge')) {
+                return response($request->input('hub_challenge'), 200);
+            }
 
-        $data = $request->all();
+            $data = $request->all();
 
-        // 2. معالجة الرسائل الواردة
-        if (isset($data['entry'][0]['changes'][0]['value']['messages'][0])) {
-            $message = $data['entry'][0]['changes'][0]['value']['messages'][0];
-            $senderPhoneNumber = $message['from']; 
-            $senderName = $data['entry'][0]['changes'][0]['value']['contacts'][0]['profile']['name'] ?? 'عميل جديد';
-            
-            // جلب نص رسالة العميل
-            $userMessageText = trim($message['text']['body'] ?? '');
+            // 2. معالجة الرسائل الواردة
+            if (isset($data['entry'][0]['changes'][0]['value']['messages'][0])) {
+                $message = $data['entry'][0]['changes'][0]['value']['messages'][0];
+                $senderPhoneNumber = $message['from']; 
+                $senderName = $data['entry'][0]['changes'][0]['value']['contacts'][0]['profile']['name'] ?? 'عميل جديد';
+                
+                // جلب نص رسالة العميل
+                $userMessageText = trim($message['text']['body'] ?? '');
 
-            Log::info("Message received from: {$senderPhoneNumber}, Name: {$senderName}, Message: {$userMessageText}");
+                Log::info("Message received from: {$senderPhoneNumber}, Name: {$senderName}, Message: {$userMessageText}");
 
-            // حفظ رسالة العميل في قاعدة البيانات
-            Chat::create([
-                'name' => $senderName,
-                'phone' => $senderPhoneNumber, 
-                'message' => $userMessageText,
-                'is_image' => false, 
-                'is_admin' => false,
-            ]);
+                // حفظ رسالة العميل في قاعدة البيانات
+                Chat::create([
+                    'name' => $senderName,
+                    'phone' => $senderPhoneNumber, 
+                    'message' => $userMessageText,
+                    'is_image' => false, 
+                    'is_admin' => false,
+                ]);
 
-            // --- التحديث الجديد: التحقق من احتواء الرسالة على كلمات تدل على الطلب ---
-            
-            // مصفوفة تحتوي على كل الكلمات المحتملة للطلب (يمكنك إضافة المزيد هنا)
-            $orderKeywords = ['طلب', 'اطلب', 'أطلب', 'طالب', 'اوردر', 'أوردر', 'order'];
-            $wantsToOrder = false;
+                // --- التحديث الجديد: التحقق من احتواء الرسالة على كلمات تدل على الطلب ---
+                
+                // مصفوفة تحتوي على كل الكلمات المحتملة للطلب (يمكنك إضافة المزيد هنا)
+                $orderKeywords = ['طلب', 'اطلب', 'أطلب', 'طالب', 'اوردر', 'أوردر', 'order'];
+                $wantsToOrder = false;
 
-            // البحث داخل رسالة العميل عن أي من الكلمات المفتاحية
-            foreach ($orderKeywords as $keyword) {
-                // استخدام دالة str_contains لـ PHP 8
-                // أو نستخدم mb_strpos لدعم أفضل للغة العربية إذا كنت تستخدم إصدار قديم
-                if (mb_strpos($userMessageText, $keyword) !== false) {
-                    $wantsToOrder = true;
-                    break; // نوقف البحث بمجرد العثور على أول تطابق
+                // البحث داخل رسالة العميل عن أي من الكلمات المفتاحية
+                foreach ($orderKeywords as $keyword) {
+                    // استخدام دالة str_contains لـ PHP 8
+                    // أو نستخدم mb_strpos لدعم أفضل للغة العربية إذا كنت تستخدم إصدار قديم
+                    if (mb_strpos($userMessageText, $keyword) !== false) {
+                        $wantsToOrder = true;
+                        break; // نوقف البحث بمجرد العثور على أول تطابق
+                    }
+                }
+
+                // 3. توجيه الردود
+                if ($wantsToOrder) {
+                    // إذا كانت الرسالة تحتوي على كلمة طلب أو مشابهاتها
+                    $this->sendFirstReplyChat($senderPhoneNumber, $senderName);
+
+                } elseif ($userMessageText === 'نعم' || $userMessageText === 'اه' || $userMessageText === 'ايوه') {
+                    // أضفت لك بعض المرونة هنا أيضاً في كلمة "نعم"
+                    $this->sendSecondReplyChat($senderPhoneNumber, $senderName);
+
+                } elseif ($userMessageText === 'لا' || $userMessageText === 'لاء') {
+                    // مرونة في كلمة "لا"
+                    $this->sendTakeOrderChat($senderPhoneNumber, $senderName);
+
+                } else {
+                    // الوضع الافتراضي (أي رسالة أخرى): إرسال المنيو
+                    $this->sendImageMessage($senderPhoneNumber, $senderName);
                 }
             }
 
-            // 3. توجيه الردود
-            if ($wantsToOrder) {
-                // إذا كانت الرسالة تحتوي على كلمة طلب أو مشابهاتها
-                $this->sendFirstReplyChat($senderPhoneNumber, $senderName);
-
-            } elseif ($userMessageText === 'نعم' || $userMessageText === 'اه' || $userMessageText === 'ايوه') {
-                // أضفت لك بعض المرونة هنا أيضاً في كلمة "نعم"
-                $this->sendSecondReplyChat($senderPhoneNumber, $senderName);
-
-            } elseif ($userMessageText === 'لا' || $userMessageText === 'لاء') {
-                // مرونة في كلمة "لا"
-                $this->sendTakeOrderChat($senderPhoneNumber, $senderName);
-
-            } else {
-                // الوضع الافتراضي (أي رسالة أخرى): إرسال المنيو
-                $this->sendImageMessage($senderPhoneNumber, $senderName);
-            }
+            return response()->json(['status' => 'success'], 200);
+        } catch (\Throwable $e) {
+            Log::error("Webhook error: " . $e->getMessage(), [
+                'trace' => $e->getTraceAsString(),
+                'request_data' => $request->all()
+            ]);
+            // Return 200 to prevent Meta from retrying endlessly, or 500 depending on preference.
+            // Meta recommends returning 200 even for errors to avoid them resending the same webhook.
+            return response()->json(['status' => 'error', 'message' => 'Internal Server Error'], 200);
         }
-
-        return response()->json(['status' => 'success'], 200);
     }
 
     public function verify(Request $request)
