@@ -9,4 +9,5 @@ Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
 
+Route::get('/web-hook', [HomeController::class, 'web_hook']);
 Route::post('/web-hook', [HomeController::class, 'web_hook']);

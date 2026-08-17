@@ -77,7 +77,23 @@ class HomeController extends Controller
 
         return response()->json(['status' => 'success'], 200);
     }
- 
+
+    public function verify(Request $request)
+    {
+        $verifyToken = env('WHATSAPP_ACCESS_TOKEN');
+
+        $mode = $request->query('hub_mode');
+        $token = $request->query('hub_verify_token');
+        $challenge = $request->query('hub_challenge');
+
+        // التأكد من التطابق وإرجاع الـ challenge كـ plain text
+        if ($mode === 'subscribe' && $token === $verifyToken) {
+            return response($challenge, 200)->header('Content-Type', 'text/plain');
+        }
+
+        return response('Forbidden', 403);
+    }
+
     private function sendImageMessage($userPhoneNumber, $senderName)
     {
         $menus = Menue::get();
