@@ -20,8 +20,7 @@ class HomeController extends Controller
             }
 
             $data = $request->all();
-
-            Log::info($data);
+ 
             // 2. معالجة الرسائل الواردة
             if (isset($data['entry'][0]['changes'][0]['value']['messages'][0])) {
                 $message = $data['entry'][0]['changes'][0]['value']['messages'][0];
