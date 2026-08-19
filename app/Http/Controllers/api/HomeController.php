@@ -87,22 +87,31 @@ class HomeController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Internal Server Error'], 200);
         }
     }
-    
-    public function verify(Request $request)
-    {
-        // تغيير المتغير ليقرأ الـ Verify Token وليس الـ Access Token
-        $verifyToken = env('WHATSAPP_VERIFY_TOKEN');
 
-        $mode = $request->query('hub_mode') ?? $request->input('hub_mode');
-        $token = $request->query('hub_verify_token') ?? $request->input('hub_verify_token');
-        $challenge = $request->query('hub_challenge') ?? $request->input('hub_challenge');
+public function verify(Request $request)
+{
+    $verifyToken = env('WHATSAPP_VERIFY_TOKEN');
 
-        if ($mode === 'subscribe' && $token === $verifyToken) {
-            return response((string)$challenge, 200)->header('Content-Type', 'text/plain');
-        }
+    // محاولة قراءة المتغيرات سواء تم تحويل النقطة إلى شرطة سفلية أم لا
+    $mode = $request->input('hub_mode') ?? $request->input('hub.mode');
+    $token = $request->input('hub_verify_token') ?? $request->input('hub.verify_token');
+    $challenge = $request->input('hub_challenge') ?? $request->input('hub.challenge');
 
-        return response('Forbidden', 403);
+    // تسجيل البيانات في ملف laravel.log لمعرفة سبب الرفض
+    \Illuminate\Support\Facades\Log::info('Meta Verification Debug:', [
+        'expected_token_in_env' => $verifyToken,
+        'received_token_from_meta' => $token,
+        'received_mode' => $mode,
+        'received_challenge' => $challenge,
+        'all_url_parameters' => $request->all()
+    ]);
+
+    if ($mode === 'subscribe' && $token === $verifyToken) {
+        return response((string) $challenge, 200)->header('Content-Type', 'text/plain');
     }
+
+    return response('Forbidden', 403);
+}
 
     private function sendImageMessage($userPhoneNumber, $senderName)
     {
