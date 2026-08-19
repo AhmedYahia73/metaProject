@@ -87,18 +87,18 @@ class HomeController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Internal Server Error'], 200);
         }
     }
-
+    
     public function verify(Request $request)
     {
-        $verifyToken = env('WHATSAPP_ACCESS_TOKEN');
+        // تغيير المتغير ليقرأ الـ Verify Token وليس الـ Access Token
+        $verifyToken = env('WHATSAPP_VERIFY_TOKEN');
 
-        $mode = $request->query('hub_mode');
-        $token = $request->query('hub_verify_token');
-        $challenge = $request->query('hub_challenge');
+        $mode = $request->query('hub_mode') ?? $request->input('hub_mode');
+        $token = $request->query('hub_verify_token') ?? $request->input('hub_verify_token');
+        $challenge = $request->query('hub_challenge') ?? $request->input('hub_challenge');
 
-        // التأكد من التطابق وإرجاع الـ challenge كـ plain text
         if ($mode === 'subscribe' && $token === $verifyToken) {
-            return response($challenge, 200)->header('Content-Type', 'text/plain');
+            return response((string)$challenge, 200)->header('Content-Type', 'text/plain');
         }
 
         return response('Forbidden', 403);
