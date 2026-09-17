@@ -14,9 +14,18 @@ return new class extends Migration
         Schema::create('users', function (Blueprint $table) {
             $table->id();
             $table->string('name');
-            $table->string('email')->unique();
+            $table->string('email')->nullable()->unique();
+            $table->string('phone')->nullable()->unique();
             $table->timestamp('email_verified_at')->nullable();
             $table->string('password');
+            $table->longText('ai_context')->nullable();
+            $table->string('android_link')->nullable();
+            $table->string('ois_link')->nullable();
+            $table->integer('msg_number')->default(0);
+            $table->string('access_token', 500)->nullable();
+            $table->string('phone_number_id')->nullable();
+            $table->string('url')->nullable();
+            $table->enum('role', ['admin', 'user'])->default('user');
             $table->rememberToken();
             $table->timestamps();
         });

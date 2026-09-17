@@ -20,7 +20,16 @@ class User extends Authenticatable
     protected $fillable = [
         'name',
         'email',
+        'phone',
         'password',
+        'ai_context',
+        'android_link',
+        'ois_link',
+        'msg_number',
+        'access_token',
+        'phone_number_id',
+        'url',
+        'role',
     ];
 
     /**
@@ -43,6 +52,17 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'msg_number' => 'integer',
         ];
+    }
+
+    /**
+     * Get the orders for the user.
+     *
+     * @return \Illuminate\Database\Eloquent\Relations\HasMany<\App\Models\Order, $this>
+     */
+    public function orders(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(Order::class);
     }
 }
