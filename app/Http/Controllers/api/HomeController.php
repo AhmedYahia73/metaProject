@@ -3,556 +3,326 @@
 namespace App\Http\Controllers\api;
 
 use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
 use App\Models\Chat;
-use App\Models\Menue;
-use App\Models\User;
+use App\Models\Food;
 use App\Models\MsgSend;
 use App\Models\Order;
+use App\Models\Setting;
+use App\Models\User;
+use Illuminate\Http\Request;
+use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use OpenAI;
 
 class HomeController extends Controller
-{ 
+{
+    /**
+     * Base WhatsApp Graph API URL.
+     */
+    private const GRAPH_API_BASE = 'https://graph.facebook.com/v21.0';
+
+    /**
+     * Main webhook entry point.
+     * Handles Meta verification challenges and incoming messages.
+     */
     public function web_hook(Request $request)
     {
+        // 1. Handle Meta webhook verification (GET challenge)
+        if ($request->isMethod('get') && $request->has('hub_challenge')) {
+            return response($request->input('hub_challenge'), Response::HTTP_OK);
+        }
+
         try {
-
             $data = $request->all();
-            $metadata = $data['entry'][0]['changes'][0]['value']['metadata'] ?? null;
-            $phone_number_id = $metadata['phone_number_id'] ?? null;
-            $user_data = User::where('phone_number_id', $phone_number_id)->first();
-            $access_token = $user_data->access_token ?? null;
 
-            $total_msgs = Order::
-            where("from", "<=", date("Y-m-d"))
-            ->where("to", ">=", date("Y-m-d"))
-            ->sum("msgs");
-            $from = Order::
-            where("from", "<=", date("Y-m-d"))
-            ->where("to", ">=", date("Y-m-d"))
-            ->min("from");
-            $to = Order::
-            where("from", "<=", date("Y-m-d"))
-            ->where("to", ">=", date("Y-m-d"))
-            ->max("to");
-            $total_sender = MsgSend::
-            whereDate("created_at", ">=", $from)
-            ->whereDate("created_at", "<=", $to)
-            ->where("user_id", $user_data->id)
-            ->count();
-            if($total_msgs <= $total_sender ){
-                return response()->json(['status' => 'limit_exceeded'], 200);
+            // 2. Resolve the restaurant user via phone_number_id
+            $phoneNumberId = data_get($data, 'entry.0.changes.0.value.metadata.phone_number_id');
 
+            if (! $phoneNumberId) {
+                return response()->json(['status' => 'ignored'], Response::HTTP_OK);
             }
-            $message = $request->input('message');
 
+            /** @var User|null $restaurant */
+            $restaurant = User::where('phone_number_id', $phoneNumberId)
+                ->where('role', 'user')
+                ->first();
 
-            $instructions = <<<PROMPT
-            أنت موظف خدمة عملاء لمطعم.
+            if (! $restaurant) {
+                Log::warning("Webhook received for unknown phone_number_id: {$phoneNumberId}");
+                return response()->json(['status' => 'restaurant_not_found'], Response::HTTP_OK);
+            }
 
-            مهمتك:
-            - الرد باللغة العربية وبأسلوب ودود وبسيط.
-            - مساعدة العميل في اختيار الوجبة المناسبة.
-            - لا تخترع أي بيانات.
-            - استخدم أداة search_foods للبحث في الوجبات.
-            - لا تقترح الوجبات غير المتاحة.
-            - إذا طلب العميل روابط المطعم أعطه الروابط الموجودة هنا.
+            // 3. Extract incoming message
+            $incomingMessage = data_get($data, 'entry.0.changes.0.value.messages.0');
 
-            روابط المطعم:
-            الموقع: {$user_data->url}
-            Android: {$user_data->android_link}
-            iOS: {$user_data->ios_link}
+            if (! $incomingMessage) {
+                return response()->json(['status' => 'no_message'], Response::HTTP_OK);
+            }
 
-            لا تخترع أسعار أو أسماء أو خصومات.
-            PROMPT;
+            $senderPhone = $incomingMessage['from'];
+            $senderName  = data_get($data, 'entry.0.changes.0.value.contacts.0.profile.name', 'عميل');
+            $messageText = trim(data_get($incomingMessage, 'text.body', ''));
 
-            $tools = [
-                [
-                    'type' => 'function',
-                    'name' => 'search_foods',
-                    'description' => 'البحث في قاعدة بيانات الوجبات.',
-                    'strict' => true,
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'query' => [
-                                'type' => 'string',
-                                'description' => 'مصطلح البحث عن الوجبة.',
-                            ],
-                            'limit' => [
-                                'type' => 'integer',
-                                'minimum' => 1,
-                                'maximum' => 10,
-                            ],
-                        ],
-                        'required' => ['query', 'limit'],
-                        'additionalProperties' => false,
-                    ],
-                ],
-            ];
+            // Ignore non-text messages (images, stickers, etc.)
+            if (empty($messageText)) {
+                return response()->json(['status' => 'non_text_ignored'], Response::HTTP_OK);
+            }
 
-            $response = OpenAI::responses()->create([
-                'model' => 'gpt-5.5',
-                'instructions' => $instructions,
-                'tools' => $tools,
-                'input' => $message,
+            Log::info("Webhook: message received", [
+                'restaurant_id' => $restaurant->id,
+                'sender'        => $senderPhone,
+                'message'       => $messageText,
             ]);
 
-            // تنفيذ الـ tools التي طلبها الـAI
-            $toolOutputs = [];
-
-            foreach ($response->output as $item) {
-
-                if ($item->type !== 'function_call') {
-                    continue;
-                }
-
-                $name = $item->name ?? null;
-
-                $args = json_decode(
-                    $item->arguments ?? '{}',
-                    true
-                ) ?: [];
-
-                if ($name === 'search_foods') {
-
-                    $query = trim($args['query'] ?? '');
-                    $limit = (int) ($args['limit'] ?? 10);
-
-                    $foods = Food::query()
-                        ->where('status', 1)
-                        ->where('is_out_of_stock', 0)
-                        ->where(function ($q) use ($query) {
-                            $q->where('name_ar', 'like', "%{$query}%")
-                            ->orWhere('description_ar', 'like', "%{$query}%");
-                        })
-                        ->limit($limit)
-                        ->get([
-                            'id',
-                            'name_ar',
-                            'description_ar',
-                            'start_time',
-                            'end_time',
-                            'price',
-                            'discount_type',
-                            'discount_value',
-                            'is_out_of_stock',
-                        ]);
-
-                    $toolOutputs[] = [
-                        'type' => 'function_call_output',
-                        'call_id' => $item->callId,
-                        'output' => json_encode(
-                            [
-                                'foods' => $foods->toArray(),
-                            ],
-                            JSON_UNESCAPED_UNICODE
-                        ),
-                    ];
-                }
+            // 4. Check if the restaurant has an active subscription with remaining messages
+            if (! $this->hasRemainingMessages($restaurant)) {
+                Log::info("Webhook: message limit reached for restaurant #{$restaurant->id}");
+                return response()->json(['status' => 'limit_exceeded'], Response::HTTP_OK);
             }
 
-            // لو الـAI طلب بيانات من قاعدة البيانات
-            if (!empty($toolOutputs)) {
+            // 5. Save the customer's incoming message
+            Chat::create([
+                'user_id'  => $restaurant->id,
+                'name'     => $senderName,
+                'phone'    => $senderPhone,
+                'message'  => $messageText,
+                'is_image' => false,
+                'is_admin' => false,
+            ]);
 
-                $response = OpenAI::responses()->create([
-                    'model' => 'gpt-5.5',
-                    'instructions' => $instructions,
-                    'tools' => $tools,
-                    'previous_response_id' => $response->id,
-                    'input' => $toolOutputs,
-                ]);
+            // 6. Get AI reply
+            $reply = $this->getAiReply($restaurant, $messageText);
+
+            if (! $reply) {
+                Log::warning("Webhook: AI returned empty reply for restaurant #{$restaurant->id}");
+                return response()->json(['status' => 'ai_failed'], Response::HTTP_OK);
             }
 
-            $reply = $response->outputText; 
-  
+            // 7. Send reply via WhatsApp — only record to DB if successful
+            $sent = $this->sendTextMessage(
+                accessToken:   $restaurant->access_token,
+                phoneNumberId: $restaurant->phone_number_id,
+                to:            $senderPhone,
+                body:          $reply,
+            );
 
-
-            if (!$metadata) {
-                return response()->json(['status' => 'ignored'], 200);
-            }
-
- 
-            // 2. معالجة الرسائل الواردة
-            if (isset($data['entry'][0]['changes'][0]['value']['messages'][0])) {
-                $message = $data['entry'][0]['changes'][0]['value']['messages'][0];
-                $senderPhoneNumber = $message['from']; 
-                $senderName = $data['entry'][0]['changes'][0]['value']['contacts'][0]['profile']['name'] ?? 'عميل جديد';
-                
-                // جلب نص رسالة العميل
-                $userMessageText = trim($message['text']['body'] ?? '');
-
-                Log::info("Message received from: {$senderPhoneNumber}, Name: {$senderName}, Message: {$userMessageText}");
-
-                // حفظ رسالة العميل في قاعدة البيانات
+            if ($sent) {
                 Chat::create([
-                    'name' => $senderName,
-                    'phone' => $senderPhoneNumber, 
-                    'message' => $userMessageText,
-                    'is_image' => false, 
-                    'is_admin' => false,
-                    'user_id' => $user_data->id ?? null,
-                ]); 
- 
-            }
-
-                // حفظ رسالة العميل في قاعدة البيانات
-                Chat::create([
-                    'name' => $senderName,
-                    'phone' => $senderPhoneNumber,
-                    'message' => $reply,
+                    'user_id'  => $restaurant->id,
+                    'name'     => $senderName,
+                    'phone'    => $senderPhone,
+                    'message'  => $reply,
                     'is_image' => false,
                     'is_admin' => true,
-                ]); 
-                MsgSend::
-                create([
-                    'user_id' => $user_data->id ?? null,
-                ]); 
-            return response()->json(['status' => 'success'], 200);
+                ]);
+
+                MsgSend::create(['user_id' => $restaurant->id]);
+            } else {
+                Log::warning("Webhook: WhatsApp send failed for restaurant #{$restaurant->id} to {$senderPhone}");
+            }
+
+            return response()->json(['status' => 'success'], Response::HTTP_OK);
+
         } catch (\Throwable $e) {
-            Log::error("Webhook error: " . $e->getMessage(), [
-                'trace' => $e->getTraceAsString(),
-                'request_data' => $request->all()
+            Log::error("Webhook exception: " . $e->getMessage(), [
+                'trace'    => $e->getTraceAsString(),
+                'payload'  => $request->all(),
             ]);
-            // Return 200 to prevent Meta from retrying endlessly, or 500 depending on preference.
-            // Meta recommends returning 200 even for errors to avoid them resending the same webhook.
-            return response()->json(['status' => 'error', 'message' => 'Internal Server Error'], 200);
+
+            // Always return 200 to prevent Meta from retrying endlessly
+            return response()->json(['status' => 'error'], Response::HTTP_OK);
         }
     }
 
+    /**
+     * Meta webhook verification endpoint (used during setup).
+     */
     public function verify(Request $request)
     {
         $verifyToken = env('WHATSAPP_VERIFY_TOKEN');
-
-        // محاولة قراءة المتغيرات سواء تم تحويل النقطة إلى شرطة سفلية أم لا
-        $mode = $request->input('hub_mode') ?? $request->input('hub.mode');
-        $token = $request->input('hub_verify_token') ?? $request->input('hub.verify_token');
-        $challenge = $request->input('hub_challenge') ?? $request->input('hub.challenge');
-
-        // تسجيل البيانات في ملف laravel.log لمعرفة سبب الرفض
-        \Illuminate\Support\Facades\Log::info('Meta Verification Debug:', [
-            'expected_token_in_env' => $verifyToken,
-            'received_token_from_meta' => $token,
-            'received_mode' => $mode,
-            'received_challenge' => $challenge,
-            'all_url_parameters' => $request->all()
-        ]);
+        $mode        = $request->input('hub_mode');
+        $token       = $request->input('hub_verify_token');
+        $challenge   = $request->input('hub_challenge');
 
         if ($mode === 'subscribe' && $token === $verifyToken) {
-            return response((string) $challenge, 200)->header('Content-Type', 'text/plain');
+            return response((string) $challenge, Response::HTTP_OK)
+                ->header('Content-Type', 'text/plain');
         }
 
-        return response('Forbidden', 403);
+        return response('Forbidden', Response::HTTP_FORBIDDEN);
     }
 
-    private function sendImageMessage($userPhoneNumber, $senderName)
+    // ─────────────────────────────────────────────────────────────────────────
+    // Private Helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Determine whether the restaurant still has messages left in its active subscription.
+     */
+    private function hasRemainingMessages(User $restaurant): bool
     {
-        $menus = Menue::get();
-        $response = null;
-        $phoneNumberId = env('WHATSAPP_PHONE_NUMBER_ID', 'YOUR_PHONE_NUMBER_ID');
-        $token = env('WHATSAPP_ACCESS_TOKEN');
+        $today = now()->toDateString();
 
-        foreach ($menus as $menu) {
-            $imageUrl = url('storage/' . $menu->image);
-                
-            $payload = [
-                "messaging_product" => "whatsapp",
-                "recipient_type" => "individual",
-                "to" => $userPhoneNumber,
-                "type" => "image",
-                "image" => [
-                    "link" => $imageUrl, 
-                    "caption" => "مرحبا بحضرتك ده المنيو بتاع المطعم، تقدر دلوقتي تطلب.. لو عاوز تطلب برجاء كتابة كلمة 'طلب'"
-                ]
-            ];
+        $activeOrder = Order::where('user_id', $restaurant->id)
+            ->where('from', '<=', $today)
+            ->where('to', '>=', $today)
+            ->first(['msgs', 'from', 'to']);
 
-            $response = Http::withToken($token)
-                ->post("https://graph.facebook.com/v17.0/{$phoneNumberId}/messages", $payload);
-            
-            Chat::create([
-                'name' => $senderName,
-                'phone' => $userPhoneNumber,
-                'message' => 'Image sent: ' . $imageUrl,
-                'is_image' => true,
-                'is_admin' => true,
+        if (! $activeOrder) {
+            return false;
+        }
+
+        $used = MsgSend::where('user_id', $restaurant->id)
+            ->whereDate('created_at', '>=', $activeOrder->from)
+            ->whereDate('created_at', '<=', $activeOrder->to)
+            ->count();
+
+        return $used < $activeOrder->msgs;
+    }
+
+    /**
+     * Get an AI-generated reply using OpenAI Responses API with food tool-call support.
+     */
+    private function getAiReply(User $restaurant, string $userMessage): ?string
+    {
+        $aiContext = Setting::firstWhere('name', 'ai_context')?->value
+            ?? 'أنت موظف خدمة عملاء لمطعم، ردّ بأسلوب ودي وبسيط.';
+
+        $instructions = <<<PROMPT
+        {$aiContext}
+
+        روابط المطعم:
+        Android: {$restaurant->android_link}
+        iOS: {$restaurant->ios_link}
+
+        التعليمات:
+        - الرد باللغة العربية فقط.
+        - لا تخترع بيانات أو أسماء أو أسعار.
+        - استخدم أداة search_foods فقط للبحث عن الوجبات المتاحة.
+        - لا تقترح وجبات غير متاحة أو نافدة من المخزون.
+        PROMPT;
+
+        $tools = [
+            [
+                'type'        => 'function',
+                'name'        => 'search_foods',
+                'description' => 'البحث في قاعدة بيانات الوجبات المتاحة.',
+                'strict'      => true,
+                'parameters'  => [
+                    'type'                 => 'object',
+                    'additionalProperties' => false,
+                    'required'             => ['query', 'limit'],
+                    'properties'           => [
+                        'query' => [
+                            'type'        => 'string',
+                            'description' => 'مصطلح البحث عن الوجبة.',
+                        ],
+                        'limit' => [
+                            'type'    => 'integer',
+                            'minimum' => 1,
+                            'maximum' => 10,
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $response = OpenAI::responses()->create([
+            'model'        => 'gpt-4o',
+            'instructions' => $instructions,
+            'tools'        => $tools,
+            'input'        => $userMessage,
+        ]);
+
+        // Handle function_call tool requests from AI
+        $toolOutputs = $this->resolveToolCalls($response->output ?? []);
+
+        if (! empty($toolOutputs)) {
+            $response = OpenAI::responses()->create([
+                'model'               => 'gpt-4o',
+                'instructions'        => $instructions,
+                'tools'               => $tools,
+                'previous_response_id' => $response->id,
+                'input'               => $toolOutputs,
             ]);
         }
 
-        return $response ? $response->json() : ['status' => 'no_menus'];
-    }
- 
-    private function sendFirstReplyChat($userPhoneNumber, $senderName)
-    {
-        $phoneNumberId = env('WHATSAPP_PHONE_NUMBER_ID', 'YOUR_PHONE_NUMBER_ID');
-        $bodyText = "للحصول على عروض أكثر يمكنك الطلب عن طريق الموقع الإلكتروني.. للحصول على الموقع اكتب 'نعم'، للطلب من هنا اكتب 'لا'";
-
-        $payload = [
-            "messaging_product" => "whatsapp",
-            "recipient_type" => "individual",
-            "to" => $userPhoneNumber,
-            "type" => "text",
-            "text" => [ 
-                "body" => $bodyText
-            ]
-        ];
-
-        $response = Http::withToken(env('WHATSAPP_ACCESS_TOKEN'))
-            ->post("https://graph.facebook.com/v17.0/{$phoneNumberId}/messages", $payload);
-        
-        Chat::create([
-            'name' => $senderName,
-            'phone' => $userPhoneNumber, 
-            'message' => $bodyText, 
-            'is_image' => false, 
-            'is_admin' => true,
-        ]);
-
-        return $response->json();
+        return $response->outputText ?? null;
     }
 
-    private function sendSecondReplyChat($userPhoneNumber, $senderName)
+    /**
+     * Resolve any tool calls the AI made and return the outputs.
+     *
+     * @param  array<mixed>  $outputItems
+     * @return array<mixed>
+     */
+    private function resolveToolCalls(array $outputItems): array
     {
-        $phoneNumberId = env('WHATSAPP_PHONE_NUMBER_ID', 'YOUR_PHONE_NUMBER_ID');
-        $bodyText = "مرحبا بحضرتك، ده لينك الموقع الإلكتروني: \n https://keeto.org/";
+        $toolOutputs = [];
 
-        $payload = [
-            "messaging_product" => "whatsapp",
-            "recipient_type" => "individual",
-            "to" => $userPhoneNumber,
-            "type" => "text",
-            "text" => [ 
-                "body" => $bodyText 
-            ]
-        ];
+        foreach ($outputItems as $item) {
+            if (($item->type ?? null) !== 'function_call') {
+                continue;
+            }
 
-        $response = Http::withToken(env('WHATSAPP_ACCESS_TOKEN'))
-            ->post("https://graph.facebook.com/v17.0/{$phoneNumberId}/messages", $payload);
-        
-        Chat::create([
-            'name' => $senderName,
-            'phone' => $userPhoneNumber, 
-            'message' => 'Sent order link',
-            'is_image' => false, 
-            'is_admin' => true,
-        ]);
+            if (($item->name ?? null) === 'search_foods') {
+                $args  = json_decode($item->arguments ?? '{}', true) ?: [];
+                $query = trim($args['query'] ?? '');
+                $limit = max(1, min(10, (int) ($args['limit'] ?? 5)));
 
-        return $response->json();
+                $foods = Food::query()
+                    ->where('status', 1)
+                    ->where('is_out_of_stock', 0)
+                    ->where(function ($q) use ($query) {
+                        $q->where('name_ar', 'like', "%{$query}%")
+                          ->orWhere('description_ar', 'like', "%{$query}%");
+                    })
+                    ->limit($limit)
+                    ->get(['id', 'name_ar', 'description_ar', 'price', 'discount_type', 'discount_value'])
+                    ->toArray();
+
+                $toolOutputs[] = [
+                    'type'    => 'function_call_output',
+                    'call_id' => $item->callId,
+                    'output'  => json_encode(['foods' => $foods], JSON_UNESCAPED_UNICODE),
+                ];
+            }
+        }
+
+        return $toolOutputs;
     }
-    
-    private function sendTakeOrderChat($userPhoneNumber, $senderName)
-    {
-        $phoneNumberId = env('WHATSAPP_PHONE_NUMBER_ID', 'YOUR_PHONE_NUMBER_ID');
-        $bodyText = "تحت أمرك، برجاء كتابة طلبك هنا وسيقوم أحد ممثلي خدمة العملاء بمراجعة الطلب معك فوراً.";
 
-        $payload = [
-            "messaging_product" => "whatsapp",
-            "recipient_type" => "individual",
-            "to" => $userPhoneNumber,
-            "type" => "text",
-            "text" => [ 
-                "body" => $bodyText
-            ]
-        ];
+    /**
+     * Send a text message via the WhatsApp Cloud API.
+     * Returns true only when the API responds with a success status.
+     */
+    private function sendTextMessage(
+        string $accessToken,
+        string $phoneNumberId,
+        string $to,
+        string $body,
+    ): bool {
+        $response = Http::withToken($accessToken)
+            ->post(self::GRAPH_API_BASE . "/{$phoneNumberId}/messages", [
+                'messaging_product' => 'whatsapp',
+                'recipient_type'    => 'individual',
+                'to'                => $to,
+                'type'              => 'text',
+                'text'              => ['body' => $body],
+            ]);
 
-        $response = Http::withToken(env('WHATSAPP_ACCESS_TOKEN'))
-            ->post("https://graph.facebook.com/v17.0/{$phoneNumberId}/messages", $payload);
-        
-        Chat::create([
-            'name' => $senderName,
-            'phone' => $userPhoneNumber, 
-            'message' => $bodyText,
-            'is_image' => false, 
-            'is_admin' => true,
+        if ($response->successful()) {
+            return true;
+        }
+
+        Log::error("WhatsApp API error", [
+            'phone_number_id' => $phoneNumberId,
+            'to'              => $to,
+            'status'          => $response->status(),
+            'body'            => $response->json(),
         ]);
 
-        return $response->json();
+        return false;
     }
 }
-
-// namespace App\Http\Controllers\api;
-
-// use App\Http\Controllers\Controller;
-// use Illuminate\Http\Request;
-// use Illuminate\Support\Facades\Http;
-// use Illuminate\Support\Facades\Log;
-// use App\Models\Chat;
-// use App\Models\Menue;
-
-// class HomeController extends Controller
-// { 
-//     public function web_hook(Request $request)
-//     {
-//         // 1. التحقق الخاص بربط الـ Webhook مع منصة Meta (مهم جداً عند التفعيل)
-//         if ($request->isMethod('get') && $request->has('hub_challenge')) {
-//             return response($request->input('hub_challenge'), 200);
-//         }
-
-//         $data = $request->all();
-
-//         // 2. معالجة الرسائل الواردة
-//         if (isset($data['entry'][0]['changes'][0]['value']['messages'][0])) {
-//             $message = $data['entry'][0]['changes'][0]['value']['messages'][0];
-//             $senderPhoneNumber = $message['from']; 
-//             $senderName = $data['entry'][0]['changes'][0]['value']['contacts'][0]['profile']['name'] ?? 'عميل جديد';
-            
-//             // جلب نص رسالة العميل
-//             $userMessageText = trim($message['text']['body'] ?? '');
-
-//             Log::info("Message received from: {$senderPhoneNumber}, Name: {$senderName}, Message: {$userMessageText}");
-
-//             // حفظ رسالة العميل في قاعدة البيانات
-//             Chat::create([
-//                 'name' => $senderName,
-//                 'phone' => $senderPhoneNumber, 
-//                 'message' => $userMessageText,
-//                 'is_image' => false, 
-//                 'is_admin' => false,
-//             ]);
-
-//             // 3. توجيه الردود بناءً على كلمة العميل (منطق أسهل وأكثر دقة)
-//             if ($userMessageText === 'طلب') {
-//                 // إذا كتب العميل طلب، نسأله إذا كان يريد الموقع
-//                 $this->sendFirstReplyChat($senderPhoneNumber, $senderName);
-
-//             } elseif ($userMessageText === 'نعم') {
-//                 // إذا وافق، نرسل له رابط الموقع
-//                 $this->sendSecondReplyChat($senderPhoneNumber, $senderName);
-
-//             } elseif ($userMessageText === 'لا') {
-//                 // إذا رفض، نطلب منه كتابة الطلب في الشات مباشرة
-//                 $this->sendTakeOrderChat($senderPhoneNumber, $senderName);
-
-//             } else {
-//                 // الوضع الافتراضي (أي رسالة أخرى مثل "مرحبا"): إرسال المنيو
-//                 $this->sendImageMessage($senderPhoneNumber, $senderName);
-//             }
-//         }
-
-//         return response()->json(['status' => 'success'], 200);
-//     }
- 
-//     private function sendImageMessage($userPhoneNumber, $senderName)
-//     {
-//         $menus = Menue::get();
-//         $response = null;
-//         $phoneNumberId = env('WHATSAPP_PHONE_NUMBER_ID', 'YOUR_PHONE_NUMBER_ID');
-//         $token = env('WHATSAPP_ACCESS_TOKEN');
-
-//         foreach ($menus as $menu) {
-//             $imageUrl = url('storage/' . $menu->image);
-                
-//             $payload = [
-//                 "messaging_product" => "whatsapp",
-//                 "recipient_type" => "individual",
-//                 "to" => $userPhoneNumber,
-//                 "type" => "image",
-//                 "image" => [
-//                     "link" => $imageUrl, 
-//                     "caption" => "مرحبا بحضرتك ده المنيو بتاع المطعم، تقدر دلوقتي تطلب.. لو عاوز تطلب برجاء كتابة كلمة 'طلب'"
-//                 ]
-//             ];
-
-//             $response = Http::withToken($token)
-//                 ->post("https://graph.facebook.com/v17.0/{$phoneNumberId}/messages", $payload);
-            
-//             Chat::create([
-//                 'name' => $senderName,
-//                 'phone' => $userPhoneNumber,
-//                 'message' => 'Image sent: ' . $imageUrl,
-//                 'is_image' => true,
-//                 'is_admin' => true,
-//             ]);
-//         }
-
-//         return $response ? $response->json() : ['status' => 'no_menus'];
-//     }
- 
-//     private function sendFirstReplyChat($userPhoneNumber, $senderName)
-//     {
-//         $phoneNumberId = env('WHATSAPP_PHONE_NUMBER_ID', 'YOUR_PHONE_NUMBER_ID');
-//         $bodyText = "للحصول على عروض أكثر يمكنك الطلب عن طريق الموقع الإلكتروني.. للحصول على الموقع اكتب 'نعم'، للطلب من هنا اكتب 'لا'";
-
-//         $payload = [
-//             "messaging_product" => "whatsapp",
-//             "recipient_type" => "individual",
-//             "to" => $userPhoneNumber,
-//             "type" => "text",
-//             "text" => [ 
-//                 "body" => $bodyText
-//             ]
-//         ];
-
-//         $response = Http::withToken(env('WHATSAPP_ACCESS_TOKEN'))
-//             ->post("https://graph.facebook.com/v17.0/{$phoneNumberId}/messages", $payload);
-        
-//         Chat::create([
-//             'name' => $senderName,
-//             'phone' => $userPhoneNumber, 
-//             'message' => $bodyText, // تم تصحيح المتغير هنا
-//             'is_image' => false, 
-//             'is_admin' => true,
-//         ]);
-
-//         return $response->json();
-//     }
-
-//     private function sendSecondReplyChat($userPhoneNumber, $senderName)
-//     {
-//         $phoneNumberId = env('WHATSAPP_PHONE_NUMBER_ID', 'YOUR_PHONE_NUMBER_ID');
-//         $bodyText = "مرحبا بحضرتك، ده لينك الموقع الإلكتروني: \n https://keeto.org/";
-
-//         $payload = [
-//             "messaging_product" => "whatsapp",
-//             "recipient_type" => "individual",
-//             "to" => $userPhoneNumber,
-//             "type" => "text",
-//             "text" => [ 
-//                 "body" => $bodyText 
-//             ]
-//         ];
-
-//         $response = Http::withToken(env('WHATSAPP_ACCESS_TOKEN'))
-//             ->post("https://graph.facebook.com/v17.0/{$phoneNumberId}/messages", $payload);
-        
-//         Chat::create([
-//             'name' => $senderName,
-//             'phone' => $userPhoneNumber, 
-//             'message' => 'Sent order link',
-//             'is_image' => false, 
-//             'is_admin' => true,
-//         ]);
-
-//         return $response->json();
-//     }
-    
-//     // أضفت هذه الدالة في حال كتب العميل "لا" ويريد الطلب من الواتساب
-//     private function sendTakeOrderChat($userPhoneNumber, $senderName)
-//     {
-//         $phoneNumberId = env('WHATSAPP_PHONE_NUMBER_ID', 'YOUR_PHONE_NUMBER_ID');
-//         $bodyText = "تحت أمرك، برجاء كتابة طلبك هنا وسيقوم أحد ممثلي خدمة العملاء بمراجعة الطلب معك فوراً.";
-
-//         $payload = [
-//             "messaging_product" => "whatsapp",
-//             "recipient_type" => "individual",
-//             "to" => $userPhoneNumber,
-//             "type" => "text",
-//             "text" => [ 
-//                 "body" => $bodyText
-//             ]
-//         ];
-
-//         $response = Http::withToken(env('WHATSAPP_ACCESS_TOKEN'))
-//             ->post("https://graph.facebook.com/v17.0/{$phoneNumberId}/messages", $payload);
-        
-//         Chat::create([
-//             'name' => $senderName,
-//             'phone' => $userPhoneNumber, 
-//             'message' => $bodyText,
-//             'is_image' => false, 
-//             'is_admin' => true,
-//         ]);
-
-//         return $response->json();
-//     }
-// }
