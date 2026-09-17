@@ -3,7 +3,9 @@
 use App\Http\Controllers\api\admin\DiscountController;
 use App\Http\Controllers\api\admin\OrderController;
 use App\Http\Controllers\api\admin\PackageController;
+use App\Http\Controllers\api\admin\SettingController;
 use App\Http\Controllers\api\admin\TaxController;
+use App\Http\Controllers\api\admin\UserController;
 use App\Http\Controllers\api\auth\LoginController;
 use App\Http\Controllers\api\HomeController;
 use Illuminate\Http\Request;
@@ -58,4 +60,12 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::get('orders', [OrderController::class, 'index']);
     Route::post('orders', [OrderController::class, 'store']);
     Route::get('orders/{order}', [OrderController::class, 'show']);
+
+    // Settings (AI Context)
+    Route::get('settings/ai-context', [SettingController::class, 'getAiContext']);
+    Route::post('settings/ai-context', [SettingController::class, 'setAiContext']);
+    Route::put('settings/ai-context', [SettingController::class, 'setAiContext']);
+
+    // Users CRUD
+    Route::apiResource('users', UserController::class);
 });

@@ -23,13 +23,14 @@ class User extends Authenticatable
         'email',
         'phone',
         'password',
+        'restuarant_name',
+        'url',
         'ai_context',
         'android_link',
-        'ois_link',
+        'ios_link',
         'msg_number',
         'access_token',
         'phone_number_id',
-        'url',
         'role',
     ];
 
@@ -65,5 +66,15 @@ class User extends Authenticatable
     public function orders(): \Illuminate\Database\Eloquent\Relations\HasMany
     {
         return $this->hasMany(Order::class);
+    }
+
+    /**
+     * Get the sent messages records for the user.
+     *
+     * @return \Illuminate\Database\Eloquent\Relations\HasMany<\App\Models\MsgSend, $this>
+     */
+    public function msgSends(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(MsgSend::class);
     }
 }

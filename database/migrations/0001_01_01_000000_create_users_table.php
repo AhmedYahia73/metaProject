@@ -13,18 +13,19 @@ return new class extends Migration
     {
         Schema::create('users', function (Blueprint $table) {
             $table->id();
-            $table->string('name');
+            $table->string('name')->nullable();
             $table->string('email')->nullable()->unique();
-            $table->string('phone')->nullable()->unique();
+            $table->string('phone')->unique();
             $table->timestamp('email_verified_at')->nullable();
             $table->string('password');
+            $table->string('restuarant_name');
+            $table->string('url');
             $table->longText('ai_context')->nullable();
             $table->string('android_link')->nullable();
-            $table->string('ois_link')->nullable();
+            $table->string('ios_link')->nullable();
             $table->integer('msg_number')->default(0);
             $table->string('access_token', 500)->nullable();
             $table->string('phone_number_id')->nullable();
-            $table->string('url')->nullable();
             $table->enum('role', ['admin', 'user'])->default('user');
             $table->rememberToken();
             $table->timestamps();

@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use App\Models\Chat;
 use App\Models\Menue;
+use App\Models\User;
 
 class HomeController extends Controller
 { 
@@ -20,6 +21,16 @@ class HomeController extends Controller
             }
 
             $data = $request->all();
+
+            $metadata = $data['entry'][0]['changes'][0]['value']['metadata'] ?? null;
+
+            if (!$metadata) {
+                return response()->json(['status' => 'ignored'], 200);
+            }
+
+            $phone_number_id = $metadata['phone_number_id'] ?? null;
+            $user_data = User::where('phone_number_id', $phone_number_id)->first();
+            $access_token = $user_data->access_token ?? null;
  
             // 2. معالجة الرسائل الواردة
             if (isset($data['entry'][0]['changes'][0]['value']['messages'][0])) {
@@ -56,24 +67,7 @@ class HomeController extends Controller
                         break; // نوقف البحث بمجرد العثور على أول تطابق
                     }
                 }
-
-                // 3. توجيه الردود
-                if ($wantsToOrder) {
-                    // إذا كانت الرسالة تحتوي على كلمة طلب أو مشابهاتها
-                    $this->sendFirstReplyChat($senderPhoneNumber, $senderName);
-
-                } elseif ($userMessageText === 'نعم' || $userMessageText === 'اه' || $userMessageText === 'ايوه') {
-                    // أضفت لك بعض المرونة هنا أيضاً في كلمة "نعم"
-                    $this->sendSecondReplyChat($senderPhoneNumber, $senderName);
-
-                } elseif ($userMessageText === 'لا' || $userMessageText === 'لاء') {
-                    // مرونة في كلمة "لا"
-                    $this->sendTakeOrderChat($senderPhoneNumber, $senderName);
-
-                } else {
-                    // الوضع الافتراضي (أي رسالة أخرى): إرسال المنيو
-                    $this->sendImageMessage($senderPhoneNumber, $senderName);
-                }
+ 
             }
 
             return response()->json(['status' => 'success'], 200);
