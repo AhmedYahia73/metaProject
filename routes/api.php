@@ -66,6 +66,9 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::post('settings/ai-context', [SettingController::class, 'setAiContext']);
     Route::put('settings/ai-context', [SettingController::class, 'setAiContext']);
 
-    // Users CRUD
+    // Users CRUD & Meta WhatsApp Onboarding
+    Route::post('users/{user}/request-code', [UserController::class, 'requestCode']);
+    Route::post('users/{user}/verify-and-register', [UserController::class, 'verifyAndRegister']);
+    Route::get('users/{user}/meta-status', [UserController::class, 'syncMetaStatus']);
     Route::apiResource('users', UserController::class);
 });

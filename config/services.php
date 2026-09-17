@@ -35,4 +35,10 @@ return [
         ],
     ],
 
+    'meta' => [
+        'waba_id' => env('META_WABA_ID'),
+        'system_user_token' => env('META_SYSTEM_USER_TOKEN'),
+        'graph_version' => env('META_GRAPH_VERSION', 'v21.0'),
+    ],
+
 ];

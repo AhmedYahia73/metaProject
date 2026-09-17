@@ -19,13 +19,15 @@ return new class extends Migration
             $table->timestamp('email_verified_at')->nullable();
             $table->string('password');
             $table->string('restuarant_name');
-            $table->string('url');
             $table->longText('ai_context')->nullable();
             $table->string('android_link')->nullable();
             $table->string('ios_link')->nullable();
             $table->integer('msg_number')->default(0);
             $table->string('access_token', 500)->nullable();
             $table->string('phone_number_id')->nullable();
+            $table->string('waba_id')->nullable();
+            $table->enum('phone_status', ['pending_otp', 'verified', 'active'])->default('pending_otp');
+            $table->timestamp('phone_verified_at')->nullable();
             $table->enum('role', ['admin', 'user'])->default('user');
             $table->rememberToken();
             $table->timestamps();

@@ -24,13 +24,15 @@ class User extends Authenticatable
         'phone',
         'password',
         'restuarant_name',
-        'url',
         'ai_context',
         'android_link',
         'ios_link',
         'msg_number',
         'access_token',
         'phone_number_id',
+        'waba_id',
+        'phone_status',
+        'phone_verified_at',
         'role',
     ];
 
@@ -53,6 +55,7 @@ class User extends Authenticatable
     {
         return [
             'email_verified_at' => 'datetime',
+            'phone_verified_at' => 'datetime',
             'password' => 'hashed',
             'msg_number' => 'integer',
         ];
