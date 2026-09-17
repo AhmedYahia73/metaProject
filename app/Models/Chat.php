@@ -12,5 +12,6 @@ class Chat extends Model
         'message',
         'is_image',
         'is_admin',
+        'user_id',
     ];
 }
