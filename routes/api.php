@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\api\admin\DashboardController;
 use App\Http\Controllers\api\admin\DiscountController;
 use App\Http\Controllers\api\admin\OrderController;
 use App\Http\Controllers\api\admin\PackageController;
@@ -16,6 +17,11 @@ use Illuminate\Support\Facades\Route;
 | General API Routes
 |--------------------------------------------------------------------------
 */
+/**
+ * Get currently authenticated user.
+ *
+ * @response array{id: int, name: string, email: string, phone: string, restuarant_name: string, role: string}
+ */
 Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
@@ -40,6 +46,9 @@ Route::prefix('auth')->group(function () {
 |--------------------------------------------------------------------------
 */
 Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function () {
+    // Dashboard Statistics
+    Route::get('dashboard', [DashboardController::class, 'index']);
+
     // Lookup endpoint for dropdowns (id & name for taxes and discounts)
     Route::get('tax-and-discount-list', [PackageController::class, 'taxAndDiscountList']);
 

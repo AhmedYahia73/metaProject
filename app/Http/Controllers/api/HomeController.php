@@ -167,18 +167,26 @@ class HomeController extends Controller
         $activeOrder = Order::where('user_id', $restaurant->id)
             ->where('from', '<=', $today)
             ->where('to', '>=', $today)
-            ->first(['msgs', 'from', 'to']);
+            ->sum('msgs');
+        $from = Order::where('user_id', $restaurant->id)
+            ->where('from', '<=', $today)
+            ->where('to', '>=', $today)
+            ->min('from');
+        $to = Order::where('user_id', $restaurant->id)
+            ->where('from', '<=', $today)
+            ->where('to', '>=', $today)
+            ->max('to');
 
         if (! $activeOrder) {
             return false;
         }
 
         $used = MsgSend::where('user_id', $restaurant->id)
-            ->whereDate('created_at', '>=', $activeOrder->from)
-            ->whereDate('created_at', '<=', $activeOrder->to)
+            ->whereDate('created_at', '>=', $from)
+            ->whereDate('created_at', '<=', $to)
             ->count();
 
-        return $used < $activeOrder->msgs;
+        return $used < $activeOrder;
     }
 
     /**
