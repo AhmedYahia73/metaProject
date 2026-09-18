@@ -133,8 +133,13 @@ class HomeController extends Controller
                 'payload' => $request->all(),
             ]);
 
-            // Always return 200 to prevent Meta from retrying endlessly
-            return response()->json(['status' => 'error'], Response::HTTP_OK);
+            // Always return 200 to prevent Meta from retrying endlessly, but include error details for debugging
+            return response()->json([
+                'status' => 'error',
+                'message' => $e->getMessage(),
+                'file' => basename($e->getFile()),
+                'line' => $e->getLine(),
+            ], Response::HTTP_OK);
         }
     }
 

@@ -5,7 +5,10 @@ namespace App\Http\Controllers\api\user;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\ContactUsRequest;
 use App\Mail\ContactUsMail;
+use App\Models\MsgSend;
+use App\Models\Order;
 use App\Models\Package;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -19,6 +22,75 @@ class HomeController extends Controller
      *
      * @queryParam lang string Language code (ar or en). Defaults to ar. Example: ar
      */
+    public function index(Request $request): JsonResponse
+    {
+        $request->validate([
+            'from' => 'sometimes|nullable|date',
+            'to' => 'sometimes|nullable|date|after_or_equal:from',
+        ]);
+
+        $today = now()->toDateString();
+
+        // 1. Build Orders query
+        $orderQuery = Order::where('user_id', $request->user()->id);
+
+        if ($request->filled('from') && $request->filled('to')) {
+            $orderQuery->where('from', '<=', $request->to)
+                ->where('to', '>=', $request->from);
+        } elseif ($request->filled('from')) {
+            $orderQuery->where('to', '>=', $request->from);
+        } elseif ($request->filled('to')) {
+            $orderQuery->where('from', '<=', $request->to);
+        } else {
+            // Default: orders active today
+            $orderQuery->where('from', '<=', $today)
+                ->where('to', '>=', $today);
+        }
+
+        // Calculate total allocated messages and effective date range
+        $totalAllocatedMsgs = (int) (clone $orderQuery)->sum('msgs');
+        $periodFrom = (clone $orderQuery)->min('from') ?? $request->from ?? $today;
+        $periodTo = (clone $orderQuery)->max('to') ?? $request->to ?? $today;
+
+        // 2. Build MsgSend query
+        $msgSendQuery = MsgSend::where('user_id', $request->user()->id);
+
+        if ($periodFrom) {
+            $msgSendQuery->whereDate('created_at', '>=', $periodFrom);
+        }
+
+        if ($periodTo) {
+            $msgSendQuery->whereDate('created_at', '<=', $periodTo);
+        }
+
+        $used = $msgSendQuery->count();
+        $remaining = max(0, $totalAllocatedMsgs - $used);
+
+        // 3. Optional overview metrics for general admin dashboard (when user_id is not specified)
+        $overview = [];
+        $targetUser = User::find($request->user()->id);
+        $overview = [
+            'restaurant_name' => $targetUser?->restuarant_name,
+            'phone' => $targetUser?->phone,
+            'phone_status' => $targetUser?->phone_status,
+        ];
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Admin dashboard data',
+            'data' => [
+                'active_order' => $totalAllocatedMsgs,
+                'used' => $used,
+                'remaining' => $remaining,
+                'period' => [
+                    'from' => $periodFrom,
+                    'to' => $periodTo,
+                ],
+                'overview' => $overview,
+            ],
+        ]);
+    }
+
     public function packages(Request $request): JsonResponse
     {
         $request->validate([
