@@ -84,25 +84,27 @@ class AppServiceProvider extends ServiceProvider
                 document: 'docs/api/auth.json',
             );
 
-        // Group endpoints into folders: Admin, User, Auth
+        // Organize sidebar folders by controller across each documentation link
         Scramble::resolveTagsUsing(function (RouteInfo $routeInfo) {
-            $uri = $routeInfo->route->uri();
+            $className = $routeInfo->className();
 
-            if (str_starts_with($uri, 'api/admin') || str_contains($routeInfo->className(), '\\admin\\')) {
-                return ['Admin'];
+            if ($className) {
+                // Label the root webhook controller as Webhook
+                if ($className === 'App\Http\Controllers\api\HomeController') {
+                    return ['Webhook'];
+                }
+
+                $controller = class_basename($className);
+
+                return [str_replace('Controller', '', $controller)];
             }
 
-            if (str_starts_with($uri, 'api/user') || str_contains($routeInfo->className(), '\\user\\')) {
+            $uri = $routeInfo->route->uri();
+            if ($uri === 'api/user') {
                 return ['User'];
             }
 
-            if (str_starts_with($uri, 'api/auth') || str_contains($routeInfo->className(), '\\auth\\')) {
-                return ['Auth'];
-            }
-
-            $defaultName = (string) str(class_basename($routeInfo->className()))->replace('Controller', '');
-
-            return [$defaultName ?: 'General'];
+            return ['General'];
         });
     }
 }

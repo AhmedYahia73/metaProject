@@ -47,7 +47,7 @@ class LoginController extends Controller
     private function authenticateAdmin(Request $request, string $requiredRole): JsonResponse
     {
         $request->validate([
-            'email' => 'required_without_all:phone,login|nullable|string',  
+            'email' => 'required_without_all:phone,login|nullable|string',
             'password' => 'required|string',
         ]);
 
@@ -92,8 +92,8 @@ class LoginController extends Controller
 
     private function authenticate(Request $request, string $requiredRole): JsonResponse
     {
-        $request->validate([ 
-            'phone' => 'required_without_all:email,login|nullable|string', 
+        $request->validate([
+            'phone' => 'required_without_all:email,login|nullable|string',
             'password' => 'required|string',
         ]);
 
