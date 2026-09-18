@@ -38,7 +38,7 @@ Route::post('/web-hook', [HomeController::class, 'web_hook']);
 Route::prefix('user')->group(function () {
     Route::get('packages', [UserHomeController::class, 'packages']);
     Route::post('contact-us', [UserHomeController::class, 'contactUs']);
-        //->middleware('throttle:contact-us');
+    // ->middleware('throttle:contact-us');
 });
 
 /*

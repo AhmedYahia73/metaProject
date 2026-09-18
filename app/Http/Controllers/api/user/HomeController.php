@@ -83,6 +83,7 @@ class HomeController extends Controller
             return response()->json([
                 'status' => false,
                 'message' => 'Failed to send message. Please try again later.',
+                'error' => $e->getMessage(),
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }
