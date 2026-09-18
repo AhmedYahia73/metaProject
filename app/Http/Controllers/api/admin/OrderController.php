@@ -15,16 +15,50 @@ class OrderController extends Controller
 {
     /**
      * Display a listing of orders (paginated).
+     *
+     * @queryParam page integer The page number. Example: 1
+     * @queryParam per_page integer Number of orders per page (default: 15). Example: 15
+     * @queryParam user_id integer Filter orders by user ID. Example: 1
+     * @queryParam package_id integer Filter orders by package ID. Example: 2
+     * @queryParam search string Search by order ID, customer name, or phone. Example: Ahmed
+     * @queryParam paginate boolean Whether to paginate the results (default: true). Example: true
      */
     public function index(Request $request): JsonResponse
     {
+        $request->validate([
+            'page' => 'sometimes|integer|min:1',
+            'per_page' => 'sometimes|integer|min:1|max:100',
+            'user_id' => 'sometimes|exists:users,id',
+            'package_id' => 'sometimes|exists:packages,id',
+            'search' => 'sometimes|string|max:255',
+            'paginate' => 'sometimes|boolean',
+        ]);
+
+        $query = Order::with(['package:id,name', 'user:id,name,phone'])->latest();
+
+        if ($request->filled('user_id')) {
+            $query->where('user_id', $request->user_id);
+        }
+
+        if ($request->filled('package_id')) {
+            $query->where('package_id', $request->package_id);
+        }
+
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('id', $search)
+                    ->orWhereHas('user', function ($uq) use ($search) {
+                        $uq->where('name', 'like', "%{$search}%")
+                            ->orWhere('phone', 'like', "%{$search}%");
+                    });
+            });
+        }
+
+        $isPaginated = $request->boolean('paginate', true);
         $perPage = $request->integer('per_page', 15);
 
-        $orders = Order::with(['package:id,name', 'user:id,name,phone'])
-            ->latest()
-            ->paginate($perPage);
-
-        $orders->through(function ($order) {
+        $transform = function ($order) {
             return [
                 'id' => $order->id,
                 'package_name' => $order->package?->name,
@@ -49,7 +83,28 @@ class OrderController extends Controller
                 'to' => $order->to ? Carbon::parse($order->to)->toDateString() : null,
                 'created_at' => $order->created_at,
             ];
-        });
+        };
+
+        if ($isPaginated) {
+            $orders = $query->paginate($perPage);
+            $orders->through($transform);
+
+            return response()->json([
+                'status' => true,
+                'data' => $orders,
+                'pagination' => [
+                    'current_page' => $orders->currentPage(),
+                    'last_page' => $orders->lastPage(),
+                    'per_page' => $orders->perPage(),
+                    'total' => $orders->total(),
+                    'from' => $orders->firstItem(),
+                    'to' => $orders->lastItem(),
+                    'has_more' => $orders->hasMorePages(),
+                ],
+            ]);
+        }
+
+        $orders = $query->get()->map($transform);
 
         return response()->json([
             'status' => true,
@@ -65,7 +120,7 @@ class OrderController extends Controller
         $validated = $request->validate([
             'user_id' => 'required|exists:users,id',
             'from' => 'required|date',
-            'package_id' => 'required_without:packag_id|nullable|exists:packages,id', 
+            'package_id' => 'required_without:packag_id|nullable|exists:packages,id',
         ]);
 
         $packageId = $validated['package_id'] ?? $validated['packag_id'];

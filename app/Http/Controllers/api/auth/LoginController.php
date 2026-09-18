@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\api\auth;
 
 use App\Http\Controllers\Controller;
-use App\Http\Requests\Auth\ApiLoginRequest;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,6 +20,7 @@ class LoginController extends Controller
             'email' => 'required_without_all:phone,login|nullable|string',
             'password' => 'required|string',
         ]);
+
         return $this->authenticateAdmin($request, 'admin');
     }
 
@@ -33,6 +33,7 @@ class LoginController extends Controller
             'phone' => 'required_without_all:email,login|nullable|string',
             'password' => 'required|string',
         ]);
+
         return $this->authenticate($request, 'user');
     }
 

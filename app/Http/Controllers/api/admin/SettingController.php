@@ -31,7 +31,7 @@ class SettingController extends Controller
     public function setAiContext(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'value' => 'nullable|string',
+            'value' => 'required|string',
         ]);
 
         $setting = Setting::updateOrCreate(

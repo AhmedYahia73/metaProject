@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Services\MetaWhatsAppService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Hash;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -17,14 +18,26 @@ class UserController extends Controller
     ) {}
 
     /**
-     * Display a listing of users.
+     * Display a listing of users (paginated).
+     *
+     * @queryParam page integer The page number. Example: 1
+     * @queryParam per_page integer Number of users per page (default: 15). Example: 15
+     * @queryParam role string Filter users by role (admin, user). Example: user
+     * @queryParam phone_status string Filter by phone status. Example: active
+     * @queryParam search string Search in restaurant name, phone, name, or email. Example: Ahmed
+     * @queryParam paginate boolean Whether to paginate the results (default: true). Example: true
      */
     public function index(Request $request): JsonResponse
     {
-        $validated = $request->validate([
+        $request->validate([
+            'page' => 'sometimes|integer|min:1',
+            'per_page' => 'sometimes|integer|min:1|max:100',
             'role' => 'sometimes|in:admin,user',
+            'phone_status' => 'sometimes|string|max:50',
             'search' => 'sometimes|string|max:255',
+            'paginate' => 'sometimes|boolean',
         ]);
+
         $query = User::latest();
 
         // Optional filter by role (e.g., ?role=user)
@@ -48,14 +61,31 @@ class UserController extends Controller
             });
         }
 
-        $users = $request->boolean('paginate', true)
-            ? $query->paginate($request->integer('per_page', 15))
+        $isPaginated = $request->boolean('paginate', true);
+        $perPage = $request->integer('per_page', 15);
+
+        $users = $isPaginated
+            ? $query->paginate($perPage)
             : $query->get();
 
-        return response()->json([
+        $response = [
             'status' => true,
             'data' => $users,
-        ]);
+        ];
+
+        if ($users instanceof LengthAwarePaginator) {
+            $response['pagination'] = [
+                'current_page' => $users->currentPage(),
+                'last_page' => $users->lastPage(),
+                'per_page' => $users->perPage(),
+                'total' => $users->total(),
+                'from' => $users->firstItem(),
+                'to' => $users->lastItem(),
+                'has_more' => $users->hasMorePages(),
+            ];
+        }
+
+        return response()->json($response);
     }
 
     /**

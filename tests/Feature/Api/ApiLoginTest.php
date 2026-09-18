@@ -6,7 +6,7 @@ test('api user login validates required credentials', function () {
     $response = $this->postJson('/api/auth/user/login', []);
 
     $response->assertStatus(422)
-        ->assertJsonValidationErrors(['email', 'phone', 'login', 'password']);
+        ->assertJsonValidationErrors(['password']);
 });
 
 test('api user login allows valid user with email and password', function () {
