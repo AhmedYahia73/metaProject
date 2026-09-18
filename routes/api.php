@@ -64,11 +64,9 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::get('tax-and-discount-list', [PackageController::class, 'taxAndDiscountList']);
 
     // Discounts CRUD & simple list
-    Route::get('discounts/list', [DiscountController::class, 'list']);
     Route::apiResource('discounts', DiscountController::class);
 
     // Taxes CRUD & simple list
-    Route::get('taxes/list', [TaxController::class, 'list']);
     Route::apiResource('taxes', TaxController::class);
 
     // Packages CRUD
@@ -84,7 +82,6 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     // Settings (AI Context)
     Route::get('settings/ai-context', [SettingController::class, 'getAiContext']);
     Route::post('settings/ai-context', [SettingController::class, 'setAiContext']);
-    Route::put('settings/ai-context', [SettingController::class, 'setAiContext']);
 
     // Users CRUD & Meta WhatsApp Onboarding
     Route::post('users/{user}/request-code', [UserController::class, 'requestCode']);
