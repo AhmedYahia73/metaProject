@@ -6,6 +6,9 @@ use Dedoc\Scramble\Scramble;
 use Dedoc\Scramble\Support\Generator\OpenApi;
 use Dedoc\Scramble\Support\Generator\SecurityScheme;
 use Dedoc\Scramble\Support\RouteInfo;
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -31,6 +34,10 @@ class AppServiceProvider extends ServiceProvider
         };
 
         Scramble::afterOpenApiGenerated($secureCallback);
+
+        RateLimiter::for('contact-us', function (Request $request) {
+            return Limit::perMinutes(5, 2)->by($request->ip() ?: '127.0.0.1');
+        });
 
         // 1. Admin API documentation link
         Scramble::registerApi('admin', [
