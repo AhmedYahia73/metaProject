@@ -21,6 +21,9 @@ class UserController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
+        $validated = $request->validate([
+            'role' => 'sometimes|in:admin,user',
+        ]);
         $query = User::latest();
 
         // Optional filter by role (e.g., ?role=user)
