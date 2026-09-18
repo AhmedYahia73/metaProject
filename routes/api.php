@@ -59,7 +59,8 @@ Route::prefix('auth')->group(function () {
 |--------------------------------------------------------------------------
 */
 Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function () {
-    // Dashboard Statistics
+    // Dashboard Statistics 
+    Route::get('user_lists', [DashboardController::class, 'user_lists']);
     Route::get('dashboard', [DashboardController::class, 'index']);
 
     // Lookup endpoint for dropdowns (id & name for taxes and discounts)

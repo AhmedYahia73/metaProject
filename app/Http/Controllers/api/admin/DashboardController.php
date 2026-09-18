@@ -14,6 +14,15 @@ class DashboardController extends Controller
     /**
      * Display dashboard statistics (message consumption, active subscriptions, and overview).
      */
+    public function user_lists(){
+        $users = User::where('role', 'user')->get(['id', 'restuarant_name', 'phone', 'name']);
+        return response()->json([
+            'status' => true,
+            'message' => 'User list retrieved successfully.',
+            'data' => $users,
+        ]);
+    }
+
     public function index(Request $request): JsonResponse
     {
         $request->validate([
