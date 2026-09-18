@@ -98,6 +98,16 @@ test('contact us is rate limited to 2 requests per 5 minutes', function () {
     // Request 2: should pass
     $this->postJson('/api/user/contact-us', $payload)->assertOk();
 
-    // Request 3: should be blocked by rate limiter (429 Too Many Requests)
-    $this->postJson('/api/user/contact-us', $payload)->assertStatus(429);
+    // Request 3: should be blocked by rate limiter with custom friendly message
+    $response = $this->postJson('/api/user/contact-us', $payload)
+        ->assertStatus(429)
+        ->assertJsonStructure([
+            'status',
+            'message',
+            'retry_after_seconds',
+            'retry_after_minutes',
+        ]);
+
+    expect($response->json('status'))->toBeFalse()
+        ->and($response->json('message'))->toContain('5');
 });

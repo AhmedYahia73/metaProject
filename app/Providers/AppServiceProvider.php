@@ -36,7 +36,25 @@ class AppServiceProvider extends ServiceProvider
         Scramble::afterOpenApiGenerated($secureCallback);
 
         RateLimiter::for('contact-us', function (Request $request) {
-            return Limit::perMinutes(5, 2)->by($request->ip() ?: '127.0.0.1');
+            return Limit::perMinutes(5, 2)
+                ->by($request->ip() ?: '127.0.0.1')
+                ->response(function (Request $request, array $headers) {
+                    $retryAfter = (int) ($headers['Retry-After'] ?? 300);
+                    $minutes = max(1, (int) ceil($retryAfter / 60));
+
+                    $lang = str_starts_with(strtolower((string) $request->header('Accept-Language', $request->query('lang', 'ar'))), 'en') ? 'en' : 'ar';
+
+                    $message = $lang === 'en'
+                        ? "Too many messages sent. You can only send 2 messages per 5 minutes. Please wait {$minutes} minute(s) before trying again."
+                        : "لقد تجاوزت الحد المسموح به (رسالتان كل 5 دقائق). يرجى الانتظار {$minutes} دقيقة والمحاولة مرة أخرى.";
+
+                    return response()->json([
+                        'status' => false,
+                        'message' => $message,
+                        'retry_after_seconds' => $retryAfter,
+                        'retry_after_minutes' => $minutes,
+                    ], 429, $headers);
+                });
         });
 
         // 1. Admin API documentation link
