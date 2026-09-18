@@ -2,6 +2,7 @@
 
 use App\Mail\ContactUsMail;
 use App\Models\Package;
+use App\Models\User;
 use Illuminate\Support\Facades\Mail;
 
 test('packages can be fetched without auth with arabic localization by default or query', function () {
@@ -110,4 +111,36 @@ test('contact us is rate limited to 2 requests per 5 minutes', function () {
 
     expect($response->json('status'))->toBeFalse()
         ->and($response->json('message'))->toContain('5');
+});
+
+test('dashboard requires authentication', function () {
+    $this->getJson('/api/user/dashboard')
+        ->assertStatus(401);
+});
+
+test('dashboard denies admin and requires user role', function () {
+    $admin = User::factory()->create([
+        'role' => 'admin',
+    ]);
+
+    $this->actingAs($admin, 'sanctum')
+        ->getJson('/api/user/dashboard')
+        ->assertStatus(403)
+        ->assertJson([
+            'status' => false,
+            'message' => 'Forbidden: User access required.',
+        ]);
+});
+
+test('dashboard allows users with user role', function () {
+    $user = User::factory()->create([
+        'role' => 'user',
+    ]);
+
+    $this->actingAs($user, 'sanctum')
+        ->getJson('/api/user/dashboard')
+        ->assertOk()
+        ->assertJson([
+            'status' => true,
+        ]);
 });

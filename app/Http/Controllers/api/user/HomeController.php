@@ -18,9 +18,11 @@ use Symfony\Component\HttpFoundation\Response;
 class HomeController extends Controller
 {
     /**
-     * Fetch all packages with localized name according to language (en / ar).
+     * User / Restaurant Dashboard summary.
+     * Returns total messages, used messages, remaining messages, active package, and monthly stats.
      *
-     * @queryParam lang string Language code (ar or en). Defaults to ar. Example: ar
+     * @queryParam from date Start date filter (YYYY-MM-DD). Example: 2026-01-01
+     * @queryParam to date End date filter (YYYY-MM-DD). Example: 2026-12-31
      */
     public function index(Request $request): JsonResponse
     {
