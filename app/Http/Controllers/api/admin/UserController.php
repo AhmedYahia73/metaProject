@@ -23,6 +23,7 @@ class UserController extends Controller
     {
         $validated = $request->validate([
             'role' => 'sometimes|in:admin,user',
+            'search' => 'sometimes|string|max:255',
         ]);
         $query = User::latest();
 

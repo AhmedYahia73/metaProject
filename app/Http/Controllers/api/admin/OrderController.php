@@ -65,8 +65,7 @@ class OrderController extends Controller
         $validated = $request->validate([
             'user_id' => 'required|exists:users,id',
             'from' => 'required|date',
-            'package_id' => 'required_without:packag_id|nullable|exists:packages,id',
-            'packag_id' => 'required_without:package_id|nullable|exists:packages,id',
+            'package_id' => 'required_without:packag_id|nullable|exists:packages,id', 
         ]);
 
         $packageId = $validated['package_id'] ?? $validated['packag_id'];
