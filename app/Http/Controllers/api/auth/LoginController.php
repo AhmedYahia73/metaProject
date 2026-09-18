@@ -15,16 +15,24 @@ class LoginController extends Controller
     /**
      * Handle admin login.
      */
-    public function adminLogin(ApiLoginRequest $request): JsonResponse
+    public function adminLogin(Request $request): JsonResponse
     {
+        $request->validate([
+            'email' => 'required_without_all:phone,login|nullable|string',
+            'password' => 'required|string',
+        ]);
         return $this->authenticateAdmin($request, 'admin');
     }
 
     /**
      * Handle user login.
      */
-    public function userLogin(ApiLoginRequest $request): JsonResponse
+    public function userLogin(Request $request): JsonResponse
     {
+        $request->validate([
+            'phone' => 'required_without_all:email,login|nullable|string',
+            'password' => 'required|string',
+        ]);
         return $this->authenticate($request, 'user');
     }
 
