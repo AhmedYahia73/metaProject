@@ -75,9 +75,77 @@
         [data-theme="dark"] .token.punctuation {
             color: #dbdbdb !important;
         }
+        .scramble-docs-navbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            height: 48px;
+            background-color: #0f172a;
+            color: #f8fafc;
+            border-bottom: 1px solid #1e293b;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            font-size: 13px;
+            z-index: 9999;
+            flex-shrink: 0;
+        }
+        .scramble-docs-brand {
+            font-weight: 700;
+            color: #ffffff;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+        .scramble-docs-tabs {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+        .scramble-docs-tab {
+            padding: 6px 14px;
+            border-radius: 6px;
+            color: #94a3b8;
+            text-decoration: none;
+            font-weight: 500;
+            transition: all 0.15s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .scramble-docs-tab:hover {
+            color: #ffffff;
+            background-color: rgba(255, 255, 255, 0.08);
+        }
+        .scramble-docs-tab.active {
+            color: #ffffff;
+            background-color: #2563eb;
+            font-weight: 600;
+        }
     </style>
 </head>
-<body style="height: 100vh; overflow-y: hidden">
+<body style="height: 100vh; overflow-y: hidden; margin: 0; display: flex; flex-direction: column;">
+<header class="scramble-docs-navbar">
+    <a href="{{ url('docs/api') }}" class="scramble-docs-brand">
+        ⚡ {{ config('app.name', 'Meta Restaurant') }} API Docs
+    </a>
+    <nav class="scramble-docs-tabs">
+        <a href="{{ url('docs/api') }}" class="scramble-docs-tab {{ request()->path() === 'docs/api' ? 'active' : '' }}">
+            🌐 All APIs
+        </a>
+        <a href="{{ url('docs/api/admin') }}" class="scramble-docs-tab {{ request()->is('docs/api/admin*') || request()->is('docs/admin*') ? 'active' : '' }}">
+            🛡️ Admin Folder
+        </a>
+        <a href="{{ url('docs/api/user') }}" class="scramble-docs-tab {{ request()->is('docs/api/user*') || request()->is('docs/user*') ? 'active' : '' }}">
+            👤 User Folder
+        </a>
+        <a href="{{ url('docs/api/auth') }}" class="scramble-docs-tab {{ request()->is('docs/api/auth*') || request()->is('docs/auth*') ? 'active' : '' }}">
+            🔐 Auth Folder
+        </a>
+    </nav>
+</header>
+<div style="flex: 1; height: calc(100vh - 48px); overflow: hidden;">
 <elements-api
     id="docs"
     @foreach($config->renderer()->all(except: ['theme']) as $key => $value)
@@ -85,6 +153,7 @@
         {{ $key }}="{{ $value === true ? 'true' : ($value === false ? 'false' : $value) }}"
     @endforeach
 />
+</div>
 <script>
     (async () => {
         const docs = document.getElementById('docs');

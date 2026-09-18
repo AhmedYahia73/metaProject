@@ -8,7 +8,9 @@ use Illuminate\Support\Facades\Log;
 class MetaWhatsAppService
 {
     protected string $baseUrl;
+
     protected ?string $wabaId;
+
     protected ?string $systemUserToken;
 
     public function __construct()
@@ -46,7 +48,6 @@ class MetaWhatsAppService
     /**
      * Normalize and split a phone number into country code (cc) and national number.
      *
-     * @param string $phone
      * @return array{cc: string, phone_number: string, full: string}
      */
     public function parsePhoneNumber(string $phone): array
@@ -65,7 +66,7 @@ class MetaWhatsAppService
             return [
                 'cc' => '20',
                 'phone_number' => substr($clean, 2),
-                'full' => '+' . $clean,
+                'full' => '+'.$clean,
             ];
         }
 
@@ -74,7 +75,7 @@ class MetaWhatsAppService
             return [
                 'cc' => '20',
                 'phone_number' => $matches[1],
-                'full' => '+20' . $matches[1],
+                'full' => '+20'.$matches[1],
             ];
         }
 
@@ -83,14 +84,14 @@ class MetaWhatsAppService
             return [
                 'cc' => '966',
                 'phone_number' => substr($clean, 3),
-                'full' => '+' . $clean,
+                'full' => '+'.$clean,
             ];
         }
         if (preg_match('/^0(5[0-9]{8})$/', $clean, $matches)) {
             return [
                 'cc' => '966',
                 'phone_number' => $matches[1],
-                'full' => '+966' . $matches[1],
+                'full' => '+966'.$matches[1],
             ];
         }
 
@@ -99,17 +100,18 @@ class MetaWhatsAppService
             return [
                 'cc' => '971',
                 'phone_number' => substr($clean, 3),
-                'full' => '+' . $clean,
+                'full' => '+'.$clean,
             ];
         }
 
         // Fallback: Default to Egypt cc (20) if starts with 0
         if (str_starts_with($clean, '0')) {
             $national = ltrim($clean, '0');
+
             return [
                 'cc' => '20',
                 'phone_number' => $national,
-                'full' => '+20' . $national,
+                'full' => '+20'.$national,
             ];
         }
 
@@ -120,18 +122,13 @@ class MetaWhatsAppService
         return [
             'cc' => $cc,
             'phone_number' => $number,
-            'full' => '+' . $clean,
+            'full' => '+'.$clean,
         ];
     }
 
     /**
      * Add a phone number to the WhatsApp Business Account.
      * Checks first if the number already exists in WABA to avoid duplicates.
-     *
-     * @param string $phone
-     * @param string $verifiedName
-     * @param string|null $wabaId
-     * @return array
      */
     public function addPhoneNumber(string $phone, string $verifiedName, ?string $wabaId = null): array
     {
@@ -148,7 +145,7 @@ class MetaWhatsAppService
         // 1. Check if already exists in WABA
         $existing = $this->findPhoneNumberInWaba($parsed['phone_number'], $waba);
         if ($existing && ! empty($existing['id'])) {
-            Log::info("MetaWhatsApp: Phone number already exists in WABA", [
+            Log::info('MetaWhatsApp: Phone number already exists in WABA', [
                 'phone' => $phone,
                 'phone_number_id' => $existing['id'],
             ]);
@@ -171,7 +168,7 @@ class MetaWhatsAppService
 
         if ($response->successful()) {
             $data = $response->json();
-            Log::info("MetaWhatsApp: Phone number added successfully", [
+            Log::info('MetaWhatsApp: Phone number added successfully', [
                 'phone' => $phone,
                 'response' => $data,
             ]);
@@ -185,7 +182,7 @@ class MetaWhatsAppService
         }
 
         $error = $response->json()['error'] ?? [];
-        Log::error("MetaWhatsApp: Failed to add phone number", [
+        Log::error('MetaWhatsApp: Failed to add phone number', [
             'phone' => $phone,
             'status' => $response->status(),
             'error' => $error,
@@ -203,10 +200,7 @@ class MetaWhatsAppService
     /**
      * Request verification code (OTP) via SMS or VOICE.
      *
-     * @param string $phoneNumberId
-     * @param string $codeMethod 'SMS' or 'VOICE'
-     * @param string $language
-     * @return array
+     * @param  string  $codeMethod  'SMS' or 'VOICE'
      */
     public function requestCode(string $phoneNumberId, string $codeMethod = 'SMS', string $language = 'ar'): array
     {
@@ -232,7 +226,7 @@ class MetaWhatsAppService
         }
 
         $error = $response->json()['error'] ?? [];
-        Log::error("MetaWhatsApp: Request code failed", [
+        Log::error('MetaWhatsApp: Request code failed', [
             'phone_number_id' => $phoneNumberId,
             'error' => $error,
         ]);
@@ -246,10 +240,6 @@ class MetaWhatsAppService
 
     /**
      * Verify the received OTP code with Meta.
-     *
-     * @param string $phoneNumberId
-     * @param string $code
-     * @return array
      */
     public function verifyCode(string $phoneNumberId, string $code): array
     {
@@ -274,7 +264,7 @@ class MetaWhatsAppService
         }
 
         $error = $response->json()['error'] ?? [];
-        Log::error("MetaWhatsApp: Verify code failed", [
+        Log::error('MetaWhatsApp: Verify code failed', [
             'phone_number_id' => $phoneNumberId,
             'error' => $error,
         ]);
@@ -289,9 +279,7 @@ class MetaWhatsAppService
     /**
      * Register phone number to WhatsApp Cloud API with a 6-digit PIN.
      *
-     * @param string $phoneNumberId
-     * @param string $pin 6-digit two-step verification PIN
-     * @return array
+     * @param  string  $pin  6-digit two-step verification PIN
      */
     public function registerNumber(string $phoneNumberId, string $pin): array
     {
@@ -317,7 +305,7 @@ class MetaWhatsAppService
         }
 
         $error = $response->json()['error'] ?? [];
-        Log::error("MetaWhatsApp: Register number failed", [
+        Log::error('MetaWhatsApp: Register number failed', [
             'phone_number_id' => $phoneNumberId,
             'error' => $error,
         ]);
@@ -331,9 +319,6 @@ class MetaWhatsAppService
 
     /**
      * Fetch phone numbers under a WABA.
-     *
-     * @param string|null $wabaId
-     * @return array
      */
     public function getWabaPhoneNumbers(?string $wabaId = null): array
     {
@@ -357,10 +342,6 @@ class MetaWhatsAppService
 
     /**
      * Find a phone number in WABA list by matching digits.
-     *
-     * @param string $phoneDigits
-     * @param string|null $wabaId
-     * @return array|null
      */
     public function findPhoneNumberInWaba(string $phoneDigits, ?string $wabaId = null): ?array
     {
@@ -379,9 +360,6 @@ class MetaWhatsAppService
 
     /**
      * Get phone number details by phone_number_id.
-     *
-     * @param string $phoneNumberId
-     * @return array
      */
     public function getPhoneNumberDetails(string $phoneNumberId): array
     {

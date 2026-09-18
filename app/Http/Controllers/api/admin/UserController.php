@@ -38,9 +38,9 @@ class UserController extends Controller
             $search = $request->search;
             $query->where(function ($q) use ($search) {
                 $q->where('restuarant_name', 'like', "%{$search}%")
-                  ->orWhere('phone', 'like', "%{$search}%")
-                  ->orWhere('name', 'like', "%{$search}%")
-                  ->orWhere('email', 'like', "%{$search}%");
+                    ->orWhere('phone', 'like', "%{$search}%")
+                    ->orWhere('name', 'like', "%{$search}%")
+                    ->orWhere('email', 'like', "%{$search}%");
             });
         }
 
@@ -160,14 +160,14 @@ class UserController extends Controller
     public function update(Request $request, User $user): JsonResponse
     {
         $validated = $request->validate([
-            'phone' => 'sometimes|required|string|max:50|unique:users,phone,' . $user->id,
+            'phone' => 'sometimes|required|string|max:50|unique:users,phone,'.$user->id,
             'password' => 'sometimes|nullable|string|min:6',
             'restuarant_name' => 'sometimes|required|string|max:255',
             'ai_context' => 'sometimes|nullable|string',
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
             'name' => 'sometimes|nullable|string|max:255',
-            'email' => 'sometimes|nullable|email|max:255|unique:users,email,' . $user->id,
+            'email' => 'sometimes|nullable|email|max:255|unique:users,email,'.$user->id,
             'role' => 'sometimes|in:admin,user',
             'phone_number_id' => 'sometimes|nullable|string|max:255',
             'access_token' => 'sometimes|nullable|string|max:500',
@@ -223,7 +223,7 @@ class UserController extends Controller
             if (! $addResult['success']) {
                 return response()->json([
                     'status' => false,
-                    'message' => 'Cannot request code: ' . ($addResult['message'] ?? 'Failed to add phone to Meta.'),
+                    'message' => 'Cannot request code: '.($addResult['message'] ?? 'Failed to add phone to Meta.'),
                 ], Response::HTTP_BAD_REQUEST);
             }
 
@@ -288,7 +288,7 @@ class UserController extends Controller
 
             return response()->json([
                 'status' => false,
-                'message' => 'Code verified, but failed to register on Cloud API: ' . ($registerResult['message'] ?? ''),
+                'message' => 'Code verified, but failed to register on Cloud API: '.($registerResult['message'] ?? ''),
                 'phone_status' => 'verified',
             ], Response::HTTP_BAD_REQUEST);
         }

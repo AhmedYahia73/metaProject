@@ -15,3 +15,8 @@ Route::middleware(['auth'])->group(function () {
 
 require __DIR__.'/settings.php';
 require __DIR__.'/auth.php';
+
+// Quick shortcuts for documentation links
+Route::redirect('docs/admin', '/docs/api/admin');
+Route::redirect('docs/user', '/docs/api/user');
+Route::redirect('docs/auth', '/docs/api/auth');

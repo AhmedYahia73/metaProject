@@ -113,4 +113,11 @@ return [
         'name' => env('MAIL_FROM_NAME', 'Example'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Admin / Contact Us Notification Recipient Email
+    |--------------------------------------------------------------------------
+    */
+    'my_email' => env('My_Email', 'ahmedahmadahmid73@gmail.com'),
+
 ];

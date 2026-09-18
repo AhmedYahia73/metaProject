@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\api\auth;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Auth\ApiLoginRequest;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -14,7 +15,7 @@ class LoginController extends Controller
     /**
      * Handle admin login.
      */
-    public function adminLogin(Request $request): JsonResponse
+    public function adminLogin(ApiLoginRequest $request): JsonResponse
     {
         return $this->authenticate($request, 'admin');
     }
@@ -22,7 +23,7 @@ class LoginController extends Controller
     /**
      * Handle user login.
      */
-    public function userLogin(Request $request): JsonResponse
+    public function userLogin(ApiLoginRequest $request): JsonResponse
     {
         return $this->authenticate($request, 'user');
     }

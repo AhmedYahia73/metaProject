@@ -4,7 +4,6 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Food extends Model
 {
@@ -21,8 +20,6 @@ class Food extends Model
 
     /**
      * Get the current connection name for the model.
-     *
-     * @return string|null
      */
     public function getConnectionName(): ?string
     {

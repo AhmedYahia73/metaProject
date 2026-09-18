@@ -3,14 +3,16 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable
 {
-    /** @use HasFactory<\Database\Factories\UserFactory> */
+    /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, Notifiable;
 
     /**
@@ -64,9 +66,9 @@ class User extends Authenticatable
     /**
      * Get the orders for the user.
      *
-     * @return \Illuminate\Database\Eloquent\Relations\HasMany<\App\Models\Order, $this>
+     * @return HasMany<Order, $this>
      */
-    public function orders(): \Illuminate\Database\Eloquent\Relations\HasMany
+    public function orders(): HasMany
     {
         return $this->hasMany(Order::class);
     }
@@ -74,9 +76,9 @@ class User extends Authenticatable
     /**
      * Get the sent messages records for the user.
      *
-     * @return \Illuminate\Database\Eloquent\Relations\HasMany<\App\Models\MsgSend, $this>
+     * @return HasMany<MsgSend, $this>
      */
-    public function msgSends(): \Illuminate\Database\Eloquent\Relations\HasMany
+    public function msgSends(): HasMany
     {
         return $this->hasMany(MsgSend::class);
     }

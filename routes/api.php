@@ -9,6 +9,7 @@ use App\Http\Controllers\api\admin\TaxController;
 use App\Http\Controllers\api\admin\UserController;
 use App\Http\Controllers\api\auth\LoginController;
 use App\Http\Controllers\api\HomeController;
+use App\Http\Controllers\api\user\HomeController as UserHomeController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -28,6 +29,16 @@ Route::get('/user', function (Request $request) {
 
 Route::get('/web-hook', [HomeController::class, 'web_hook']);
 Route::post('/web-hook', [HomeController::class, 'web_hook']);
+
+/*
+|--------------------------------------------------------------------------
+| User / Public Routes (Without Auth)
+|--------------------------------------------------------------------------
+*/
+Route::prefix('user')->group(function () {
+    Route::get('packages', [UserHomeController::class, 'packages']);
+    Route::post('contact-us', [UserHomeController::class, 'contactUs'])->middleware('throttle:2,5');
+});
 
 /*
 |--------------------------------------------------------------------------

@@ -18,8 +18,8 @@ class DashboardController extends Controller
     {
         $request->validate([
             'user_id' => 'sometimes|nullable|exists:users,id',
-            'from'    => 'sometimes|nullable|date',
-            'to'      => 'sometimes|nullable|date|after_or_equal:from',
+            'from' => 'sometimes|nullable|date',
+            'to' => 'sometimes|nullable|date|after_or_equal:from',
         ]);
 
         $today = now()->toDateString();
@@ -33,7 +33,7 @@ class DashboardController extends Controller
 
         if ($request->filled('from') && $request->filled('to')) {
             $orderQuery->where('from', '<=', $request->to)
-                       ->where('to', '>=', $request->from);
+                ->where('to', '>=', $request->from);
         } elseif ($request->filled('from')) {
             $orderQuery->where('to', '>=', $request->from);
         } elseif ($request->filled('to')) {
@@ -41,13 +41,13 @@ class DashboardController extends Controller
         } else {
             // Default: orders active today
             $orderQuery->where('from', '<=', $today)
-                       ->where('to', '>=', $today);
+                ->where('to', '>=', $today);
         }
 
         // Calculate total allocated messages and effective date range
         $totalAllocatedMsgs = (int) (clone $orderQuery)->sum('msgs');
         $periodFrom = (clone $orderQuery)->min('from') ?? $request->from ?? $today;
-        $periodTo   = (clone $orderQuery)->max('to') ?? $request->to ?? $today;
+        $periodTo = (clone $orderQuery)->max('to') ?? $request->to ?? $today;
 
         // 2. Build MsgSend query
         $msgSendQuery = MsgSend::query();
@@ -71,34 +71,34 @@ class DashboardController extends Controller
         $overview = [];
         if (! $request->filled('user_id')) {
             $overview = [
-                'total_restaurants'   => User::where('role', 'user')->count(),
-                'active_restaurants'  => Order::where('from', '<=', $today)
-                                            ->where('to', '>=', $today)
-                                            ->distinct('user_id')
-                                            ->count('user_id'),
-                'total_orders'        => Order::count(),
+                'total_restaurants' => User::where('role', 'user')->count(),
+                'active_restaurants' => Order::where('from', '<=', $today)
+                    ->where('to', '>=', $today)
+                    ->distinct('user_id')
+                    ->count('user_id'),
+                'total_orders' => Order::count(),
             ];
         } else {
             $targetUser = User::find($request->user_id);
             $overview = [
                 'restaurant_name' => $targetUser?->restuarant_name,
-                'phone'           => $targetUser?->phone,
-                'phone_status'    => $targetUser?->phone_status,
+                'phone' => $targetUser?->phone,
+                'phone_status' => $targetUser?->phone_status,
             ];
         }
 
         return response()->json([
-            'status'  => true,
+            'status' => true,
             'message' => 'Admin dashboard data',
-            'data'    => [
+            'data' => [
                 'active_order' => $totalAllocatedMsgs,
-                'used'         => $used,
-                'remaining'    => $remaining,
-                'period'       => [
+                'used' => $used,
+                'remaining' => $remaining,
+                'period' => [
                     'from' => $periodFrom,
-                    'to'   => $periodTo,
+                    'to' => $periodTo,
                 ],
-                'overview'     => $overview,
+                'overview' => $overview,
             ],
         ]);
     }

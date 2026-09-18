@@ -50,6 +50,7 @@ class HomeController extends Controller
 
             if (! $restaurant) {
                 Log::warning("Webhook received for unknown phone_number_id: {$phoneNumberId}");
+
                 return response()->json(['status' => 'restaurant_not_found'], Response::HTTP_OK);
             }
 
@@ -61,7 +62,7 @@ class HomeController extends Controller
             }
 
             $senderPhone = $incomingMessage['from'];
-            $senderName  = data_get($data, 'entry.0.changes.0.value.contacts.0.profile.name', 'عميل');
+            $senderName = data_get($data, 'entry.0.changes.0.value.contacts.0.profile.name', 'عميل');
             $messageText = trim(data_get($incomingMessage, 'text.body', ''));
 
             // Ignore non-text messages (images, stickers, etc.)
@@ -69,24 +70,25 @@ class HomeController extends Controller
                 return response()->json(['status' => 'non_text_ignored'], Response::HTTP_OK);
             }
 
-            Log::info("Webhook: message received", [
+            Log::info('Webhook: message received', [
                 'restaurant_id' => $restaurant->id,
-                'sender'        => $senderPhone,
-                'message'       => $messageText,
+                'sender' => $senderPhone,
+                'message' => $messageText,
             ]);
 
             // 4. Check if the restaurant has an active subscription with remaining messages
             if (! $this->hasRemainingMessages($restaurant)) {
                 Log::info("Webhook: message limit reached for restaurant #{$restaurant->id}");
+
                 return response()->json(['status' => 'limit_exceeded'], Response::HTTP_OK);
             }
 
             // 5. Save the customer's incoming message
             Chat::create([
-                'user_id'  => $restaurant->id,
-                'name'     => $senderName,
-                'phone'    => $senderPhone,
-                'message'  => $messageText,
+                'user_id' => $restaurant->id,
+                'name' => $senderName,
+                'phone' => $senderPhone,
+                'message' => $messageText,
                 'is_image' => false,
                 'is_admin' => false,
             ]);
@@ -96,23 +98,24 @@ class HomeController extends Controller
 
             if (! $reply) {
                 Log::warning("Webhook: AI returned empty reply for restaurant #{$restaurant->id}");
+
                 return response()->json(['status' => 'ai_failed'], Response::HTTP_OK);
             }
 
             // 7. Send reply via WhatsApp — only record to DB if successful
             $sent = $this->sendTextMessage(
-                accessToken:   $restaurant->access_token,
+                accessToken: $restaurant->access_token,
                 phoneNumberId: $restaurant->phone_number_id,
-                to:            $senderPhone,
-                body:          $reply,
+                to: $senderPhone,
+                body: $reply,
             );
 
             if ($sent) {
                 Chat::create([
-                    'user_id'  => $restaurant->id,
-                    'name'     => $senderName,
-                    'phone'    => $senderPhone,
-                    'message'  => $reply,
+                    'user_id' => $restaurant->id,
+                    'name' => $senderName,
+                    'phone' => $senderPhone,
+                    'message' => $reply,
                     'is_image' => false,
                     'is_admin' => true,
                 ]);
@@ -125,9 +128,9 @@ class HomeController extends Controller
             return response()->json(['status' => 'success'], Response::HTTP_OK);
 
         } catch (\Throwable $e) {
-            Log::error("Webhook exception: " . $e->getMessage(), [
-                'trace'    => $e->getTraceAsString(),
-                'payload'  => $request->all(),
+            Log::error('Webhook exception: '.$e->getMessage(), [
+                'trace' => $e->getTraceAsString(),
+                'payload' => $request->all(),
             ]);
 
             // Always return 200 to prevent Meta from retrying endlessly
@@ -141,9 +144,9 @@ class HomeController extends Controller
     public function verify(Request $request)
     {
         $verifyToken = env('WHATSAPP_VERIFY_TOKEN');
-        $mode        = $request->input('hub_mode');
-        $token       = $request->input('hub_verify_token');
-        $challenge   = $request->input('hub_challenge');
+        $mode = $request->input('hub_mode');
+        $token = $request->input('hub_verify_token');
+        $challenge = $request->input('hub_challenge');
 
         if ($mode === 'subscribe' && $token === $verifyToken) {
             return response((string) $challenge, Response::HTTP_OK)
@@ -213,21 +216,21 @@ class HomeController extends Controller
 
         $tools = [
             [
-                'type'        => 'function',
-                'name'        => 'search_foods',
+                'type' => 'function',
+                'name' => 'search_foods',
                 'description' => 'البحث في قاعدة بيانات الوجبات المتاحة.',
-                'strict'      => true,
-                'parameters'  => [
-                    'type'                 => 'object',
+                'strict' => true,
+                'parameters' => [
+                    'type' => 'object',
                     'additionalProperties' => false,
-                    'required'             => ['query', 'limit'],
-                    'properties'           => [
+                    'required' => ['query', 'limit'],
+                    'properties' => [
                         'query' => [
-                            'type'        => 'string',
+                            'type' => 'string',
                             'description' => 'مصطلح البحث عن الوجبة.',
                         ],
                         'limit' => [
-                            'type'    => 'integer',
+                            'type' => 'integer',
                             'minimum' => 1,
                             'maximum' => 10,
                         ],
@@ -237,10 +240,10 @@ class HomeController extends Controller
         ];
 
         $response = OpenAI::responses()->create([
-            'model'        => 'gpt-4o',
+            'model' => 'gpt-4o',
             'instructions' => $instructions,
-            'tools'        => $tools,
-            'input'        => $userMessage,
+            'tools' => $tools,
+            'input' => $userMessage,
         ]);
 
         // Handle function_call tool requests from AI
@@ -248,11 +251,11 @@ class HomeController extends Controller
 
         if (! empty($toolOutputs)) {
             $response = OpenAI::responses()->create([
-                'model'               => 'gpt-4o',
-                'instructions'        => $instructions,
-                'tools'               => $tools,
+                'model' => 'gpt-4o',
+                'instructions' => $instructions,
+                'tools' => $tools,
                 'previous_response_id' => $response->id,
-                'input'               => $toolOutputs,
+                'input' => $toolOutputs,
             ]);
         }
 
@@ -275,7 +278,7 @@ class HomeController extends Controller
             }
 
             if (($item->name ?? null) === 'search_foods') {
-                $args  = json_decode($item->arguments ?? '{}', true) ?: [];
+                $args = json_decode($item->arguments ?? '{}', true) ?: [];
                 $query = trim($args['query'] ?? '');
                 $limit = max(1, min(10, (int) ($args['limit'] ?? 5)));
 
@@ -284,16 +287,16 @@ class HomeController extends Controller
                     ->where('is_out_of_stock', 0)
                     ->where(function ($q) use ($query) {
                         $q->where('name_ar', 'like', "%{$query}%")
-                          ->orWhere('description_ar', 'like', "%{$query}%");
+                            ->orWhere('description_ar', 'like', "%{$query}%");
                     })
                     ->limit($limit)
                     ->get(['id', 'name_ar', 'description_ar', 'price', 'discount_type', 'discount_value'])
                     ->toArray();
 
                 $toolOutputs[] = [
-                    'type'    => 'function_call_output',
+                    'type' => 'function_call_output',
                     'call_id' => $item->callId,
-                    'output'  => json_encode(['foods' => $foods], JSON_UNESCAPED_UNICODE),
+                    'output' => json_encode(['foods' => $foods], JSON_UNESCAPED_UNICODE),
                 ];
             }
         }
@@ -312,23 +315,23 @@ class HomeController extends Controller
         string $body,
     ): bool {
         $response = Http::withToken($accessToken)
-            ->post(self::GRAPH_API_BASE . "/{$phoneNumberId}/messages", [
+            ->post(self::GRAPH_API_BASE."/{$phoneNumberId}/messages", [
                 'messaging_product' => 'whatsapp',
-                'recipient_type'    => 'individual',
-                'to'                => $to,
-                'type'              => 'text',
-                'text'              => ['body' => $body],
+                'recipient_type' => 'individual',
+                'to' => $to,
+                'type' => 'text',
+                'text' => ['body' => $body],
             ]);
 
         if ($response->successful()) {
             return true;
         }
 
-        Log::error("WhatsApp API error", [
+        Log::error('WhatsApp API error', [
             'phone_number_id' => $phoneNumberId,
-            'to'              => $to,
-            'status'          => $response->status(),
-            'body'            => $response->json(),
+            'to' => $to,
+            'status' => $response->status(),
+            'body' => $response->json(),
         ]);
 
         return false;

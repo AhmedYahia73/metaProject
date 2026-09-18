@@ -7,6 +7,6 @@ use Illuminate\Database\Eloquent\Model;
 class Menue extends Model
 {
     protected $fillable = [
-        'image', 
+        'image',
     ];
 }
