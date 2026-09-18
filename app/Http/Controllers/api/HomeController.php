@@ -13,7 +13,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use OpenAI;
+use OpenAI\Laravel\Facades\OpenAI;
 
 class HomeController extends Controller
 {
@@ -259,7 +259,7 @@ class HomeController extends Controller
             ]);
         }
 
-        return $response->outputText ?? null;
+        return trim((string) ($response->outputText ?? '')) ?: null;
     }
 
     /**
