@@ -43,6 +43,7 @@ class ContactUsMail extends Mailable
     {
         return new Content(
             view: 'emails.contact-us',
+            text: 'emails.contact-us-text',
             with: [
                 'data' => $this->data,
                 'fullName' => trim(($this->data['f_name'] ?? '').' '.($this->data['l_name'] ?? '')),
