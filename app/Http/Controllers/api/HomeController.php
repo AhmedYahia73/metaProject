@@ -125,7 +125,11 @@ class HomeController extends Controller
                 Log::warning("Webhook: WhatsApp send failed for restaurant #{$restaurant->id} to {$senderPhone}");
             }
 
-            return response()->json(['status' => 'success'], Response::HTTP_OK);
+            return response()->json([
+                'status' => 'success',
+                'reply' => $reply,
+                'whatsapp_sent' => $sent,
+            ], Response::HTTP_OK);
 
         } catch (\Throwable $e) {
             Log::error('Webhook exception: '.$e->getMessage(), [
@@ -244,27 +248,35 @@ class HomeController extends Controller
             ],
         ];
 
-        $response = OpenAI::responses()->create([
-            'model' => 'gpt-4o',
-            'instructions' => $instructions,
-            'tools' => $tools,
-            'input' => $userMessage,
-        ]);
+        try {
+            $model = env('OPENAI_MODEL', 'gpt-4o-mini');
 
-        // Handle function_call tool requests from AI
-        $toolOutputs = $this->resolveToolCalls($response->output ?? []);
-
-        if (! empty($toolOutputs)) {
             $response = OpenAI::responses()->create([
-                'model' => 'gpt-4o',
+                'model' => $model,
                 'instructions' => $instructions,
                 'tools' => $tools,
-                'previous_response_id' => $response->id,
-                'input' => $toolOutputs,
+                'input' => $userMessage,
             ]);
-        }
 
-        return trim((string) ($response->outputText ?? '')) ?: null;
+            // Handle function_call tool requests from AI
+            $toolOutputs = $this->resolveToolCalls($response->output ?? []);
+
+            if (! empty($toolOutputs)) {
+                $response = OpenAI::responses()->create([
+                    'model' => $model,
+                    'instructions' => $instructions,
+                    'tools' => $tools,
+                    'previous_response_id' => $response->id,
+                    'input' => $toolOutputs,
+                ]);
+            }
+
+            return trim((string) ($response->outputText ?? '')) ?: null;
+        } catch (\Throwable $e) {
+            Log::warning('OpenAI getAiReply fallback triggered: '.$e->getMessage());
+
+            return 'أهلاً بك في مطعمنا! نسعد بخدمتك. يمكنك تصفح وجباتنا وطلبك مباشرة، أو سيتواصل معك أحد ممثلي الخدمة قريباً.';
+        }
     }
 
     /**
