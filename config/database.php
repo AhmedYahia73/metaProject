@@ -18,7 +18,7 @@ return [
 
     'default' => env('DB_CONNECTION', 'sqlite'),
 
-    'second_connection' => env('DB_SECOND_CONNECTION', 'mysql_second'),
+    'second_connection' => env('DB_SECOND_CONNECTION', 'keeto'),
 
     /*
     |--------------------------------------------------------------------------
@@ -64,7 +64,7 @@ return [
             ]) : [],
         ],
 
-        'mysql_second' => [
+        'keeto' => [
             'driver' => env('DB_SECOND_DRIVER', 'mysql'),
             'url' => env('DB_SECOND_URL'),
             'host' => env('DB_SECOND_HOST', '127.0.0.1'),

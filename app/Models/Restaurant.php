@@ -9,7 +9,7 @@ class Food extends Model
 {
     use HasFactory;
 
-    protected $table = 'food';
+    protected $table = 'restaurants';
 
     /**
      * The database connection name for the model.
@@ -27,14 +27,6 @@ class Food extends Model
     }
 
     protected $fillable = [
-        'name_ar',
-        'description_ar',
-        'start_time',
-        'end_time',
-        'price',
-        'discount_type',
-        'discount_value',
-        'is_out_of_stock',
-        'status',
+        'name',
     ];
 }
