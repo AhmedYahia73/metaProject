@@ -90,5 +90,6 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::post('users/{user}/request-code', [UserController::class, 'requestCode']);
     Route::post('users/{user}/verify-and-register', [UserController::class, 'verifyAndRegister']);
     Route::get('users/{user}/meta-status', [UserController::class, 'syncMetaStatus']);
+    Route::get('/admins', [UserController::class, 'admins']);
     Route::apiResource('users', UserController::class);
 });

@@ -31,8 +31,63 @@ class UserController extends Controller
     {
         $request->validate([
             'page' => 'sometimes|integer|min:1',
-            'per_page' => 'sometimes|integer|min:1|max:100',
-            'role' => 'sometimes|in:admin,user',
+            'per_page' => 'sometimes|integer|min:1|max:100', 
+            'phone_status' => 'sometimes|string|max:50',
+            'search' => 'sometimes|string|max:255',
+            'paginate' => 'sometimes|boolean',
+        ]);
+
+        $query = User::
+        where('role', "user"); 
+
+        // Optional filter by phone status (e.g., ?phone_status=active)
+        if ($request->filled('phone_status')) {
+            $query->where('phone_status', $request->phone_status);
+        }
+
+        // Optional search
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('restuarant_name', 'like', "%{$search}%")
+                    ->orWhere('phone', 'like', "%{$search}%")
+                    ->orWhere('name', 'like', "%{$search}%")
+                    ->orWhere('email', 'like', "%{$search}%");
+            });
+        }
+
+        $isPaginated = $request->boolean('paginate', true);
+        $perPage = $request->integer('per_page', 15);
+
+        $users = $isPaginated
+            ? $query->paginate($perPage)
+            : $query->get();
+
+        $response = [
+            'status' => true,
+            'data' => $users,
+        ];
+
+        if ($users instanceof LengthAwarePaginator) {
+            $response['pagination'] = [
+                'current_page' => $users->currentPage(),
+                'last_page' => $users->lastPage(),
+                'per_page' => $users->perPage(),
+                'total' => $users->total(),
+                'from' => $users->firstItem(),
+                'to' => $users->lastItem(),
+                'has_more' => $users->hasMorePages(),
+            ];
+        }
+
+        return response()->json($response);
+    }
+
+    public function admins(Request $request): JsonResponse
+    {
+        $request->validate([
+            'page' => 'sometimes|integer|min:1',
+            'per_page' => 'sometimes|integer|min:1|max:100', 
             'phone_status' => 'sometimes|string|max:50',
             'search' => 'sometimes|string|max:255',
             'paginate' => 'sometimes|boolean',
@@ -40,10 +95,8 @@ class UserController extends Controller
 
         $query = User::latest();
 
-        // Optional filter by role (e.g., ?role=user)
-        if ($request->filled('role')) {
-            $query->where('role', $request->role);
-        }
+        // Optional filter by role (e.g., ?role=user) 
+        $query->where('role', "admin");
 
         // Optional filter by phone status (e.g., ?phone_status=active)
         if ($request->filled('phone_status')) {
