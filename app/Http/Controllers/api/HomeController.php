@@ -221,6 +221,7 @@ class HomeController extends Controller
      */
     private function getAiReply(User $restaurant, string $userMessage): ?string
     {
+        $restaurantid = $restaurant->restuarant_name;
         $aiContext = Setting::firstWhere('name', 'ai_context')?->value
             ?? 'أنت موظف خدمة عملاء لمطعم، ردّ بأسلوب ودي وبسيط.';
 
@@ -274,7 +275,7 @@ class HomeController extends Controller
             ]);
 
             // Handle function_call tool requests from AI
-            $toolOutputs = $this->resolveToolCalls($response->output ?? []);
+            $toolOutputs = $this->resolveToolCalls($response->output ?? [], $restaurantid );
 
             if (! empty($toolOutputs)) {
                 $response = OpenAI::responses()->create([
@@ -300,7 +301,7 @@ class HomeController extends Controller
      * @param  array<mixed>  $outputItems
      * @return array<mixed>
      */
-    private function resolveToolCalls(array $outputItems): array
+    private function resolveToolCalls(array $outputItems, string $restaurantid): array
     {
         $toolOutputs = [];
 
@@ -321,6 +322,7 @@ class HomeController extends Controller
                         $q->where('name_ar', 'like', "%{$query}%")
                             ->orWhere('description_ar', 'like', "%{$query}%");
                     })
+                    ->where("restaurantid", $restaurantid)
                     ->limit($limit)
                     ->get(['id', 'name_ar', 'description_ar', 'price', 'discount_type', 'discount_value'])
                     ->toArray();

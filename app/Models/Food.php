@@ -35,6 +35,7 @@ class Food extends Model
         'discount_type',
         'discount_value',
         'is_out_of_stock',
+        'restaurantid ',
         'status',
     ];
 }
