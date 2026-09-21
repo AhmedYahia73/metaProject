@@ -29,8 +29,8 @@ class HomeController extends Controller
     public function web_hook(Request $request)
     {
         // 1. Handle Meta webhook verification (GET challenge)
-        if ($request->isMethod('get') && $request->has('hub_challenge')) {
-            return response($request->input('hub_challenge'), Response::HTTP_OK);
+        if ($request->isMethod('get')) {
+            return $this->verify($request);
         }
 
         try {
@@ -103,8 +103,9 @@ class HomeController extends Controller
             }
 
             // 7. Send reply via WhatsApp — only record to DB if successful
+            $token = $restaurant->access_token ?: config('services.meta.system_user_token');
             $sent = $this->sendTextMessage(
-                accessToken: $restaurant->access_token,
+                accessToken: (string) $token,
                 phoneNumberId: $restaurant->phone_number_id,
                 to: $senderPhone,
                 body: $reply,
