@@ -9,6 +9,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Symfony\Component\HttpFoundation\Response;
 
 class UserController extends Controller
@@ -31,14 +32,13 @@ class UserController extends Controller
     {
         $request->validate([
             'page' => 'sometimes|integer|min:1',
-            'per_page' => 'sometimes|integer|min:1|max:100', 
+            'per_page' => 'sometimes|integer|min:1|max:100',
             'phone_status' => 'sometimes|string|max:50',
             'search' => 'sometimes|string|max:255',
             'paginate' => 'sometimes|boolean',
         ]);
 
-        $query = User::
-        where('role', "user"); 
+        $query = User::where('role', 'user');
 
         // Optional filter by phone status (e.g., ?phone_status=active)
         if ($request->filled('phone_status')) {
@@ -87,7 +87,7 @@ class UserController extends Controller
     {
         $request->validate([
             'page' => 'sometimes|integer|min:1',
-            'per_page' => 'sometimes|integer|min:1|max:100', 
+            'per_page' => 'sometimes|integer|min:1|max:100',
             'phone_status' => 'sometimes|string|max:50',
             'search' => 'sometimes|string|max:255',
             'paginate' => 'sometimes|boolean',
@@ -95,8 +95,8 @@ class UserController extends Controller
 
         $query = User::latest();
 
-        // Optional filter by role (e.g., ?role=user) 
-        $query->where('role', "admin");
+        // Optional filter by role (e.g., ?role=user)
+        $query->where('role', 'admin');
 
         // Optional filter by phone status (e.g., ?phone_status=active)
         if ($request->filled('phone_status')) {
@@ -300,14 +300,31 @@ class UserController extends Controller
             'language' => 'sometimes|string|max:10',
         ]);
 
+        Log::info('requestCode: initiated', [
+            'user_id' => $user->id,
+            'phone' => $user->phone,
+            'has_phone_number_id' => ! empty($user->phone_number_id),
+        ]);
+
         if (empty($user->phone_number_id)) {
             // Try to register phone number to Meta first if not already done
+            Log::info('requestCode: phone_number_id missing, attempting to add phone to Meta.', [
+                'user_id' => $user->id,
+                'phone' => $user->phone,
+            ]);
+
             $addResult = $this->metaService->addPhoneNumber(
                 phone: $user->phone,
                 verifiedName: $user->restuarant_name
             );
 
             if (! $addResult['success']) {
+                Log::error('requestCode: failed to add phone to Meta WABA.', [
+                    'user_id' => $user->id,
+                    'phone' => $user->phone,
+                    'error' => $addResult['message'] ?? 'unknown',
+                ]);
+
                 return response()->json([
                     'status' => false,
                     'message' => 'Cannot request code: '.($addResult['message'] ?? 'Failed to add phone to Meta.'),
@@ -319,20 +336,43 @@ class UserController extends Controller
                 'waba_id' => $this->metaService->getWabaId(),
                 'access_token' => $user->access_token ?: $this->metaService->getSystemUserToken(),
             ]);
+
+            Log::info('requestCode: phone added to Meta WABA.', [
+                'user_id' => $user->id,
+                'phone_number_id' => $addResult['phone_number_id'],
+            ]);
         }
 
         $codeMethod = $validated['code_method'] ?? 'SMS';
         $language = $validated['language'] ?? 'ar';
 
+        Log::info('requestCode: requesting OTP from Meta.', [
+            'user_id' => $user->id,
+            'phone_number_id' => $user->phone_number_id,
+            'code_method' => $codeMethod,
+            'language' => $language,
+        ]);
+
         $result = $this->metaService->requestCode($user->phone_number_id, $codeMethod, $language);
 
         if ($result['success']) {
+            Log::info('requestCode: OTP sent successfully.', [
+                'user_id' => $user->id,
+                'phone' => $user->phone,
+            ]);
+
             return response()->json([
                 'status' => true,
                 'message' => "Verification code sent to {$user->phone} via {$codeMethod}.",
                 'data' => $result['data'] ?? [],
             ]);
         }
+
+        Log::warning('requestCode: failed to send OTP.', [
+            'user_id' => $user->id,
+            'phone' => $user->phone,
+            'error' => $result['message'] ?? 'unknown',
+        ]);
 
         return response()->json([
             'status' => false,
@@ -350,7 +390,15 @@ class UserController extends Controller
             'pin' => 'required|string|size:6|regex:/^[0-9]+$/',
         ]);
 
+        Log::info('verifyAndRegister: initiated', [
+            'user_id' => $user->id,
+            'phone' => $user->phone,
+            'phone_number_id' => $user->phone_number_id,
+        ]);
+
         if (empty($user->phone_number_id)) {
+            Log::warning('verifyAndRegister: missing phone_number_id.', ['user_id' => $user->id]);
+
             return response()->json([
                 'status' => false,
                 'message' => 'User does not have a phone_number_id from Meta. Request a code first.',
@@ -361,17 +409,29 @@ class UserController extends Controller
         $verifyResult = $this->metaService->verifyCode($user->phone_number_id, $validated['code']);
 
         if (! $verifyResult['success']) {
+            Log::warning('verifyAndRegister: OTP verification failed.', [
+                'user_id' => $user->id,
+                'error' => $verifyResult['message'] ?? 'unknown',
+            ]);
+
             return response()->json([
                 'status' => false,
                 'message' => $verifyResult['message'] ?? 'Invalid verification code.',
             ], Response::HTTP_BAD_REQUEST);
         }
 
+        Log::info('verifyAndRegister: OTP verified successfully.', ['user_id' => $user->id]);
+
         // 2. Register the phone number on Cloud API using the 6-digit PIN
         $registerResult = $this->metaService->registerNumber($user->phone_number_id, $validated['pin']);
 
         if (! $registerResult['success']) {
             $user->update(['phone_status' => 'verified']);
+
+            Log::warning('verifyAndRegister: OTP verified but Cloud API registration failed.', [
+                'user_id' => $user->id,
+                'error' => $registerResult['message'] ?? 'unknown',
+            ]);
 
             return response()->json([
                 'status' => false,
@@ -387,6 +447,11 @@ class UserController extends Controller
             'access_token' => $user->access_token ?: $this->metaService->getSystemUserToken(),
         ]);
 
+        Log::info('verifyAndRegister: phone registered and user activated.', [
+            'user_id' => $user->id,
+            'phone' => $user->phone,
+        ]);
+
         return response()->json([
             'status' => true,
             'message' => 'Phone number verified and registered on WhatsApp Cloud API successfully!',
@@ -399,7 +464,14 @@ class UserController extends Controller
      */
     public function syncMetaStatus(User $user): JsonResponse
     {
+        Log::info('syncMetaStatus: initiated', [
+            'user_id' => $user->id,
+            'phone_number_id' => $user->phone_number_id,
+        ]);
+
         if (empty($user->phone_number_id)) {
+            Log::warning('syncMetaStatus: user has no phone_number_id.', ['user_id' => $user->id]);
+
             return response()->json([
                 'status' => false,
                 'message' => 'User does not have a phone_number_id from Meta.',
@@ -409,6 +481,12 @@ class UserController extends Controller
         $details = $this->metaService->getPhoneNumberDetails($user->phone_number_id);
 
         if (! $details['success']) {
+            Log::error('syncMetaStatus: failed to fetch details from Meta.', [
+                'user_id' => $user->id,
+                'phone_number_id' => $user->phone_number_id,
+                'error' => $details['message'] ?? 'unknown',
+            ]);
+
             return response()->json([
                 'status' => false,
                 'message' => $details['message'] ?? 'Failed to retrieve details from Meta.',
@@ -419,12 +497,20 @@ class UserController extends Controller
         $codeStatus = $metaData['code_verification_status'] ?? null;
         $status = $metaData['status'] ?? null;
 
+        Log::info('syncMetaStatus: received Meta data.', [
+            'user_id' => $user->id,
+            'meta_status' => $status,
+            'code_status' => $codeStatus,
+        ]);
+
         // Auto-update user phone_status based on Meta's status
         if ($status === 'CONNECTED' || $codeStatus === 'VERIFIED') {
             $user->update([
                 'phone_status' => 'active',
                 'phone_verified_at' => $user->phone_verified_at ?: now(),
             ]);
+
+            Log::info('syncMetaStatus: user phone_status updated to active.', ['user_id' => $user->id]);
         }
 
         return response()->json([

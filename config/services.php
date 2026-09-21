@@ -37,8 +37,11 @@ return [
 
     'meta' => [
         'waba_id' => env('META_WABA_ID'),
+        'phone_number_id' => env('META_PHONE_NUMBER_ID'),
+        'system_user_id' => env('META_SYSTEM_USER_ID'),
         'system_user_token' => env('META_SYSTEM_USER_TOKEN'),
         'graph_version' => env('META_GRAPH_VERSION', 'v21.0'),
+        'verify_token' => env('WHATSAPP_VERIFY_TOKEN'),
     ],
 
 ];

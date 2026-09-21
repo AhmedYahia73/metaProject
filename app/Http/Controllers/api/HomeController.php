@@ -152,15 +152,29 @@ class HomeController extends Controller
      */
     public function verify(Request $request)
     {
-        $verifyToken = env('WHATSAPP_VERIFY_TOKEN');
+        $verifyToken = config('services.meta.verify_token');
         $mode = $request->input('hub_mode');
         $token = $request->input('hub_verify_token');
         $challenge = $request->input('hub_challenge');
 
+        Log::info('Webhook verify attempt', [
+            'hub_mode' => $mode,
+            'token_match' => $token === $verifyToken,
+            'ip' => $request->ip(),
+        ]);
+
         if ($mode === 'subscribe' && $token === $verifyToken) {
+            Log::info('Webhook verified successfully.');
+
             return response((string) $challenge, Response::HTTP_OK)
                 ->header('Content-Type', 'text/plain');
         }
+
+        Log::warning('Webhook verification failed: token mismatch or wrong mode.', [
+            'hub_mode' => $mode,
+            'received_token' => $token,
+            'expected_token' => $verifyToken ? '***' : 'NOT_SET',
+        ]);
 
         return response('Forbidden', Response::HTTP_FORBIDDEN);
     }

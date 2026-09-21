@@ -11,6 +11,10 @@ class MetaWhatsAppService
 
     protected ?string $wabaId;
 
+    protected ?string $phoneNumberId;
+
+    protected ?string $systemUserId;
+
     protected ?string $systemUserToken;
 
     public function __construct()
@@ -18,6 +22,8 @@ class MetaWhatsAppService
         $version = config('services.meta.graph_version', 'v21.0');
         $this->baseUrl = "https://graph.facebook.com/{$version}";
         $this->wabaId = config('services.meta.waba_id');
+        $this->phoneNumberId = config('services.meta.phone_number_id');
+        $this->systemUserId = config('services.meta.system_user_id');
         $this->systemUserToken = config('services.meta.system_user_token');
     }
 
@@ -43,6 +49,22 @@ class MetaWhatsAppService
     public function getWabaId(): ?string
     {
         return $this->wabaId;
+    }
+
+    /**
+     * Get the default Phone Number ID from env.
+     */
+    public function getPhoneNumberId(): ?string
+    {
+        return $this->phoneNumberId;
+    }
+
+    /**
+     * Get the System User ID from env.
+     */
+    public function getSystemUserId(): ?string
+    {
+        return $this->systemUserId;
     }
 
     /**
@@ -323,6 +345,8 @@ class MetaWhatsAppService
     public function getWabaPhoneNumbers(?string $wabaId = null): array
     {
         if (! $this->isConfigured()) {
+            Log::warning('MetaWhatsApp: getWabaPhoneNumbers called but credentials are not configured.');
+
             return [];
         }
 
@@ -336,6 +360,13 @@ class MetaWhatsAppService
         if ($response->successful()) {
             return $response->json()['data'] ?? [];
         }
+
+        $error = $response->json()['error'] ?? [];
+        Log::error('MetaWhatsApp: Failed to fetch WABA phone numbers', [
+            'waba_id' => $waba,
+            'status' => $response->status(),
+            'error' => $error,
+        ]);
 
         return [];
     }
@@ -364,6 +395,10 @@ class MetaWhatsAppService
     public function getPhoneNumberDetails(string $phoneNumberId): array
     {
         if (! $this->isConfigured()) {
+            Log::warning('MetaWhatsApp: getPhoneNumberDetails called but credentials are not configured.', [
+                'phone_number_id' => $phoneNumberId,
+            ]);
+
             return [
                 'success' => false,
                 'message' => 'Meta credentials are not configured.',
@@ -382,9 +417,16 @@ class MetaWhatsAppService
             ];
         }
 
+        $error = $response->json()['error'] ?? [];
+        Log::error('MetaWhatsApp: Failed to fetch phone number details', [
+            'phone_number_id' => $phoneNumberId,
+            'status' => $response->status(),
+            'error' => $error,
+        ]);
+
         return [
             'success' => false,
-            'message' => 'Failed to fetch phone number details from Meta.',
+            'message' => $error['message'] ?? 'Failed to fetch phone number details from Meta.',
             'raw' => $response->json(),
         ];
     }
