@@ -13,6 +13,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use OpenAI\Laravel\Facades\OpenAI;
 
 class HomeController extends Controller
@@ -66,11 +67,16 @@ class HomeController extends Controller
                 return response()->json(['status' => 'no_message'], Response::HTTP_OK);
             }
 
-            $senderPhone = $incomingMessage['from'];
+            $senderPhone = (string) $incomingMessage['from'];
 
-            // If Meta test dashboard sends dummy test sender (16315551181), route reply to restaurant's verified phone
-            if ((string) $senderPhone === '16315551181') {
+            // If Meta or manual test sends dummy test sender, route reply to restaurant's verified phone
+            if (in_array($senderPhone, ['16315551181', '01000000000', '123456789', '123456123'], true)) {
                 $senderPhone = $restaurant->phone ?: '201206610346';
+            }
+
+            // Normalize local Egyptian format (01xxxxxxxxx -> 201xxxxxxxxx)
+            if (str_starts_with($senderPhone, '01') && strlen($senderPhone) === 11) {
+                $senderPhone = '2'.$senderPhone;
             }
 
             $senderName = data_get($data, 'entry.0.changes.0.value.contacts.0.profile.name', 'عميل');
@@ -286,7 +292,7 @@ class HomeController extends Controller
             ]);
 
             // Handle function_call tool requests from AI
-            $toolOutputs = $this->resolveToolCalls($response->output ?? [], $restaurantid);
+            $toolOutputs = $this->resolveToolCalls($response->output ?? [], (string) $restaurant->id);
 
             if (! empty($toolOutputs)) {
                 $response = OpenAI::responses()->create([
@@ -326,14 +332,19 @@ class HomeController extends Controller
                 $query = trim($args['query'] ?? '');
                 $limit = max(1, min(10, (int) ($args['limit'] ?? 5)));
 
-                $foods = Food::query()
+                $foodsQuery = Food::query()
                     ->where('status', 1)
                     ->where('is_out_of_stock', 0)
                     ->where(function ($q) use ($query) {
                         $q->where('name_ar', 'like', "%{$query}%")
                             ->orWhere('description_ar', 'like', "%{$query}%");
-                    })
-                    ->where('restaurantid', $restaurantid)
+                    });
+
+                if (Schema::hasColumn('food', 'restaurantid')) {
+                    $foodsQuery->where('restaurantid', $restaurantid);
+                }
+
+                $foods = $foodsQuery
                     ->limit($limit)
                     ->get(['id', 'name_ar', 'description_ar', 'price', 'discount_type', 'discount_value'])
                     ->toArray();
@@ -359,11 +370,19 @@ class HomeController extends Controller
         string $to,
         string $body,
     ): bool {
+        // Normalize and clean phone number
+        $cleanTo = preg_replace('/[^0-9]/', '', $to);
+
+        // Convert local Egyptian number (01xxxxxxxxx) to international (201xxxxxxxxx)
+        if (strlen($cleanTo) === 11 && str_starts_with($cleanTo, '01')) {
+            $cleanTo = '2'.$cleanTo;
+        }
+
         $response = Http::withToken($accessToken)
             ->post(self::GRAPH_API_BASE."/{$phoneNumberId}/messages", [
                 'messaging_product' => 'whatsapp',
                 'recipient_type' => 'individual',
-                'to' => $to,
+                'to' => $cleanTo,
                 'type' => 'text',
                 'text' => ['body' => $body],
             ]);
