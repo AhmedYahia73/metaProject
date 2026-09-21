@@ -29,6 +29,7 @@ Route::get('/user', function (Request $request) {
 
 Route::get('/web-hook', [HomeController::class, 'web_hook']);
 Route::post('/web-hook', [HomeController::class, 'web_hook']);
+Route::view('/privacy-policy', 'privacy-policy');
 
 /*
 |--------------------------------------------------------------------------
@@ -59,7 +60,7 @@ Route::prefix('auth')->group(function () {
 |--------------------------------------------------------------------------
 */
 Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function () {
-    // Dashboard Statistics 
+    // Dashboard Statistics
     Route::get('user_lists', [DashboardController::class, 'user_lists']);
     Route::get('dashboard', [DashboardController::class, 'index']);
 

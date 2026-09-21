@@ -39,6 +39,11 @@ class HomeController extends Controller
             // 2. Resolve the restaurant user via phone_number_id
             $phoneNumberId = data_get($data, 'entry.0.changes.0.value.metadata.phone_number_id');
 
+            // Handle Meta test button from Developer Dashboard (sends dummy ID 123456123)
+            if ((string) $phoneNumberId === '123456123') {
+                $phoneNumberId = config('services.meta.phone_number_id', '1296872370175605');
+            }
+
             if (! $phoneNumberId) {
                 return response()->json(['status' => 'ignored'], Response::HTTP_OK);
             }
@@ -275,7 +280,7 @@ class HomeController extends Controller
             ]);
 
             // Handle function_call tool requests from AI
-            $toolOutputs = $this->resolveToolCalls($response->output ?? [], $restaurantid );
+            $toolOutputs = $this->resolveToolCalls($response->output ?? [], $restaurantid);
 
             if (! empty($toolOutputs)) {
                 $response = OpenAI::responses()->create([
@@ -322,7 +327,7 @@ class HomeController extends Controller
                         $q->where('name_ar', 'like', "%{$query}%")
                             ->orWhere('description_ar', 'like', "%{$query}%");
                     })
-                    ->where("restaurantid", $restaurantid)
+                    ->where('restaurantid', $restaurantid)
                     ->limit($limit)
                     ->get(['id', 'name_ar', 'description_ar', 'price', 'discount_type', 'discount_value'])
                     ->toArray();
