@@ -23,8 +23,8 @@ class User extends Authenticatable
     protected $fillable = [
         'name',
         'email',
-        'phone',
         'password',
+        'phone',
         'restuarant_name',
         'ai_context',
         'android_link',

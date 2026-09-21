@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\api\admin\AdminController;
 use App\Http\Controllers\api\admin\DashboardController;
 use App\Http\Controllers\api\admin\DiscountController;
 use App\Http\Controllers\api\admin\OrderController;
@@ -87,10 +88,12 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::get('settings/ai-context', [SettingController::class, 'getAiContext']);
     Route::post('settings/ai-context', [SettingController::class, 'setAiContext']);
 
-    // Users CRUD & Meta WhatsApp Onboarding
+    // Admins Management (Automatic role: admin)
+    Route::apiResource('admins', AdminController::class);
+
+    // Users / Restaurants Management (Automatic role: user) & Meta WhatsApp Onboarding
     Route::post('users/{user}/request-code', [UserController::class, 'requestCode']);
     Route::post('users/{user}/verify-and-register', [UserController::class, 'verifyAndRegister']);
     Route::get('users/{user}/meta-status', [UserController::class, 'syncMetaStatus']);
-    Route::get('/admins', [UserController::class, 'admins']);
     Route::apiResource('users', UserController::class);
 });
