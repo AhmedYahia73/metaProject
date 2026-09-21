@@ -17,6 +17,8 @@ class MetaWhatsAppService
 
     protected ?string $systemUserToken;
 
+    protected ?string $configurationId;
+
     public function __construct()
     {
         $version = config('services.meta.graph_version', 'v21.0');
@@ -25,6 +27,7 @@ class MetaWhatsAppService
         $this->phoneNumberId = config('services.meta.phone_number_id');
         $this->systemUserId = config('services.meta.system_user_id');
         $this->systemUserToken = config('services.meta.system_user_token');
+        $this->configurationId = config('services.meta.configuration_id');
     }
 
     /**
@@ -65,6 +68,14 @@ class MetaWhatsAppService
     public function getSystemUserId(): ?string
     {
         return $this->systemUserId;
+    }
+
+    /**
+     * Get the App Configuration ID from env.
+     */
+    public function getConfigurationId(): ?string
+    {
+        return $this->configurationId;
     }
 
     /**
