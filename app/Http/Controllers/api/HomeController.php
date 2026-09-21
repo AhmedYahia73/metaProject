@@ -67,6 +67,12 @@ class HomeController extends Controller
             }
 
             $senderPhone = $incomingMessage['from'];
+
+            // If Meta test dashboard sends dummy test sender (16315551181), route reply to restaurant's verified phone
+            if ((string) $senderPhone === '16315551181') {
+                $senderPhone = $restaurant->phone ?: '201206610346';
+            }
+
             $senderName = data_get($data, 'entry.0.changes.0.value.contacts.0.profile.name', 'عميل');
             $messageText = trim(data_get($incomingMessage, 'text.body', ''));
 
