@@ -31,7 +31,7 @@ class AdminController extends Controller
         ]);
 
         $query = User::
-        select('id', 'name', 'email', 'phone')
+        select('id', 'name', 'email')
         ->latest()->where('role', 'admin');
 
         // Search filter
@@ -117,7 +117,11 @@ class AdminController extends Controller
 
         return response()->json([
             'status' => true,
-            'data' => $admin,
+            "data" => [
+                'id' => $admin->id,
+                'name' => $admin->name,
+                'email' => $admin->email, 
+            ], 
         ]);
     }
 
