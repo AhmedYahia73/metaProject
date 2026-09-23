@@ -17,6 +17,8 @@ class Chat extends Model
         'message',
         'is_image',
         'is_admin',
+        'channel',
+        'messenger_sender_id',
     ];
 
     /**

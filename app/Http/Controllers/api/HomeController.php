@@ -5,10 +5,12 @@ namespace App\Http\Controllers\api;
 use App\Http\Controllers\Controller;
 use App\Models\Chat;
 use App\Models\Food;
+use App\Models\MessengerAccount;
 use App\Models\MsgSend;
 use App\Models\Order;
 use App\Models\Setting;
 use App\Models\User;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Http;
@@ -203,8 +205,10 @@ class HomeController extends Controller
 
     /**
      * Determine whether the restaurant still has messages left in its active subscription.
+     *
+     * @param  string  $channel  'whatsapp' | 'messenger'
      */
-    private function hasRemainingMessages(User $restaurant): bool
+    private function hasRemainingMessages(User $restaurant, string $channel = 'whatsapp'): bool
     {
         $today = now()->toDateString();
 
@@ -226,11 +230,224 @@ class HomeController extends Controller
         }
 
         $used = MsgSend::where('user_id', $restaurant->id)
+            ->where('channel', $channel)
             ->whereDate('created_at', '>=', $from)
             ->whereDate('created_at', '<=', $to)
             ->count();
 
         return $used < $activeOrder;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Messenger Webhook
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Main Messenger webhook entry point.
+     * GET  → verify Meta webhook challenge (per-page verify_token stored in DB)
+     * POST → handle incoming Messenger messages and send AI replies
+     */
+    public function messenger_web_hook(Request $request): Response|JsonResponse
+    {
+        if ($request->isMethod('get')) {
+            return $this->messengerVerify($request);
+        }
+
+        try {
+            $data = $request->all();
+
+            // Only handle page-level Messenger events
+            if (data_get($data, 'object') !== 'page') {
+                return response()->json(['status' => 'ignored_non_page'], Response::HTTP_OK);
+            }
+
+            $pageId = (string) data_get($data, 'entry.0.id');
+
+            if (! $pageId) {
+                return response()->json(['status' => 'no_page_id'], Response::HTTP_OK);
+            }
+
+            // Resolve restaurant via the Facebook Page ID
+            /** @var MessengerAccount|null $messengerAccount */
+            $messengerAccount = MessengerAccount::where('page_id', $pageId)
+                ->where('status', 'active')
+                ->first();
+
+            if (! $messengerAccount) {
+                Log::warning("Messenger webhook: unknown or disabled page_id: {$pageId}");
+
+                return response()->json(['status' => 'page_not_found'], Response::HTTP_OK);
+            }
+
+            /** @var User $restaurant */
+            $restaurant = $messengerAccount->user;
+
+            // Extract the first messaging event
+            $messagingEvent = data_get($data, 'entry.0.messaging.0');
+
+            if (! $messagingEvent) {
+                return response()->json(['status' => 'no_messaging_event'], Response::HTTP_OK);
+            }
+
+            // Ignore echoed messages (sent by the page itself)
+            if (data_get($messagingEvent, 'message.is_echo')) {
+                return response()->json(['status' => 'echo_ignored'], Response::HTTP_OK);
+            }
+
+            $senderId = (string) data_get($messagingEvent, 'sender.id');
+            $messageText = trim((string) data_get($messagingEvent, 'message.text', ''));
+
+            // Ignore non-text messages (attachments, stickers, etc.)
+            if (empty($messageText)) {
+                return response()->json(['status' => 'non_text_ignored'], Response::HTTP_OK);
+            }
+
+            Log::info('Messenger webhook: message received', [
+                'restaurant_id' => $restaurant->id,
+                'page_id' => $pageId,
+                'sender_psid' => $senderId,
+                'message' => $messageText,
+            ]);
+
+            // Check Messenger-specific message limit
+            if (! $this->hasRemainingMessages($restaurant, 'messenger')) {
+                Log::info("Messenger webhook: message limit reached for restaurant #{$restaurant->id}");
+
+                return response()->json(['status' => 'limit_exceeded'], Response::HTTP_OK);
+            }
+
+            // Save incoming customer message
+            Chat::create([
+                'user_id' => $restaurant->id,
+                'name' => 'Messenger User',
+                'phone' => null,
+                'message' => $messageText,
+                'is_image' => false,
+                'is_admin' => false,
+                'channel' => 'messenger',
+                'messenger_sender_id' => $senderId,
+            ]);
+
+            // Get AI reply (same logic as WhatsApp)
+            $reply = $this->getAiReply($restaurant, $messageText);
+
+            if (! $reply) {
+                Log::warning("Messenger webhook: AI returned empty reply for restaurant #{$restaurant->id}");
+
+                return response()->json(['status' => 'ai_failed'], Response::HTTP_OK);
+            }
+
+            // Send reply via Messenger API
+            $sent = $this->sendMessengerMessage(
+                pageAccessToken: $messengerAccount->page_access_token,
+                recipientId: $senderId,
+                text: $reply,
+            );
+
+            if ($sent) {
+                Chat::create([
+                    'user_id' => $restaurant->id,
+                    'name' => 'Messenger User',
+                    'phone' => null,
+                    'message' => $reply,
+                    'is_image' => false,
+                    'is_admin' => true,
+                    'channel' => 'messenger',
+                    'messenger_sender_id' => $senderId,
+                ]);
+
+                MsgSend::create([
+                    'user_id' => $restaurant->id,
+                    'channel' => 'messenger',
+                ]);
+            } else {
+                Log::warning("Messenger webhook: send failed for restaurant #{$restaurant->id} to PSID {$senderId}");
+            }
+
+            return response()->json([
+                'status' => 'success',
+                'reply' => $reply,
+                'messenger_sent' => $sent,
+            ], Response::HTTP_OK);
+
+        } catch (\Throwable $e) {
+            Log::error('Messenger webhook exception: '.$e->getMessage(), [
+                'trace' => $e->getTraceAsString(),
+                'payload' => $request->all(),
+            ]);
+
+            // Always return 200 to prevent Meta from retrying endlessly
+            return response()->json([
+                'status' => 'error',
+                'message' => $e->getMessage(),
+                'file' => basename($e->getFile()),
+                'line' => $e->getLine(),
+            ], Response::HTTP_OK);
+        }
+    }
+
+    /**
+     * Verify Messenger webhook challenge from Meta.
+     * Meta sends the page's verify_token; we look it up in messenger_accounts table.
+     */
+    private function messengerVerify(Request $request): Response
+    {
+        $mode = $request->input('hub_mode');
+        $token = $request->input('hub_verify_token');
+        $challenge = $request->input('hub_challenge');
+
+        Log::info('Messenger webhook verify attempt', [
+            'hub_mode' => $mode,
+            'ip' => $request->ip(),
+        ]);
+
+        if ($mode === 'subscribe' && $token) {
+            $account = MessengerAccount::where('verify_token', $token)->first();
+
+            if ($account) {
+                Log::info('Messenger webhook verified successfully.', ['page_id' => $account->page_id]);
+
+                return response((string) $challenge, Response::HTTP_OK)
+                    ->header('Content-Type', 'text/plain');
+            }
+        }
+
+        Log::warning('Messenger webhook verification failed: token not found or wrong mode.', [
+            'hub_mode' => $mode,
+        ]);
+
+        return response('Forbidden', Response::HTTP_FORBIDDEN);
+    }
+
+    /**
+     * Send a text message via Facebook Messenger Send API.
+     * Returns true only when the API responds with a success status.
+     */
+    private function sendMessengerMessage(
+        string $pageAccessToken,
+        string $recipientId,
+        string $text,
+    ): bool {
+        $graphVersion = config('services.meta.graph_version', 'v21.0');
+
+        $response = Http::withToken($pageAccessToken)
+            ->post(self::GRAPH_API_BASE.'/me/messages', [
+                'recipient' => ['id' => $recipientId],
+                'message' => ['text' => $text],
+                'messaging_type' => 'RESPONSE',
+            ]);
+
+        if ($response->successful()) {
+            return true;
+        }
+
+        Log::error('Messenger API send error', [
+            'recipient_id' => $recipientId,
+            'status' => $response->status(),
+            'body' => $response->json(),
+        ]);
+
+        return false;
     }
 
     /**

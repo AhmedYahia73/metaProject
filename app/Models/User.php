@@ -82,4 +82,14 @@ class User extends Authenticatable
     {
         return $this->hasMany(MsgSend::class);
     }
+
+    /**
+     * Get all linked Facebook Messenger pages for this user (restaurant).
+     *
+     * @return HasMany<MessengerAccount, $this>
+     */
+    public function messengerAccounts(): HasMany
+    {
+        return $this->hasMany(MessengerAccount::class);
+    }
 }

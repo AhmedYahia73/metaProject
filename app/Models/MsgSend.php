@@ -14,6 +14,7 @@ class MsgSend extends Model
 
     protected $fillable = [
         'user_id',
+        'channel',
     ];
 
     /**

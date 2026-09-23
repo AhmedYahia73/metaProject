@@ -3,6 +3,7 @@
 use App\Http\Controllers\api\admin\AdminController;
 use App\Http\Controllers\api\admin\DashboardController;
 use App\Http\Controllers\api\admin\DiscountController;
+use App\Http\Controllers\api\admin\MessengerAccountController;
 use App\Http\Controllers\api\admin\OrderController;
 use App\Http\Controllers\api\admin\PackageController;
 use App\Http\Controllers\api\admin\SettingController;
@@ -30,6 +31,11 @@ Route::get('/user', function (Request $request) {
 
 Route::get('/web-hook', [HomeController::class, 'web_hook']);
 Route::post('/web-hook', [HomeController::class, 'web_hook']);
+
+// Messenger Webhook (public — Meta requires GET for verification + POST for messages)
+Route::get('/messenger-webhook', [HomeController::class, 'messenger_web_hook']);
+Route::post('/messenger-webhook', [HomeController::class, 'messenger_web_hook']);
+
 Route::view('/privacy-policy', 'privacy-policy');
 
 /*
@@ -96,4 +102,11 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::post('users/{user}/verify-and-register', [UserController::class, 'verifyAndRegister']);
     Route::get('users/{user}/meta-status', [UserController::class, 'syncMetaStatus']);
     Route::apiResource('users', UserController::class);
+
+    // Messenger Pages Management (Multi-account per restaurant)
+    Route::post(
+        'users/{user}/messenger-accounts/{messengerAccount}/regenerate-token',
+        [MessengerAccountController::class, 'regenerateVerifyToken']
+    );
+    Route::apiResource('users/{user}/messenger-accounts', MessengerAccountController::class);
 });
