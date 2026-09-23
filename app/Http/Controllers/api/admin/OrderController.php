@@ -3,12 +3,15 @@
 namespace App\Http\Controllers\api\admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\MessengerAccount;
 use App\Models\Order;
 use App\Models\Package;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Symfony\Component\HttpFoundation\Response;
 
 class OrderController extends Controller
@@ -32,6 +35,8 @@ class OrderController extends Controller
             'package_id' => 'sometimes|exists:packages,id',
             'search' => 'sometimes|string|max:255',
             'paginate' => 'sometimes|boolean',
+            'status' => 'sometimes|in:pending,approved,rejected',
+            'channel' => 'sometimes|in:whatsapp,messenger',
         ]);
 
         $query = Order::with(['package:id,name', 'user:id,name,phone'])->latest();
@@ -42,6 +47,14 @@ class OrderController extends Controller
 
         if ($request->filled('package_id')) {
             $query->where('package_id', $request->package_id);
+        }
+
+        if ($request->filled('status')) {
+            $query->where('status', $request->status);
+        }
+
+        if ($request->filled('channel')) {
+            $query->where('channel', $request->channel);
         }
 
         if ($request->filled('search')) {
@@ -81,6 +94,9 @@ class OrderController extends Controller
                 'msgs' => (int) $order->msgs,
                 'from' => $order->from ? Carbon::parse($order->from)->toDateString() : null,
                 'to' => $order->to ? Carbon::parse($order->to)->toDateString() : null,
+                'status' => $order->status,
+                'channel' => $order->channel,
+                'messenger_account_id' => $order->messenger_account_id,
                 'created_at' => $order->created_at,
             ];
         };
@@ -269,7 +285,149 @@ class OrderController extends Controller
                 'msgs' => (int) $order->msgs,
                 'from' => $order->from ? Carbon::parse($order->from)->toDateString() : null,
                 'to' => $order->to ? Carbon::parse($order->to)->toDateString() : null,
+                'status' => $order->status,
+                'channel' => $order->channel,
                 'created_at' => $order->created_at,
+            ],
+        ]);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Order Status Actions
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Approve a pending order.
+     *
+     * - Sets from = today, to = today + package.months, status = approved.
+     * - For Messenger orders: activates the MessengerAccount and subscribes the
+     *   page to the Meta App webhook.
+     * - For WhatsApp orders: increments the user's msg_number quota.
+     */
+    public function approve(Order $order): JsonResponse
+    {
+        if (! $order->isPending()) {
+            return response()->json([
+                'status' => false,
+                'message' => "Order #{$order->id} is already {$order->status} and cannot be approved.",
+            ], Response::HTTP_CONFLICT);
+        }
+
+        $package = Package::findOrFail($order->package_id);
+        $fromDate = Carbon::today();
+        $months = max(1, (int) $package->months);
+        $toDate = $fromDate->copy()->addMonths($months);
+
+        $order->update([
+            'status' => 'approved',
+            'from' => $fromDate->toDateString(),
+            'to' => $toDate->toDateString(),
+        ]);
+
+        $activationResult = [];
+
+        if ($order->isMessenger()) {
+            /** @var MessengerAccount|null $account */
+            $account = $order->messengerAccount;
+
+            if ($account) {
+                $account->update(['status' => 'active']);
+
+                // Subscribe the Facebook Page to receive messages via our webhook
+                $graphVersion = config('services.meta.graph_version', 'v21.0');
+
+                $subResponse = Http::post(
+                    "https://graph.facebook.com/{$graphVersion}/{$account->page_id}/subscribed_apps",
+                    [
+                        'subscribed_fields' => 'messages,messaging_postbacks',
+                        'access_token' => $account->page_access_token,
+                    ]
+                );
+
+                $subscribed = $subResponse->successful() && ($subResponse->json('success') === true);
+
+                Log::info('Order approve: Messenger page subscription', [
+                    'order_id' => $order->id,
+                    'page_id' => $account->page_id,
+                    'subscribed' => $subscribed,
+                    'response' => $subResponse->json(),
+                ]);
+
+                $activationResult = [
+                    'messenger_page_id' => $account->page_id,
+                    'messenger_page_name' => $account->page_name,
+                    'messenger_subscribed' => $subscribed,
+                    'webhook_url' => url('/api/messenger-webhook'),
+                    'verify_token' => $account->verify_token,
+                ];
+            }
+        } else {
+            // WhatsApp: increment message quota
+
+            $activationResult = [
+                'whatsapp_msgs_added' => $order->msgs,
+            ];
+        }
+        $order->user->increment('msg_number', $order->msgs);
+
+        Log::info("Order #{$order->id} approved", [
+            'channel' => $order->channel,
+            'user_id' => $order->user_id,
+            'from' => $fromDate->toDateString(),
+            'to' => $toDate->toDateString(),
+        ]);
+
+        return response()->json([
+            'status' => true,
+            'message' => "Order #{$order->id} approved successfully.",
+            'data' => [
+                'order_id' => $order->id,
+                'status' => 'approved',
+                'channel' => $order->channel,
+                'from' => $fromDate->toDateString(),
+                'to' => $toDate->toDateString(),
+                'activation' => $activationResult,
+            ],
+        ]);
+    }
+
+    /**
+     * Reject a pending order.
+     *
+     * - Sets status = rejected.
+     * - For Messenger orders: keeps the MessengerAccount as disabled (audit trail).
+     */
+    public function reject(Request $request, Order $order): JsonResponse
+    {
+        if (! $order->isPending()) {
+            return response()->json([
+                'status' => false,
+                'message' => "Order #{$order->id} is already {$order->status} and cannot be rejected.",
+            ], Response::HTTP_CONFLICT);
+        }
+
+        $request->validate([
+            'reason' => 'sometimes|nullable|string|max:500',
+        ]);
+
+        $order->update(['status' => 'rejected']);
+
+        // Keep MessengerAccount as disabled — acts as audit trail
+        // The user can submit a new request with a different package
+
+        Log::info("Order #{$order->id} rejected", [
+            'channel' => $order->channel,
+            'user_id' => $order->user_id,
+            'reason' => $request->input('reason'),
+        ]);
+
+        return response()->json([
+            'status' => true,
+            'message' => "Order #{$order->id} rejected.",
+            'data' => [
+                'order_id' => $order->id,
+                'status' => 'rejected',
+                'reason' => $request->input('reason'),
             ],
         ]);
     }

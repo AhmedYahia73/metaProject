@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -20,6 +21,9 @@ class Order extends Model
         'from',
         'to',
         'msgs',
+        'status',
+        'channel',
+        'messenger_account_id',
     ];
 
     /**
@@ -40,6 +44,10 @@ class Order extends Model
         ];
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Relationships
+    // ─────────────────────────────────────────────────────────────────────────
+
     /**
      * Get the package associated with this order.
      *
@@ -58,5 +66,75 @@ class Order extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * Get the Messenger account this order activates (null for WhatsApp orders).
+     *
+     * @return BelongsTo<MessengerAccount, $this>
+     */
+    public function messengerAccount(): BelongsTo
+    {
+        return $this->belongsTo(MessengerAccount::class);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Scopes
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * @param  Builder<Order>  $query
+     * @return Builder<Order>
+     */
+    public function scopePending(Builder $query): Builder
+    {
+        return $query->where('status', 'pending');
+    }
+
+    /**
+     * @param  Builder<Order>  $query
+     * @return Builder<Order>
+     */
+    public function scopeApproved(Builder $query): Builder
+    {
+        return $query->where('status', 'approved');
+    }
+
+    /**
+     * @param  Builder<Order>  $query
+     * @return Builder<Order>
+     */
+    public function scopeRejected(Builder $query): Builder
+    {
+        return $query->where('status', 'rejected');
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
+    public function isPending(): bool
+    {
+        return $this->status === 'pending';
+    }
+
+    public function isApproved(): bool
+    {
+        return $this->status === 'approved';
+    }
+
+    public function isRejected(): bool
+    {
+        return $this->status === 'rejected';
+    }
+
+    public function isMessenger(): bool
+    {
+        return $this->channel === 'messenger';
+    }
+
+    public function isWhatsApp(): bool
+    {
+        return $this->channel === 'whatsapp';
     }
 }

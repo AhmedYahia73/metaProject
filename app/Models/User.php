@@ -36,6 +36,8 @@ class User extends Authenticatable
         'phone_status',
         'phone_verified_at',
         'role',
+        'facebook_id',
+        'facebook_access_token',
     ];
 
     /**
@@ -46,6 +48,7 @@ class User extends Authenticatable
     protected $hidden = [
         'password',
         'remember_token',
+        'facebook_access_token',
     ];
 
     /**
