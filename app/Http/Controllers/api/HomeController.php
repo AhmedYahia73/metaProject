@@ -253,17 +253,31 @@ class HomeController extends Controller
             return $this->messengerVerify($request);
         }
 
+        // ── Log every incoming POST immediately (before any processing)
+        Log::channel('stack')->info('[MESSENGER] ⬇ Incoming POST', [
+            'ip' => $request->ip(),
+            'payload' => $request->all(),
+        ]);
+
         try {
             $data = $request->all();
 
+            $object = data_get($data, 'object');
+
             // Only handle page-level Messenger events
-            if (data_get($data, 'object') !== 'page') {
+            if ($object !== 'page') {
+                Log::channel('stack')->warning("[MESSENGER] ✗ Ignored — object is '{$object}', expected 'page'");
+
                 return response()->json(['status' => 'ignored_non_page'], Response::HTTP_OK);
             }
 
             $pageId = (string) data_get($data, 'entry.0.id');
 
+            Log::channel('stack')->info("[MESSENGER] ✓ object=page | page_id={$pageId}");
+
             if (! $pageId) {
+                Log::channel('stack')->error('[MESSENGER] ✗ No page_id in payload');
+
                 return response()->json(['status' => 'no_page_id'], Response::HTTP_OK);
             }
 
@@ -274,10 +288,24 @@ class HomeController extends Controller
                 ->first();
 
             if (! $messengerAccount) {
-                Log::warning("Messenger webhook: unknown or disabled page_id: {$pageId}");
+                // Check if page exists but is disabled
+                $disabledAccount = MessengerAccount::where('page_id', $pageId)->first();
+
+                Log::channel('stack')->warning('[MESSENGER] ✗ Page not found or disabled', [
+                    'page_id' => $pageId,
+                    'exists_in_db' => (bool) $disabledAccount,
+                    'disabled_status' => $disabledAccount?->status,
+                ]);
 
                 return response()->json(['status' => 'page_not_found'], Response::HTTP_OK);
             }
+
+            Log::channel('stack')->info('[MESSENGER] ✓ Page found', [
+                'page_id' => $pageId,
+                'page_name' => $messengerAccount->page_name,
+                'messenger_account_id' => $messengerAccount->id,
+                'user_id' => $messengerAccount->user_id,
+            ]);
 
             /** @var User $restaurant */
             $restaurant = $messengerAccount->user;
@@ -286,32 +314,48 @@ class HomeController extends Controller
             $messagingEvent = data_get($data, 'entry.0.messaging.0');
 
             if (! $messagingEvent) {
+                Log::channel('stack')->warning('[MESSENGER] ✗ No messaging event found in entry.0.messaging.0', [
+                    'raw_entry' => data_get($data, 'entry.0'),
+                ]);
+
                 return response()->json(['status' => 'no_messaging_event'], Response::HTTP_OK);
             }
 
             // Ignore echoed messages (sent by the page itself)
             if (data_get($messagingEvent, 'message.is_echo')) {
+                Log::channel('stack')->info('[MESSENGER] ✓ Echo ignored (sent by page)');
+
                 return response()->json(['status' => 'echo_ignored'], Response::HTTP_OK);
             }
 
             $senderId = (string) data_get($messagingEvent, 'sender.id');
             $messageText = trim((string) data_get($messagingEvent, 'message.text', ''));
 
+            Log::channel('stack')->info('[MESSENGER] ✓ Message event', [
+                'sender_psid' => $senderId,
+                'message_text' => $messageText,
+                'mid' => data_get($messagingEvent, 'message.mid'),
+            ]);
+
             // Ignore non-text messages (attachments, stickers, etc.)
             if (empty($messageText)) {
+                Log::channel('stack')->info('[MESSENGER] ✗ Ignored — non-text message (attachment/sticker)', [
+                    'raw_message' => data_get($messagingEvent, 'message'),
+                ]);
+
                 return response()->json(['status' => 'non_text_ignored'], Response::HTTP_OK);
             }
 
-            Log::info('Messenger webhook: message received', [
+            // Check Messenger-specific message limit
+            $hasLimit = $this->hasRemainingMessages($restaurant, 'messenger');
+
+            Log::channel('stack')->info('[MESSENGER] ⚡ Limit check', [
                 'restaurant_id' => $restaurant->id,
-                'page_id' => $pageId,
-                'sender_psid' => $senderId,
-                'message' => $messageText,
+                'has_remaining' => $hasLimit,
             ]);
 
-            // Check Messenger-specific message limit
-            if (! $this->hasRemainingMessages($restaurant, 'messenger')) {
-                Log::info("Messenger webhook: message limit reached for restaurant #{$restaurant->id}");
+            if (! $hasLimit) {
+                Log::channel('stack')->warning("[MESSENGER] ✗ Limit exceeded for restaurant #{$restaurant->id}");
 
                 return response()->json(['status' => 'limit_exceeded'], Response::HTTP_OK);
             }
@@ -328,21 +372,37 @@ class HomeController extends Controller
                 'messenger_sender_id' => $senderId,
             ]);
 
+            Log::channel('stack')->info('[MESSENGER] ✓ Customer message saved to DB');
+
             // Get AI reply (same logic as WhatsApp)
+            Log::channel('stack')->info('[MESSENGER] ⏳ Calling OpenAI...');
             $reply = $this->getAiReply($restaurant, $messageText);
 
             if (! $reply) {
-                Log::warning("Messenger webhook: AI returned empty reply for restaurant #{$restaurant->id}");
+                Log::channel('stack')->warning("[MESSENGER] ✗ OpenAI returned empty reply for restaurant #{$restaurant->id}");
 
                 return response()->json(['status' => 'ai_failed'], Response::HTTP_OK);
             }
 
+            Log::channel('stack')->info('[MESSENGER] ✓ OpenAI replied', [
+                'reply_preview' => mb_substr($reply, 0, 100),
+            ]);
+
             // Send reply via Messenger API
+            Log::channel('stack')->info('[MESSENGER] ⏳ Sending reply via Messenger API...', [
+                'recipient_psid' => $senderId,
+            ]);
+
             $sent = $this->sendMessengerMessage(
                 pageAccessToken: $messengerAccount->page_access_token,
                 recipientId: $senderId,
                 text: $reply,
             );
+
+            Log::channel('stack')->info('[MESSENGER] ✓ Messenger API send result', [
+                'sent' => $sent,
+                'recipient_psid' => $senderId,
+            ]);
 
             if ($sent) {
                 Chat::create([
@@ -360,8 +420,10 @@ class HomeController extends Controller
                     'user_id' => $restaurant->id,
                     'channel' => 'messenger',
                 ]);
+
+                Log::channel('stack')->info('[MESSENGER] ✅ Full flow complete — reply saved & sent');
             } else {
-                Log::warning("Messenger webhook: send failed for restaurant #{$restaurant->id} to PSID {$senderId}");
+                Log::channel('stack')->error("[MESSENGER] ✗ Messenger API send FAILED for restaurant #{$restaurant->id} → PSID {$senderId}");
             }
 
             return response()->json([
@@ -371,8 +433,10 @@ class HomeController extends Controller
             ], Response::HTTP_OK);
 
         } catch (\Throwable $e) {
-            Log::error('Messenger webhook exception: '.$e->getMessage(), [
-                'trace' => $e->getTraceAsString(),
+            Log::channel('stack')->error('[MESSENGER] 💥 EXCEPTION: '.$e->getMessage(), [
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => collect(explode("\n", $e->getTraceAsString()))->take(10)->implode("\n"),
                 'payload' => $request->all(),
             ]);
 
