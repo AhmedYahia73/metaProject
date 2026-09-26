@@ -163,7 +163,7 @@ class MetaWhatsAppService
      * Add a phone number to the WhatsApp Business Account.
      * Checks first if the number already exists in WABA to avoid duplicates.
      */
-    public function addPhoneNumber(string $phone, string $verifiedName, ?string $wabaId = null): array
+    public function addPhoneNumber(string $phone, ?string $verifiedName = null, ?string $wabaId = null): array
     {
         if (! $this->isConfigured()) {
             return [
@@ -191,12 +191,17 @@ class MetaWhatsAppService
             ];
         }
 
+        $displayName = trim((string) $verifiedName);
+        if ($displayName === '') {
+            $displayName = 'Restaurant';
+        }
+
         // 2. Add phone number via Meta Graph API
         $response = Http::withToken($this->systemUserToken)
             ->post("{$this->baseUrl}/{$waba}/phone_numbers", [
                 'cc' => $parsed['cc'],
                 'phone_number' => $parsed['phone_number'],
-                'verified_name' => $verifiedName,
+                'verified_name' => $displayName,
             ]);
 
         if ($response->successful()) {
@@ -215,6 +220,11 @@ class MetaWhatsAppService
         }
 
         $error = $response->json()['error'] ?? [];
+        $detailedMsg = $error['error_user_msg']
+            ?? $error['error_data']['details']
+            ?? $error['message']
+            ?? 'Failed to add phone number to Meta WABA.';
+
         Log::error('MetaWhatsApp: Failed to add phone number', [
             'phone' => $phone,
             'status' => $response->status(),
@@ -223,9 +233,12 @@ class MetaWhatsAppService
 
         return [
             'success' => false,
-            'message' => $error['message'] ?? 'Failed to add phone number to Meta WABA.',
+            'message' => $detailedMsg,
+            'error_message' => $error['message'] ?? 'Failed to add phone number to Meta WABA.',
             'error_code' => $error['code'] ?? null,
             'error_subcode' => $error['error_subcode'] ?? null,
+            'error_user_title' => $error['error_user_title'] ?? null,
+            'error_user_msg' => $error['error_user_msg'] ?? null,
             'raw' => $response->json(),
         ];
     }

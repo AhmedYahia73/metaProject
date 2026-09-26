@@ -36,6 +36,7 @@ class WhatsItemController extends Controller
     {
         $validated = $request->validate([
             'phone' => 'required|string|max:50',
+            'verified_name' => 'sometimes|nullable|string|max:255',
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
             'auto_request_code' => 'sometimes|boolean',
@@ -45,10 +46,13 @@ class WhatsItemController extends Controller
         $phoneNumberId = null;
         $metaResponseInfo = null;
 
+        $verifiedName = $validated['verified_name']
+            ?? ($user->restuarant_name ?: ($user->name ?: 'Restaurant'));
+
         if ($this->metaService->isConfigured()) {
             $addResult = $this->metaService->addPhoneNumber(
                 phone: $validated['phone'],
-                verifiedName: $user->restuarant_name
+                verifiedName: $verifiedName
             );
 
             if ($addResult['success']) {
@@ -74,7 +78,12 @@ class WhatsItemController extends Controller
             } else {
                 $metaResponseInfo = [
                     'meta_registered' => false,
-                    'error' => $addResult['message'] ?? 'Meta API error.',
+                    'error' => $addResult['error_message'] ?? $addResult['message'] ?? 'Meta API error.',
+                    'error_details' => $addResult['message'] ?? null,
+                    'error_code' => $addResult['error_code'] ?? null,
+                    'error_subcode' => $addResult['error_subcode'] ?? null,
+                    'error_user_title' => $addResult['error_user_title'] ?? null,
+                    'error_user_msg' => $addResult['error_user_msg'] ?? null,
                 ];
             }
         }
