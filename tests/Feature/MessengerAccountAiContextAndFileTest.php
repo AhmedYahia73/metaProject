@@ -5,8 +5,10 @@ use App\Models\Order;
 use App\Models\Package;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
 use OpenAI\Laravel\Facades\OpenAI;
 use OpenAI\Resources\Responses;
@@ -276,4 +278,270 @@ test('messenger webhook decrements messenger account msg_number when message is 
 
     // msg_number decremented from 10 to 9 on MessengerAccount
     expect($account->fresh()->msg_number)->toBe(9);
+});
+
+test('admin can upload ai_file when storing messenger account using image trait upload', function () {
+    Storage::fake('public');
+
+    $admin = User::factory()->create(['role' => 'admin']);
+    $restaurant = User::factory()->create(['role' => 'user']);
+    Sanctum::actingAs($admin);
+
+    $file = UploadedFile::fake()->create('menu.pdf', 100, 'application/pdf');
+
+    $response = $this->postJson("/api/admin/users/{$restaurant->id}/messenger-accounts", [
+        'page_id' => 'page_with_file_1',
+        'page_access_token' => 'EAAG_dummy_token',
+        'page_name' => 'Pizza File Page',
+        'ai_file' => $file,
+    ]);
+
+    $response->assertCreated();
+
+    $account = MessengerAccount::where('page_id', 'page_with_file_1')->first();
+    expect($account)->not->toBeNull();
+    expect($account->ai_file)->not->toBeNull();
+    Storage::disk('public')->assertExists($account->ai_file);
+});
+
+test('admin can replace ai_file when updating messenger account using image trait update_image', function () {
+    Storage::fake('public');
+
+    $admin = User::factory()->create(['role' => 'admin']);
+    $restaurant = User::factory()->create(['role' => 'user']);
+    Sanctum::actingAs($admin);
+
+    // Initial file upload
+    $initialFile = UploadedFile::fake()->create('initial_menu.txt', 50, 'text/plain');
+    $initialPath = $initialFile->store('messenger/ai_files', 'public');
+
+    $account = MessengerAccount::factory()->create([
+        'user_id' => $restaurant->id,
+        'ai_file' => $initialPath,
+    ]);
+
+    Storage::disk('public')->assertExists($initialPath);
+
+    // Update with new file
+    $newFile = UploadedFile::fake()->create('new_menu.txt', 60, 'text/plain');
+    $updateResponse = $this->putJson("/api/admin/users/{$restaurant->id}/messenger-accounts/{$account->id}", [
+        'ai_file' => $newFile,
+    ]);
+
+    $updateResponse->assertOk();
+
+    $freshAccount = $account->fresh();
+    expect($freshAccount->ai_file)->not->toBe($initialPath);
+    Storage::disk('public')->assertMissing($initialPath);
+    Storage::disk('public')->assertExists($freshAccount->ai_file);
+});
+
+test('admin deleting messenger account removes ai_file from storage using deleteImage', function () {
+    Storage::fake('public');
+
+    $admin = User::factory()->create(['role' => 'admin']);
+    $restaurant = User::factory()->create(['role' => 'user']);
+    Sanctum::actingAs($admin);
+
+    $file = UploadedFile::fake()->create('to_delete.txt', 20, 'text/plain');
+    $filePath = $file->store('messenger/ai_files', 'public');
+
+    $account = MessengerAccount::factory()->create([
+        'user_id' => $restaurant->id,
+        'ai_file' => $filePath,
+    ]);
+
+    Storage::disk('public')->assertExists($filePath);
+
+    $response = $this->deleteJson("/api/admin/users/{$restaurant->id}/messenger-accounts/{$account->id}");
+    $response->assertOk();
+
+    $this->assertDatabaseMissing('messenger_accounts', ['id' => $account->id]);
+    Storage::disk('public')->assertMissing($filePath);
+});
+
+test('admin approving order can upload ai_file using image trait upload', function () {
+    Storage::fake('public');
+
+    Http::fake([
+        'https://graph.facebook.com/*' => Http::response(['success' => true], 200),
+    ]);
+
+    $admin = User::factory()->create(['role' => 'admin']);
+    $user = User::factory()->create(['role' => 'user']);
+    $package = Package::create([
+        'name' => ['ar' => 'باقة', 'en' => 'Package'],
+        'type' => 'face',
+        'msg_number' => 100,
+        'price' => 50,
+        'months' => 1,
+    ]);
+
+    $account = MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'status' => 'disabled',
+        'ai_file' => null,
+    ]);
+
+    $order = Order::create([
+        'package_id' => $package->id,
+        'user_id' => $user->id,
+        'price' => 50,
+        'final_price' => 50,
+        'msgs' => 100,
+        'status' => 'pending',
+        'channel' => 'messenger',
+        'messenger_account_id' => $account->id,
+    ]);
+
+    $file = UploadedFile::fake()->create('restaurant_menu.json', 80, 'application/json');
+
+    $response = $this->actingAs($admin)->postJson("/api/admin/orders/{$order->id}/approve", [
+        'ai_context' => 'سياق معتمد',
+        'ai_file' => $file,
+    ]);
+
+    $response->assertOk();
+
+    $freshAccount = $account->fresh();
+    expect($freshAccount->ai_context)->toBe('سياق معتمد');
+    expect($freshAccount->ai_file)->not->toBeNull();
+    Storage::disk('public')->assertExists($freshAccount->ai_file);
+});
+
+test('messenger_accounts table has website_url column', function () {
+    expect(Schema::hasColumn('messenger_accounts', 'website_url'))->toBeTrue();
+});
+
+test('admin and user can set website_url and webhook includes website_url in prompt', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+    $restaurant = User::factory()->create(['role' => 'user']);
+
+    Sanctum::actingAs($admin);
+
+    $storeResponse = $this->postJson("/api/admin/users/{$restaurant->id}/messenger-accounts", [
+        'page_id' => 'page_test_web_url',
+        'page_access_token' => 'EAAG_dummy_token',
+        'page_name' => 'Website Test Page',
+        'website_url' => 'https://example.com/restaurant',
+    ]);
+
+    $storeResponse->assertCreated();
+
+    $account = MessengerAccount::where('page_id', 'page_test_web_url')->first();
+    expect($account->website_url)->toBe('https://example.com/restaurant');
+
+    $updateResponse = $this->putJson("/api/admin/users/{$restaurant->id}/messenger-accounts/{$account->id}", [
+        'website_url' => 'https://new-example.com/restaurant',
+    ]);
+
+    $updateResponse->assertOk();
+    expect($account->fresh()->website_url)->toBe('https://new-example.com/restaurant');
+});
+
+test('admin approving messenger order can set website_url', function () {
+    Http::fake([
+        'https://graph.facebook.com/*' => Http::response(['success' => true], 200),
+    ]);
+
+    $admin = User::factory()->create(['role' => 'admin']);
+    $user = User::factory()->create(['role' => 'user']);
+    $package = Package::create([
+        'name' => ['ar' => 'باقة', 'en' => 'Package'],
+        'type' => 'face',
+        'msg_number' => 100,
+        'price' => 50,
+        'months' => 1,
+    ]);
+
+    $account = MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'status' => 'disabled',
+        'website_url' => null,
+    ]);
+
+    $order = Order::create([
+        'package_id' => $package->id,
+        'user_id' => $user->id,
+        'price' => 50,
+        'final_price' => 50,
+        'msgs' => 100,
+        'status' => 'pending',
+        'channel' => 'messenger',
+        'messenger_account_id' => $account->id,
+    ]);
+
+    $response = $this->actingAs($admin)->postJson("/api/admin/orders/{$order->id}/approve", [
+        'website_url' => 'https://approved-site.com',
+    ]);
+
+    $response->assertOk();
+    expect($account->fresh()->website_url)->toBe('https://approved-site.com');
+});
+
+test('user requestSubscription can optionally pass android_link, ios_link, website_url, ai_context, ai_file with update_image', function () {
+    Storage::fake('public');
+
+    Http::fake([
+        'https://graph.facebook.com/*/me/accounts*' => Http::response([
+            'data' => [
+                [
+                    'id' => 'page_test_optional_fields',
+                    'name' => 'Optional Fields Page',
+                    'category' => 'Restaurant',
+                    'access_token' => 'EAAG_test_page_tok',
+                ],
+            ],
+        ], 200),
+    ]);
+
+    $user = User::factory()->create([
+        'role' => 'user',
+        'facebook_access_token' => 'EAAG_user_fb_token',
+    ]);
+
+    $package = Package::create([
+        'name' => ['ar' => 'باقة ماسنجر', 'en' => 'Messenger Package'],
+        'type' => 'face',
+        'msg_number' => 100,
+        'price' => 50,
+        'months' => 1,
+    ]);
+
+    // Pre-create account with old file
+    $oldFilePath = UploadedFile::fake()->create('old_doc.pdf', 30, 'application/pdf')->store('messenger/ai_files', 'public');
+    Storage::disk('public')->assertExists($oldFilePath);
+
+    $existingAccount = MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'page_id' => 'page_test_optional_fields',
+        'status' => 'disabled',
+        'ai_file' => $oldFilePath,
+    ]);
+
+    $newFile = UploadedFile::fake()->create('new_menu.json', 40, 'application/json');
+
+    $response = $this->actingAs($user)->postJson('/api/user/messenger/orders', [
+        'page_id' => 'page_test_optional_fields',
+        'package_id' => $package->id,
+        'android_link' => 'https://play.google.com/store/apps/details?id=com.pizza',
+        'ios_link' => 'https://apps.apple.com/app/pizza',
+        'website_url' => 'https://pizza.example.com',
+        'ai_context' => 'سياق مخصص للذكاء الاصطناعي تم إدخاله مع الاشتراك',
+        'ai_file' => $newFile,
+    ]);
+
+    $response->assertCreated();
+
+    $freshAccount = $existingAccount->fresh();
+    expect($freshAccount->android_link)->toBe('https://play.google.com/store/apps/details?id=com.pizza');
+    expect($freshAccount->ios_link)->toBe('https://apps.apple.com/app/pizza');
+    expect($freshAccount->website_url)->toBe('https://pizza.example.com');
+    expect($freshAccount->ai_context)->toBe('سياق مخصص للذكاء الاصطناعي تم إدخاله مع الاشتراك');
+    expect($freshAccount->ai_file)->not->toBeNull();
+    expect($freshAccount->ai_file)->not->toBe($oldFilePath);
+
+    // Verify old file was deleted and new file exists
+    Storage::disk('public')->assertMissing($oldFilePath);
+    Storage::disk('public')->assertExists($freshAccount->ai_file);
 });

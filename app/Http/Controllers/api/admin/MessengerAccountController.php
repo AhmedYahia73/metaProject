@@ -5,6 +5,7 @@ namespace App\Http\Controllers\api\admin;
 use App\Http\Controllers\Controller;
 use App\Models\MessengerAccount;
 use App\Models\User;
+use App\trait\image;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -12,6 +13,8 @@ use Symfony\Component\HttpFoundation\Response;
 
 class MessengerAccountController extends Controller
 {
+    use image;
+
     /**
      * List all Messenger pages linked to a user (restaurant).
      */
@@ -37,14 +40,24 @@ class MessengerAccountController extends Controller
             'page_name' => 'sometimes|nullable|string|max:255',
             'status' => 'sometimes|in:active,disabled',
             'ai_context' => 'sometimes|nullable|string',
-            'ai_file' => 'sometimes|nullable|string|max:255',
+            'ai_file' => 'sometimes|nullable',
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
+            'website_url' => 'sometimes|nullable|string|max:500',
         ]);
 
         unset($validated['msg_number']);
         $validated['user_id'] = $user->id;
         $validated['verify_token'] = (string) Str::uuid();
+
+        if ($request->hasFile('ai_file')) {
+            $uploadedPath = $this->upload($request, 'ai_file', 'messenger/ai_files');
+            if ($uploadedPath) {
+                $validated['ai_file'] = $uploadedPath;
+            }
+        } elseif (isset($validated['ai_file']) && is_string($validated['ai_file'])) {
+            $validated['ai_file'] = $validated['ai_file'];
+        }
 
         $account = MessengerAccount::create($validated);
 
@@ -85,12 +98,24 @@ class MessengerAccountController extends Controller
             'page_access_token' => 'sometimes|string',
             'status' => 'sometimes|in:active,disabled',
             'ai_context' => 'sometimes|nullable|string',
-            'ai_file' => 'sometimes|nullable|string|max:255',
+            'ai_file' => 'sometimes|nullable',
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
+            'website_url' => 'sometimes|nullable|string|max:500',
         ]);
 
         unset($validated['msg_number']);
+
+        if ($request->hasFile('ai_file')) {
+            $updatedPath = $this->update_image($request, $messengerAccount->ai_file, 'ai_file', 'messenger/ai_files');
+            if ($updatedPath) {
+                $validated['ai_file'] = $updatedPath;
+            }
+        } elseif ($request->exists('ai_file') && is_string($request->input('ai_file'))) {
+            $validated['ai_file'] = $request->input('ai_file');
+        } else {
+            unset($validated['ai_file']);
+        }
 
         $messengerAccount->update($validated);
 
@@ -107,6 +132,10 @@ class MessengerAccountController extends Controller
     public function destroy(User $user, MessengerAccount $messengerAccount): JsonResponse
     {
         $this->authorizeAccount($user, $messengerAccount);
+
+        if ($messengerAccount->ai_file) {
+            $this->deleteImage($messengerAccount->ai_file);
+        }
 
         $messengerAccount->delete();
 

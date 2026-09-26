@@ -559,60 +559,50 @@ class HomeController extends Controller
     }
 
     /**
-     * Get an AI-generated reply using OpenAI Responses API with food tool-call support.
+     * Get an AI-generated reply for WhatsApp using the WhatsItem's ai_context and ai_file.
+     * Uses the ai_file contents directly instead of App\Models\Food.
      */
     private function getAiReply(User $restaurant, string $userMessage, ?WhatsItem $whatsItem = null): ?string
     {
-        $restaurantid = $restaurant->restuarant_name;
-        $aiContext = Setting::firstWhere('name', 'ai_context')?->value
-            ?? 'أنت موظف خدمة عملاء لمطعم، ردّ بأسلوب ودي وبسيط.';
+        // 1. ai_context: use WhatsItem ai_context if set, otherwise fallback to Setting
+        $aiContext = ! empty($whatsItem?->ai_context)
+            ? $whatsItem->ai_context
+            : (Setting::firstWhere('name', 'ai_context')?->value ?? 'أنت موظف خدمة عملاء لمطعم، ردّ بأسلوب ودي وبسيط.');
 
+        // 2. ai_file: if present on WhatsItem, resolve its contents; if not found, don't use it
+        $fileDataSection = '';
+        if (! empty($whatsItem?->ai_file)) {
+            $fileContent = $this->resolveAiFileContent($whatsItem->ai_file);
+            if (! empty($fileContent)) {
+                $fileDataSection = "\n\nبيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة:\n".$fileContent;
+            }
+        }
+
+        // 3. App links and website
         $linksSection = '';
-        if ($whatsItem && ($whatsItem->android_link || $whatsItem->ios_link)) {
-            $linksSection = "\n\nروابط التطبيق:";
+        if ($whatsItem && ($whatsItem->android_link || $whatsItem->ios_link || $whatsItem->website_url)) {
+            $linksSection = "\n\nروابط وتفاصيل التواصل:";
             if ($whatsItem->android_link) {
                 $linksSection .= "\nAndroid: {$whatsItem->android_link}";
             }
             if ($whatsItem->ios_link) {
                 $linksSection .= "\niOS: {$whatsItem->ios_link}";
             }
+            if ($whatsItem->website_url) {
+                $linksSection .= "\nالموقع الإلكتروني: {$whatsItem->website_url}";
+            }
         }
 
         $instructions = <<<PROMPT
         {$aiContext}
+        {$fileDataSection}
         {$linksSection}
 
         التعليمات:
-        - الرد باللغة العربية فقط.
-        - لا تخترع بيانات أو أسماء أو أسعار.
-        - استخدم أداة search_foods فقط للبحث عن الوجبات المتاحة.
-        - لا تقترح وجبات غير متاحة أو نافدة من المخزون.
+        - الرد باللغة العربية فقط بأسلوب مهذب ومساعد وموجز.
+        - اعتمد على البيانات المذكورة أعلاه في الرد على استفسارات العميل ولا تخترع أي معلومات أو أسعار غير موجودة.
+        - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، أخبره بلباقة أنه غير متوفر حالياً.
         PROMPT;
-
-        $tools = [
-            [
-                'type' => 'function',
-                'name' => 'search_foods',
-                'description' => 'البحث في قاعدة بيانات الوجبات المتاحة.',
-                'strict' => true,
-                'parameters' => [
-                    'type' => 'object',
-                    'additionalProperties' => false,
-                    'required' => ['query', 'limit'],
-                    'properties' => [
-                        'query' => [
-                            'type' => 'string',
-                            'description' => 'مصطلح البحث عن الوجبة.',
-                        ],
-                        'limit' => [
-                            'type' => 'integer',
-                            'minimum' => 1,
-                            'maximum' => 10,
-                        ],
-                    ],
-                ],
-            ],
-        ];
 
         try {
             $model = env('OPENAI_MODEL', 'gpt-4o-mini');
@@ -620,28 +610,14 @@ class HomeController extends Controller
             $response = OpenAI::responses()->create([
                 'model' => $model,
                 'instructions' => $instructions,
-                'tools' => $tools,
                 'input' => $userMessage,
             ]);
-
-            // Handle function_call tool requests from AI
-            $toolOutputs = $this->resolveToolCalls($response->output ?? [], (string) $restaurant->id);
-
-            if (! empty($toolOutputs)) {
-                $response = OpenAI::responses()->create([
-                    'model' => $model,
-                    'instructions' => $instructions,
-                    'tools' => $tools,
-                    'previous_response_id' => $response->id,
-                    'input' => $toolOutputs,
-                ]);
-            }
 
             return trim((string) ($response->outputText ?? '')) ?: null;
         } catch (\Throwable $e) {
             Log::warning('OpenAI getAiReply fallback triggered: '.$e->getMessage());
 
-            return 'أهلاً بك في مطعمنا! نسعد بخدمتك. يمكنك تصفح وجباتنا وطلبك مباشرة، أو سيتواصل معك أحد ممثلي الخدمة قريباً.';
+            return 'أهلاً بك! نسعد بخدمتك. يمكنك طرح استفسارك أو طلبك مباشرة، وسنكون سعداء بمساعدتك.';
         }
     }
 
@@ -666,13 +642,16 @@ class HomeController extends Controller
         }
 
         $linksSection = '';
-        if ($messengerAccount->android_link || $messengerAccount->ios_link) {
-            $linksSection = "\n\nروابط التطبيق:";
+        if ($messengerAccount->android_link || $messengerAccount->ios_link || $messengerAccount->website_url) {
+            $linksSection = "\n\nروابط وتفاصيل التواصل:";
             if ($messengerAccount->android_link) {
                 $linksSection .= "\nAndroid: {$messengerAccount->android_link}";
             }
             if ($messengerAccount->ios_link) {
                 $linksSection .= "\niOS: {$messengerAccount->ios_link}";
+            }
+            if ($messengerAccount->website_url) {
+                $linksSection .= "\nالموقع الإلكتروني: {$messengerAccount->website_url}";
             }
         }
 

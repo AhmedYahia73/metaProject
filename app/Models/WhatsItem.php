@@ -23,7 +23,10 @@ class WhatsItem extends Model
         'phone_verified_at',
         'android_link',
         'ios_link',
+        'website_url',
         'msg_number',
+        'ai_context',
+        'ai_file',
     ];
 
     /**

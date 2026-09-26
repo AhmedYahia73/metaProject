@@ -6,12 +6,15 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\WhatsItem;
 use App\Services\MetaWhatsAppService;
+use App\trait\image;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
 class WhatsItemController extends Controller
 {
+    use image;
+
     public function __construct(
         protected MetaWhatsAppService $metaService
     ) {}
@@ -39,8 +42,11 @@ class WhatsItemController extends Controller
             'verified_name' => 'sometimes|nullable|string|max:255',
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
+            'website_url' => 'sometimes|nullable|string|max:500',
             'auto_request_code' => 'sometimes|boolean',
             'code_method' => 'sometimes|in:SMS,VOICE',
+            'ai_context' => 'sometimes|nullable|string',
+            'ai_file' => 'sometimes|nullable',
         ]);
 
         $phoneNumberId = null;
@@ -88,6 +94,13 @@ class WhatsItemController extends Controller
             }
         }
 
+        $aiFilePath = null;
+        if ($request->hasFile('ai_file')) {
+            $aiFilePath = $this->upload($request, 'ai_file', 'whats/ai_files');
+        } elseif (isset($validated['ai_file']) && is_string($validated['ai_file'])) {
+            $aiFilePath = $validated['ai_file'];
+        }
+
         $whatsItem = WhatsItem::create([
             'user_id' => $user->id,
             'phone' => $validated['phone'],
@@ -96,6 +109,9 @@ class WhatsItemController extends Controller
             'access_token' => $this->metaService->getSystemUserToken(),
             'android_link' => $validated['android_link'] ?? null,
             'ios_link' => $validated['ios_link'] ?? null,
+            'website_url' => $validated['website_url'] ?? null,
+            'ai_context' => $validated['ai_context'] ?? null,
+            'ai_file' => $aiFilePath,
             'phone_status' => 'pending_otp',
             'msg_number' => 0,
         ]);
@@ -132,8 +148,22 @@ class WhatsItemController extends Controller
             'phone' => 'sometimes|required|string|max:50',
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
+            'website_url' => 'sometimes|nullable|string|max:500',
             'phone_status' => 'sometimes|in:pending_otp,verified,active',
+            'ai_context' => 'sometimes|nullable|string',
+            'ai_file' => 'sometimes|nullable',
         ]);
+
+        if ($request->hasFile('ai_file')) {
+            $updatedPath = $this->update_image($request, $whatsItem->ai_file, 'ai_file', 'whats/ai_files');
+            if ($updatedPath) {
+                $validated['ai_file'] = $updatedPath;
+            }
+        } elseif ($request->exists('ai_file') && is_string($request->input('ai_file'))) {
+            $validated['ai_file'] = $request->input('ai_file');
+        } else {
+            unset($validated['ai_file']);
+        }
 
         $whatsItem->update($validated);
 
@@ -150,6 +180,10 @@ class WhatsItemController extends Controller
     public function destroy(User $user, WhatsItem $whatsItem): JsonResponse
     {
         $this->authorizeItem($user, $whatsItem);
+
+        if ($whatsItem->ai_file) {
+            $this->deleteImage($whatsItem->ai_file);
+        }
 
         $whatsItem->delete();
 

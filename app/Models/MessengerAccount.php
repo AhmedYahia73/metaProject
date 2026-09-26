@@ -22,6 +22,7 @@ class MessengerAccount extends Model
         'ai_file',
         'android_link',
         'ios_link',
+        'website_url',
         'msg_number',
     ];
 

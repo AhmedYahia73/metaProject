@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\MessengerAccount;
 use App\Models\Order;
 use App\Models\Package;
+use App\trait\image;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -17,6 +18,8 @@ use Symfony\Component\HttpFoundation\Response;
 
 class MessengerPagesController extends Controller
 {
+    use image;
+
     private const GRAPH_API_BASE = 'https://graph.facebook.com';
 
     public function facebook_packages(Request $request): JsonResponse
@@ -158,6 +161,11 @@ class MessengerPagesController extends Controller
                     $query->whereIn('type', ['face', 'all']);
                 }),
             ],
+            'android_link' => 'sometimes|nullable|string|max:500',
+            'ios_link' => 'sometimes|nullable|string|max:500',
+            'website_url' => 'sometimes|nullable|string|max:500',
+            'ai_context' => 'sometimes|nullable|string',
+            'ai_file' => 'sometimes|nullable',
         ], [
             'package_id.exists' => 'The selected package is invalid or not available for Facebook Messenger.',
         ]);
@@ -253,15 +261,43 @@ class MessengerPagesController extends Controller
         $msgs = (int) $package->msg_number;
 
         // 4. Create MessengerAccount (disabled until approved)
+        $accountData = [
+            'user_id' => $user->id,
+            'page_name' => $matchedPage['name'] ?? null,
+            'page_access_token' => $matchedPage['access_token'],
+            'verify_token' => $existingAccount?->verify_token ?: (string) Str::uuid(),
+            'status' => 'disabled',
+        ];
+
+        if ($request->has('android_link')) {
+            $accountData['android_link'] = $validated['android_link'] ?? null;
+        }
+        if ($request->has('ios_link')) {
+            $accountData['ios_link'] = $validated['ios_link'] ?? null;
+        }
+        if ($request->has('website_url')) {
+            $accountData['website_url'] = $validated['website_url'] ?? null;
+        }
+        if ($request->has('ai_context')) {
+            $accountData['ai_context'] = $validated['ai_context'] ?? null;
+        }
+
+        if ($request->hasFile('ai_file')) {
+            $oldImage = $existingAccount?->ai_file;
+            $uploadedPath = $this->update_image($request, $oldImage, 'ai_file', 'messenger/ai_files');
+            if ($uploadedPath) {
+                $accountData['ai_file'] = $uploadedPath;
+            }
+        } elseif ($request->exists('ai_file') && is_string($request->input('ai_file'))) {
+            if ($existingAccount?->ai_file && $existingAccount->ai_file !== $request->input('ai_file')) {
+                $this->deleteImage($existingAccount->ai_file);
+            }
+            $accountData['ai_file'] = $request->input('ai_file');
+        }
+
         $messengerAccount = MessengerAccount::updateOrCreate(
             ['page_id' => $validated['page_id']],
-            [
-                'user_id' => $user->id,
-                'page_name' => $matchedPage['name'] ?? null,
-                'page_access_token' => $matchedPage['access_token'],
-                'verify_token' => (string) Str::uuid(),
-                'status' => 'disabled',
-            ]
+            $accountData
         );
 
         // 5. Create Order (pending — from/to will be set by admin on approval)
@@ -305,6 +341,7 @@ class MessengerPagesController extends Controller
                 'total_tax' => round($totalTax, 2),
                 'final_price' => round($finalPrice, 2),
                 'status' => 'pending',
+                'messenger_account' => $messengerAccount->fresh(),
             ],
         ], Response::HTTP_CREATED);
     }

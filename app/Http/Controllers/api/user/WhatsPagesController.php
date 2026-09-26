@@ -7,6 +7,7 @@ use App\Models\Order;
 use App\Models\Package;
 use App\Models\WhatsItem;
 use App\Services\MetaWhatsAppService;
+use App\trait\image;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -16,6 +17,8 @@ use Symfony\Component\HttpFoundation\Response;
 
 class WhatsPagesController extends Controller
 {
+    use image;
+
     public function __construct(
         protected MetaWhatsAppService $metaService
     ) {}
@@ -102,8 +105,11 @@ class WhatsPagesController extends Controller
             'verified_name' => 'sometimes|nullable|string|max:255',
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
+            'website_url' => 'sometimes|nullable|string|max:500',
             'auto_request_code' => 'sometimes|boolean',
             'code_method' => 'sometimes|in:SMS,VOICE',
+            'ai_context' => 'sometimes|nullable|string',
+            'ai_file' => 'sometimes|nullable',
         ]);
 
         $phoneNumberId = null;
@@ -151,6 +157,13 @@ class WhatsPagesController extends Controller
             }
         }
 
+        $aiFilePath = null;
+        if ($request->hasFile('ai_file')) {
+            $aiFilePath = $this->upload($request, 'ai_file', 'whats/ai_files');
+        } elseif (isset($validated['ai_file']) && is_string($validated['ai_file'])) {
+            $aiFilePath = $validated['ai_file'];
+        }
+
         $whatsItem = WhatsItem::create([
             'user_id' => $user->id,
             'phone' => $validated['phone'],
@@ -159,6 +172,9 @@ class WhatsPagesController extends Controller
             'access_token' => $this->metaService->getSystemUserToken(),
             'android_link' => $validated['android_link'] ?? null,
             'ios_link' => $validated['ios_link'] ?? null,
+            'website_url' => $validated['website_url'] ?? null,
+            'ai_context' => $validated['ai_context'] ?? null,
+            'ai_file' => $aiFilePath,
             'phone_status' => 'pending_otp',
             'msg_number' => 0,
         ]);
@@ -194,7 +210,21 @@ class WhatsPagesController extends Controller
         $validated = $request->validate([
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
+            'website_url' => 'sometimes|nullable|string|max:500',
+            'ai_context' => 'sometimes|nullable|string',
+            'ai_file' => 'sometimes|nullable',
         ]);
+
+        if ($request->hasFile('ai_file')) {
+            $updatedPath = $this->update_image($request, $whatsItem->ai_file, 'ai_file', 'whats/ai_files');
+            if ($updatedPath) {
+                $validated['ai_file'] = $updatedPath;
+            }
+        } elseif ($request->exists('ai_file') && is_string($request->input('ai_file'))) {
+            $validated['ai_file'] = $request->input('ai_file');
+        } else {
+            unset($validated['ai_file']);
+        }
 
         $whatsItem->update($validated);
 
@@ -211,6 +241,10 @@ class WhatsPagesController extends Controller
     public function destroy(Request $request, WhatsItem $whatsItem): JsonResponse
     {
         $this->authorizeItem($request->user(), $whatsItem);
+
+        if ($whatsItem->ai_file) {
+            $this->deleteImage($whatsItem->ai_file);
+        }
 
         $whatsItem->delete();
 
@@ -391,6 +425,11 @@ class WhatsPagesController extends Controller
                     $query->whereIn('type', ['whats', 'all']);
                 }),
             ],
+            'android_link' => 'sometimes|nullable|string|max:500',
+            'ios_link' => 'sometimes|nullable|string|max:500',
+            'website_url' => 'sometimes|nullable|string|max:500',
+            'ai_context' => 'sometimes|nullable|string',
+            'ai_file' => 'sometimes|nullable',
         ], [
             'package_id.exists' => 'The selected package is invalid or not available for WhatsApp.',
         ]);
@@ -407,6 +446,41 @@ class WhatsPagesController extends Controller
                 'status' => false,
                 'message' => 'This WhatsApp number already has a pending subscription request awaiting approval.',
             ], Response::HTTP_CONFLICT);
+        }
+
+        // Update optional links and AI config on the WhatsApp item
+        $itemUpdate = [];
+
+        if ($request->has('android_link')) {
+            $itemUpdate['android_link'] = $validated['android_link'] ?? null;
+        }
+
+        if ($request->has('ios_link')) {
+            $itemUpdate['ios_link'] = $validated['ios_link'] ?? null;
+        }
+
+        if ($request->has('website_url')) {
+            $itemUpdate['website_url'] = $validated['website_url'] ?? null;
+        }
+
+        if ($request->has('ai_context')) {
+            $itemUpdate['ai_context'] = $validated['ai_context'] ?? null;
+        }
+
+        if ($request->hasFile('ai_file')) {
+            $updatedPath = $this->update_image($request, $whatsItem->ai_file, 'ai_file', 'whats/ai_files');
+            if ($updatedPath) {
+                $itemUpdate['ai_file'] = $updatedPath;
+            }
+        } elseif ($request->exists('ai_file') && is_string($request->input('ai_file'))) {
+            if ($whatsItem->ai_file && $whatsItem->ai_file !== $request->input('ai_file')) {
+                $this->deleteImage($whatsItem->ai_file);
+            }
+            $itemUpdate['ai_file'] = $request->input('ai_file');
+        }
+
+        if (! empty($itemUpdate)) {
+            $whatsItem->update($itemUpdate);
         }
 
         $package = Package::with(['discount', 'tax'])->findOrFail($validated['package_id']);
@@ -489,6 +563,7 @@ class WhatsPagesController extends Controller
                 'total_tax' => round($totalTax, 2),
                 'final_price' => round($finalPrice, 2),
                 'status' => 'pending',
+                'whats_item' => $whatsItem->fresh(),
             ],
         ], Response::HTTP_CREATED);
     }

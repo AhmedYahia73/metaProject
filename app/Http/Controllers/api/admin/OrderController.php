@@ -7,6 +7,7 @@ use App\Models\MessengerAccount;
 use App\Models\Order;
 use App\Models\Package;
 use App\Models\User;
+use App\trait\image;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -16,6 +17,8 @@ use Symfony\Component\HttpFoundation\Response;
 
 class OrderController extends Controller
 {
+    use image;
+
     /**
      * Display a listing of orders (paginated).
      *
@@ -326,7 +329,8 @@ class OrderController extends Controller
 
         $validated = $request->validate([
             'ai_context' => 'sometimes|nullable|string',
-            'ai_file' => 'sometimes|nullable|string|max:500',
+            'ai_file' => 'sometimes|nullable',
+            'website_url' => 'sometimes|nullable|string|max:500',
         ]);
 
         $package = Package::findOrFail($order->package_id);
@@ -353,8 +357,17 @@ class OrderController extends Controller
                     $accountUpdate['ai_context'] = $validated['ai_context'] ?? null;
                 }
 
-                if ($request->has('ai_file')) {
-                    $accountUpdate['ai_file'] = $validated['ai_file'] ?? null;
+                if ($request->has('website_url')) {
+                    $accountUpdate['website_url'] = $validated['website_url'] ?? null;
+                }
+
+                if ($request->hasFile('ai_file')) {
+                    $uploadedPath = $this->upload($request, 'ai_file', 'messenger/ai_files');
+                    if ($uploadedPath) {
+                        $accountUpdate['ai_file'] = $uploadedPath;
+                    }
+                } elseif ($request->has('ai_file') && is_string($request->input('ai_file'))) {
+                    $accountUpdate['ai_file'] = $request->input('ai_file');
                 }
 
                 $msgsToAdd = $order->msgs ?: (int) $package->msg_number;
@@ -389,20 +402,47 @@ class OrderController extends Controller
                     'webhook_url' => url('/api/messenger-webhook'),
                     'verify_token' => $account->verify_token,
                     'msg_number' => $account->msg_number,
+                    'website_url' => $account->fresh()->website_url,
                 ];
             }
         } else {
-            // WhatsApp: message quota
+            // WhatsApp: message quota and optional ai_context / ai_file / website_url
             $whatsItem = $order->whatsItem;
             $msgsToAdd = $order->msgs ?: (int) $package->msg_number;
 
             if ($whatsItem) {
+                $whatsItemUpdate = [];
+
+                if ($request->has('ai_context')) {
+                    $whatsItemUpdate['ai_context'] = $validated['ai_context'] ?? null;
+                }
+
+                if ($request->has('website_url')) {
+                    $whatsItemUpdate['website_url'] = $validated['website_url'] ?? null;
+                }
+
+                if ($request->hasFile('ai_file')) {
+                    $uploadedPath = $this->upload($request, 'ai_file', 'whats/ai_files');
+                    if ($uploadedPath) {
+                        $whatsItemUpdate['ai_file'] = $uploadedPath;
+                    }
+                } elseif ($request->has('ai_file') && is_string($request->input('ai_file'))) {
+                    $whatsItemUpdate['ai_file'] = $request->input('ai_file');
+                }
+
+                if (! empty($whatsItemUpdate)) {
+                    $whatsItem->update($whatsItemUpdate);
+                }
+
                 $whatsItem->increment('msg_number', $msgsToAdd);
                 $activationResult = [
                     'whats_item_id' => $whatsItem->id,
                     'phone' => $whatsItem->phone,
                     'whatsapp_msgs_added' => $msgsToAdd,
                     'msg_number' => $whatsItem->fresh()->msg_number,
+                    'ai_context' => $whatsItem->fresh()->ai_context,
+                    'ai_file' => $whatsItem->fresh()->ai_file,
+                    'website_url' => $whatsItem->fresh()->website_url,
                 ];
             } else {
                 $activationResult = [
