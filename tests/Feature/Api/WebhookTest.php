@@ -5,6 +5,7 @@ use App\Models\MsgSend;
 use App\Models\Order;
 use App\Models\Package;
 use App\Models\User;
+use App\Models\WhatsItem;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use OpenAI\Laravel\Facades\OpenAI;
@@ -13,6 +14,7 @@ use OpenAI\Responses\Responses\CreateResponse;
 uses(RefreshDatabase::class);
 
 test('webhook handles meta GET verification challenge', function () {
+    config(['services.meta.verify_token' => 'test']);
     $response = $this->get('/api/web-hook?hub_mode=subscribe&hub_verify_token=test&hub_challenge=1158201444');
 
     $response->assertOk();
@@ -64,8 +66,13 @@ test('webhook returns restaurant_not_found when phone_number_id is unknown', fun
 test('webhook returns limit_exceeded when restaurant has no active subscription', function () {
     $restaurant = User::factory()->create([
         'role' => 'user',
+    ]);
+
+    WhatsItem::factory()->create([
+        'user_id' => $restaurant->id,
         'phone_number_id' => '999888777',
         'access_token' => 'meta_token_123',
+        'msg_number' => 0,
     ]);
 
     $payload = [
@@ -140,10 +147,15 @@ test('webhook processes incoming message, generates AI reply, and sends whatsapp
 
     $restaurant = User::factory()->create([
         'role' => 'user',
+    ]);
+
+    $whatsItem = WhatsItem::factory()->create([
+        'user_id' => $restaurant->id,
         'phone_number_id' => '999888777',
         'access_token' => 'EAAG...fake_token',
         'android_link' => 'https://play.google.com/store/apps/details?id=com.keeto',
         'ios_link' => 'https://apps.apple.com/app/keeto',
+        'msg_number' => 500,
     ]);
 
     $package = Package::create([
@@ -156,6 +168,7 @@ test('webhook processes incoming message, generates AI reply, and sends whatsapp
     Order::create([
         'package_id' => $package->id,
         'user_id' => $restaurant->id,
+        'whats_item_id' => $whatsItem->id,
         'total_discount' => 0,
         'total_tax' => 0,
         'price' => 100,

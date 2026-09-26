@@ -36,8 +36,13 @@ class MessengerAccountController extends Controller
             'page_access_token' => 'required|string',
             'page_name' => 'sometimes|nullable|string|max:255',
             'status' => 'sometimes|in:active,disabled',
+            'ai_context' => 'sometimes|nullable|string',
+            'ai_file' => 'sometimes|nullable|string|max:255',
+            'android_link' => 'sometimes|nullable|string|max:500',
+            'ios_link' => 'sometimes|nullable|string|max:500',
         ]);
 
+        unset($validated['msg_number']);
         $validated['user_id'] = $user->id;
         $validated['verify_token'] = (string) Str::uuid();
 
@@ -79,7 +84,13 @@ class MessengerAccountController extends Controller
             'page_name' => 'sometimes|nullable|string|max:255',
             'page_access_token' => 'sometimes|string',
             'status' => 'sometimes|in:active,disabled',
+            'ai_context' => 'sometimes|nullable|string',
+            'ai_file' => 'sometimes|nullable|string|max:255',
+            'android_link' => 'sometimes|nullable|string|max:500',
+            'ios_link' => 'sometimes|nullable|string|max:500',
         ]);
+
+        unset($validated['msg_number']);
 
         $messengerAccount->update($validated);
 

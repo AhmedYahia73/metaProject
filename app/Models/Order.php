@@ -24,6 +24,7 @@ class Order extends Model
         'status',
         'channel',
         'messenger_account_id',
+        'whats_item_id',
     ];
 
     /**
@@ -76,6 +77,16 @@ class Order extends Model
     public function messengerAccount(): BelongsTo
     {
         return $this->belongsTo(MessengerAccount::class);
+    }
+
+    /**
+     * Get the WhatsApp item this order activates (null for Messenger orders).
+     *
+     * @return BelongsTo<WhatsItem, $this>
+     */
+    public function whatsItem(): BelongsTo
+    {
+        return $this->belongsTo(WhatsItem::class);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

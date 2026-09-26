@@ -10,12 +10,14 @@ use App\Models\MsgSend;
 use App\Models\Order;
 use App\Models\Setting;
 use App\Models\User;
+use App\Models\WhatsItem;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use OpenAI\Laravel\Facades\OpenAI;
 
 class HomeController extends Controller
@@ -39,7 +41,7 @@ class HomeController extends Controller
         try {
             $data = $request->all();
 
-            // 2. Resolve the restaurant user via phone_number_id
+            // 2. Resolve the restaurant user via phone_number_id from WhatsItem
             $phoneNumberId = data_get($data, 'entry.0.changes.0.value.metadata.phone_number_id');
 
             // Handle Meta test button from Developer Dashboard (sends dummy ID 123456123)
@@ -51,14 +53,19 @@ class HomeController extends Controller
                 return response()->json(['status' => 'ignored'], Response::HTTP_OK);
             }
 
-            /** @var User|null $restaurant */
-            $restaurant = User::where('phone_number_id', $phoneNumberId)
-                ->where('role', 'user')
-                ->first();
+            /** @var WhatsItem|null $whatsItem */
+            $whatsItem = WhatsItem::where('phone_number_id', $phoneNumberId)->first();
 
-            if (! $restaurant) {
+            if (! $whatsItem) {
                 Log::warning("Webhook received for unknown phone_number_id: {$phoneNumberId}");
 
+                return response()->json(['status' => 'restaurant_not_found'], Response::HTTP_OK);
+            }
+
+            /** @var User $restaurant */
+            $restaurant = $whatsItem->user;
+
+            if (! $restaurant) {
                 return response()->json(['status' => 'restaurant_not_found'], Response::HTTP_OK);
             }
 
@@ -73,7 +80,7 @@ class HomeController extends Controller
 
             // If Meta or manual test sends dummy test sender, route reply to restaurant's verified phone
             if (in_array($senderPhone, ['16315551181', '01000000000', '123456789', '123456123'], true)) {
-                $senderPhone = $restaurant->phone ?: '201206610346';
+                $senderPhone = $whatsItem->phone ?: ($restaurant->phone ?: '201206610346');
             }
 
             // Normalize local Egyptian format (01xxxxxxxxx -> 201xxxxxxxxx)
@@ -91,13 +98,18 @@ class HomeController extends Controller
 
             Log::info('Webhook: message received', [
                 'restaurant_id' => $restaurant->id,
+                'whats_item_id' => $whatsItem->id,
                 'sender' => $senderPhone,
                 'message' => $messageText,
             ]);
 
-            // 4. Check if the restaurant has an active subscription with remaining messages
-            if (! $this->hasRemainingMessages($restaurant)) {
-                Log::info("Webhook: message limit reached for restaurant #{$restaurant->id}");
+            // 4. Check if the WhatsItem or restaurant has an active subscription with remaining messages
+            $hasRemainingQuota = ((int) $whatsItem->msg_number) > 0;
+            $hasActiveOrder = $this->hasRemainingMessages($restaurant, 'whatsapp');
+            $hasLimit = $hasRemainingQuota || $hasActiveOrder;
+
+            if (! $hasLimit) {
+                Log::info("Webhook: message limit reached for WhatsItem #{$whatsItem->id} (restaurant #{$restaurant->id})");
 
                 return response()->json(['status' => 'limit_exceeded'], Response::HTTP_OK);
             }
@@ -105,15 +117,20 @@ class HomeController extends Controller
             // 5. Save the customer's incoming message
             Chat::create([
                 'user_id' => $restaurant->id,
+                'whats_item_id' => $whatsItem->id,
                 'name' => $senderName,
                 'phone' => $senderPhone,
                 'message' => $messageText,
                 'is_image' => false,
                 'is_admin' => false,
+                'sender_type' => 'customer',
+                'is_read' => false,
+                'channel' => 'whatsapp',
+                'meta_message_id' => data_get($incomingMessage, 'id'),
             ]);
 
             // 6. Get AI reply
-            $reply = $this->getAiReply($restaurant, $messageText);
+            $reply = $this->getAiReply($restaurant, $messageText, $whatsItem);
 
             if (! $reply) {
                 Log::warning("Webhook: AI returned empty reply for restaurant #{$restaurant->id}");
@@ -122,25 +139,36 @@ class HomeController extends Controller
             }
 
             // 7. Send reply via WhatsApp — only record to DB if successful
-            $token = $restaurant->access_token ?: config('services.meta.system_user_token');
+            $token = $whatsItem->access_token ?: config('services.meta.system_user_token');
             $sent = $this->sendTextMessage(
                 accessToken: (string) $token,
-                phoneNumberId: $restaurant->phone_number_id,
+                phoneNumberId: $whatsItem->phone_number_id,
                 to: $senderPhone,
                 body: $reply,
             );
 
             if ($sent) {
+                if ((int) $whatsItem->msg_number > 0) {
+                    $whatsItem->decrement('msg_number');
+                }
+
                 Chat::create([
                     'user_id' => $restaurant->id,
+                    'whats_item_id' => $whatsItem->id,
                     'name' => $senderName,
                     'phone' => $senderPhone,
                     'message' => $reply,
                     'is_image' => false,
                     'is_admin' => true,
+                    'sender_type' => 'bot',
+                    'is_read' => true,
+                    'channel' => 'whatsapp',
                 ]);
 
-                MsgSend::create(['user_id' => $restaurant->id]);
+                MsgSend::create([
+                    'user_id' => $restaurant->id,
+                    'channel' => 'whatsapp',
+                ]);
             } else {
                 Log::warning("Webhook: WhatsApp send failed for restaurant #{$restaurant->id} to {$senderPhone}");
             }
@@ -346,16 +374,21 @@ class HomeController extends Controller
                 return response()->json(['status' => 'non_text_ignored'], Response::HTTP_OK);
             }
 
-            // Check Messenger-specific message limit
-            $hasLimit = $this->hasRemainingMessages($restaurant, 'messenger');
+            // Check Messenger-specific message limit on the MessengerAccount and active order
+            $hasRemainingQuota = ((int) $messengerAccount->msg_number) > 0;
+            $hasActiveOrder = $this->hasRemainingMessages($restaurant, 'messenger');
+            $hasLimit = $hasRemainingQuota || $hasActiveOrder;
 
             Log::channel('stack')->info('[MESSENGER] ⚡ Limit check', [
                 'restaurant_id' => $restaurant->id,
-                'has_remaining' => $hasLimit,
+                'messenger_account_id' => $messengerAccount->id,
+                'account_msg_number' => $messengerAccount->msg_number,
+                'has_remaining_quota' => $hasRemainingQuota,
+                'has_active_order' => $hasActiveOrder,
             ]);
 
             if (! $hasLimit) {
-                Log::channel('stack')->warning("[MESSENGER] ✗ Limit exceeded for restaurant #{$restaurant->id}");
+                Log::channel('stack')->warning("[MESSENGER] ✗ Limit exceeded for account #{$messengerAccount->id} (restaurant #{$restaurant->id})");
 
                 return response()->json(['status' => 'limit_exceeded'], Response::HTTP_OK);
             }
@@ -363,20 +396,24 @@ class HomeController extends Controller
             // Save incoming customer message
             Chat::create([
                 'user_id' => $restaurant->id,
+                'messenger_account_id' => $messengerAccount->id,
                 'name' => 'Messenger User',
                 'phone' => null,
                 'message' => $messageText,
                 'is_image' => false,
                 'is_admin' => false,
+                'sender_type' => 'customer',
+                'is_read' => false,
                 'channel' => 'messenger',
                 'messenger_sender_id' => $senderId,
+                'meta_message_id' => data_get($messagingEvent, 'message.mid'),
             ]);
 
             Log::channel('stack')->info('[MESSENGER] ✓ Customer message saved to DB');
 
-            // Get AI reply (same logic as WhatsApp)
+            // Get AI reply for Messenger using MessengerAccount context & ai_file
             Log::channel('stack')->info('[MESSENGER] ⏳ Calling OpenAI...');
-            $reply = $this->getAiReply($restaurant, $messageText);
+            $reply = $this->getMessengerAiReply($messengerAccount, $messageText);
 
             if (! $reply) {
                 Log::channel('stack')->warning("[MESSENGER] ✗ OpenAI returned empty reply for restaurant #{$restaurant->id}");
@@ -405,13 +442,20 @@ class HomeController extends Controller
             ]);
 
             if ($sent) {
+                if ((int) $messengerAccount->msg_number > 0) {
+                    $messengerAccount->decrement('msg_number');
+                }
+
                 Chat::create([
                     'user_id' => $restaurant->id,
+                    'messenger_account_id' => $messengerAccount->id,
                     'name' => 'Messenger User',
                     'phone' => null,
                     'message' => $reply,
                     'is_image' => false,
                     'is_admin' => true,
+                    'sender_type' => 'bot',
+                    'is_read' => true,
                     'channel' => 'messenger',
                     'messenger_sender_id' => $senderId,
                 ]);
@@ -517,18 +561,26 @@ class HomeController extends Controller
     /**
      * Get an AI-generated reply using OpenAI Responses API with food tool-call support.
      */
-    private function getAiReply(User $restaurant, string $userMessage): ?string
+    private function getAiReply(User $restaurant, string $userMessage, ?WhatsItem $whatsItem = null): ?string
     {
         $restaurantid = $restaurant->restuarant_name;
         $aiContext = Setting::firstWhere('name', 'ai_context')?->value
             ?? 'أنت موظف خدمة عملاء لمطعم، ردّ بأسلوب ودي وبسيط.';
 
+        $linksSection = '';
+        if ($whatsItem && ($whatsItem->android_link || $whatsItem->ios_link)) {
+            $linksSection = "\n\nروابط التطبيق:";
+            if ($whatsItem->android_link) {
+                $linksSection .= "\nAndroid: {$whatsItem->android_link}";
+            }
+            if ($whatsItem->ios_link) {
+                $linksSection .= "\niOS: {$whatsItem->ios_link}";
+            }
+        }
+
         $instructions = <<<PROMPT
         {$aiContext}
-
-        روابط المطعم:
-        Android: {$restaurant->android_link}
-        iOS: {$restaurant->ios_link}
+        {$linksSection}
 
         التعليمات:
         - الرد باللغة العربية فقط.
@@ -591,6 +643,127 @@ class HomeController extends Controller
 
             return 'أهلاً بك في مطعمنا! نسعد بخدمتك. يمكنك تصفح وجباتنا وطلبك مباشرة، أو سيتواصل معك أحد ممثلي الخدمة قريباً.';
         }
+    }
+
+    /**
+     * Get an AI-generated reply for Facebook Messenger using the MessengerAccount's ai_context and ai_file.
+     * Uses the ai_file contents directly instead of App\Models\Food.
+     */
+    private function getMessengerAiReply(MessengerAccount $messengerAccount, string $userMessage): ?string
+    {
+        $aiContext = ! empty($messengerAccount->ai_context)
+            ? $messengerAccount->ai_context
+            : (Setting::firstWhere('name', 'ai_context')?->value ?? 'أنت موظف خدمة عملاء، ردّ بأسلوب ودي وبسيط.');
+
+        $restaurant = $messengerAccount->user;
+
+        // Resolve data from ai_file instead of App\Models\Food
+        $fileContent = $this->resolveAiFileContent($messengerAccount->ai_file);
+
+        $fileDataSection = '';
+        if (! empty($fileContent)) {
+            $fileDataSection = "\n\nبيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة:\n".$fileContent;
+        }
+
+        $linksSection = '';
+        if ($messengerAccount->android_link || $messengerAccount->ios_link) {
+            $linksSection = "\n\nروابط التطبيق:";
+            if ($messengerAccount->android_link) {
+                $linksSection .= "\nAndroid: {$messengerAccount->android_link}";
+            }
+            if ($messengerAccount->ios_link) {
+                $linksSection .= "\niOS: {$messengerAccount->ios_link}";
+            }
+        }
+
+        $instructions = <<<PROMPT
+        {$aiContext}
+        {$fileDataSection}
+        {$linksSection}
+
+        التعليمات:
+        - الرد باللغة العربية فقط بأسلوب مهذب ومساعد وموجز.
+        - اعتمد على البيانات المذكورة أعلاه في الرد على استفسارات العميل ولا تخترع أي معلومات أو أسعار غير موجودة.
+        - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، أخبره بلباقة أنه غير متوفر حالياً.
+        PROMPT;
+
+        try {
+            $model = env('OPENAI_MODEL', 'gpt-4o-mini');
+
+            $response = OpenAI::responses()->create([
+                'model' => $model,
+                'instructions' => $instructions,
+                'input' => $userMessage,
+            ]);
+
+            return trim((string) ($response->outputText ?? '')) ?: null;
+        } catch (\Throwable $e) {
+            Log::warning('OpenAI getMessengerAiReply fallback triggered: '.$e->getMessage());
+
+            return 'أهلاً بك! نسعد بخدمتك. يمكنك طرح استفسارك أو طلبك مباشرة، وسنكون سعداء بمساعدتك.';
+        }
+    }
+
+    /**
+     * Resolve and read text content from ai_file (file path, storage, URL, or raw text).
+     */
+    private function resolveAiFileContent(?string $aiFile): ?string
+    {
+        if (empty($aiFile)) {
+            return null;
+        }
+
+        $trimmed = trim($aiFile);
+
+        // If string contains newlines, treat it directly as content rather than a file path
+        if (str_contains($trimmed, "\n") || str_contains($trimmed, "\r")) {
+            return $trimmed;
+        }
+
+        // 1. If it's a URL
+        if (str_starts_with($trimmed, 'http://') || str_starts_with($trimmed, 'https://')) {
+            try {
+                $response = Http::timeout(5)->get($trimmed);
+                if ($response->successful()) {
+                    return $response->body();
+                }
+            } catch (\Throwable $e) {
+                Log::warning("Could not fetch ai_file from URL: {$trimmed} — ".$e->getMessage());
+            }
+
+            return null;
+        }
+
+        // 2. Safe filesystem / storage checks
+        try {
+            if (@file_exists($trimmed) && @is_file($trimmed)) {
+                return @file_get_contents($trimmed);
+            }
+
+            $storageApp = storage_path('app/'.$trimmed);
+            if (@file_exists($storageApp) && @is_file($storageApp)) {
+                return @file_get_contents($storageApp);
+            }
+
+            $storagePublic = storage_path('app/public/'.$trimmed);
+            if (@file_exists($storagePublic) && @is_file($storagePublic)) {
+                return @file_get_contents($storagePublic);
+            }
+
+            $publicPath = public_path($trimmed);
+            if (@file_exists($publicPath) && @is_file($publicPath)) {
+                return @file_get_contents($publicPath);
+            }
+
+            if (Storage::exists($trimmed)) {
+                return Storage::get($trimmed);
+            }
+        } catch (\Throwable $e) {
+            Log::info("Could not resolve ai_file as path: {$trimmed}");
+        }
+
+        // 3. Fallback: treat string as direct content
+        return $trimmed;
     }
 
     /**

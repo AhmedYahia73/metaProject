@@ -4,6 +4,7 @@ namespace App\Http\Controllers\api\admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Models\WhatsItem;
 use App\Services\MetaWhatsAppService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -38,11 +39,13 @@ class UserController extends Controller
             'paginate' => 'sometimes|boolean',
         ]);
 
-        $query = User::where('role', 'user');
+        $query = User::with('whatsItems')->where('role', 'user');
 
         // Optional filter by phone status (e.g., ?phone_status=active)
         if ($request->filled('phone_status')) {
-            $query->where('phone_status', $request->phone_status);
+            $query->whereHas('whatsItems', function ($q) use ($request) {
+                $q->where('phone_status', $request->phone_status);
+            });
         }
 
         // Optional search
@@ -97,9 +100,6 @@ class UserController extends Controller
             'phone' => 'required|string|max:50|unique:users,phone',
             'password' => 'required|string|min:6',
             'restuarant_name' => 'required|string|max:255',
-            'ai_context' => 'sometimes|nullable|string',
-            'android_link' => 'sometimes|nullable|string|max:500',
-            'ios_link' => 'sometimes|nullable|string|max:500',
             'name' => 'sometimes|nullable|string|max:255',
             'email' => 'sometimes|nullable|email|max:255|unique:users,email',
             'auto_request_code' => 'sometimes|boolean',
@@ -113,18 +113,13 @@ class UserController extends Controller
             $validated['name'] = $validated['restuarant_name'];
         }
 
-        // Default phone status
-        $validated['phone_status'] = 'pending_otp';
-
         // -------------------------------------------------------------
         // Automated Meta Onboarding
         // -------------------------------------------------------------
         $metaResponseInfo = null;
+        $phoneNumberId = null;
 
         if ($this->metaService->isConfigured()) {
-            $validated['access_token'] = $this->metaService->getSystemUserToken();
-            $validated['waba_id'] = $this->metaService->getWabaId();
-
             // 1. Add phone number to Meta WABA (or retrieve existing)
             $addResult = $this->metaService->addPhoneNumber(
                 phone: $validated['phone'],
@@ -133,7 +128,6 @@ class UserController extends Controller
 
             if ($addResult['success']) {
                 $phoneNumberId = $addResult['phone_number_id'] ?? null;
-                $validated['phone_number_id'] = $phoneNumberId;
 
                 // 2. Automatically request verification code (OTP) via SMS or Voice
                 $shouldSendCode = $request->boolean('auto_request_code', true);
@@ -166,12 +160,31 @@ class UserController extends Controller
             ];
         }
 
-        $user = User::create($validated);
+        $user = User::create([
+            'phone' => $validated['phone'],
+            'password' => $validated['password'],
+            'restuarant_name' => $validated['restuarant_name'],
+            'name' => $validated['name'],
+            'email' => $validated['email'] ?? null,
+            'role' => 'user',
+        ]);
+
+        $whatsItem = WhatsItem::create([
+            'user_id' => $user->id,
+            'phone' => $validated['phone'],
+            'phone_number_id' => $phoneNumberId,
+            'waba_id' => $this->metaService->getWabaId(),
+            'access_token' => $this->metaService->getSystemUserToken(),
+            'phone_status' => 'pending_otp',
+        ]);
+
+        $user->load('whatsItems');
 
         return response()->json([
             'status' => true,
             'message' => 'User created successfully.',
             'data' => $user,
+            'whats_item' => $whatsItem,
             'meta' => $metaResponseInfo,
         ], Response::HTTP_CREATED);
     }
@@ -187,6 +200,8 @@ class UserController extends Controller
                 'message' => 'User not found.',
             ], Response::HTTP_NOT_FOUND);
         }
+
+        $user->load(['whatsItems', 'messengerAccounts']);
 
         return response()->json([
             'status' => true,
@@ -210,14 +225,8 @@ class UserController extends Controller
             'phone' => 'sometimes|required|string|max:50|unique:users,phone,'.$user->id,
             'password' => 'sometimes|nullable|string|min:6',
             'restuarant_name' => 'sometimes|required|string|max:255',
-            'ai_context' => 'sometimes|nullable|string',
-            'android_link' => 'sometimes|nullable|string|max:500',
-            'ios_link' => 'sometimes|nullable|string|max:500',
             'name' => 'sometimes|nullable|string|max:255',
             'email' => 'sometimes|nullable|email|max:255|unique:users,email,'.$user->id,
-            'phone_number_id' => 'sometimes|nullable|string|max:255',
-            'access_token' => 'sometimes|nullable|string|max:500',
-            'waba_id' => 'sometimes|nullable|string|max:255',
             'phone_status' => 'sometimes|in:pending_otp,verified,active',
         ]);
 
@@ -230,12 +239,20 @@ class UserController extends Controller
         // Keep role strictly user
         $validated['role'] = 'user';
 
+        if (isset($validated['phone_status'])) {
+            $primaryItem = $user->whatsItems()->first();
+            if ($primaryItem) {
+                $primaryItem->update(['phone_status' => $validated['phone_status']]);
+            }
+            unset($validated['phone_status']);
+        }
+
         $user->update($validated);
 
         return response()->json([
             'status' => true,
             'message' => 'User updated successfully.',
-            'data' => $user,
+            'data' => $user->fresh()->load('whatsItems'),
         ]);
     }
 
@@ -265,32 +282,46 @@ class UserController extends Controller
     public function requestCode(Request $request, User $user): JsonResponse
     {
         $validated = $request->validate([
+            'whats_item_id' => 'sometimes|exists:whats_items,id',
             'code_method' => 'sometimes|in:SMS,VOICE',
             'language' => 'sometimes|string|max:10',
         ]);
 
+        $whatsItem = $request->filled('whats_item_id')
+            ? WhatsItem::where('user_id', $user->id)->findOrFail($request->whats_item_id)
+            : $user->whatsItems()->first();
+
+        if (! $whatsItem) {
+            $whatsItem = WhatsItem::create([
+                'user_id' => $user->id,
+                'phone' => $user->phone,
+                'phone_status' => 'pending_otp',
+            ]);
+        }
+
         Log::info('requestCode: initiated', [
             'user_id' => $user->id,
-            'phone' => $user->phone,
-            'has_phone_number_id' => ! empty($user->phone_number_id),
+            'whats_item_id' => $whatsItem->id,
+            'phone' => $whatsItem->phone,
+            'has_phone_number_id' => ! empty($whatsItem->phone_number_id),
         ]);
 
-        if (empty($user->phone_number_id)) {
+        if (empty($whatsItem->phone_number_id)) {
             // Try to register phone number to Meta first if not already done
             Log::info('requestCode: phone_number_id missing, attempting to add phone to Meta.', [
                 'user_id' => $user->id,
-                'phone' => $user->phone,
+                'phone' => $whatsItem->phone,
             ]);
 
             $addResult = $this->metaService->addPhoneNumber(
-                phone: $user->phone,
+                phone: $whatsItem->phone ?: $user->phone,
                 verifiedName: $user->restuarant_name
             );
 
             if (! $addResult['success']) {
                 Log::error('requestCode: failed to add phone to Meta WABA.', [
                     'user_id' => $user->id,
-                    'phone' => $user->phone,
+                    'phone' => $whatsItem->phone,
                     'error' => $addResult['message'] ?? 'unknown',
                 ]);
 
@@ -300,14 +331,15 @@ class UserController extends Controller
                 ], Response::HTTP_BAD_REQUEST);
             }
 
-            $user->update([
+            $whatsItem->update([
                 'phone_number_id' => $addResult['phone_number_id'],
                 'waba_id' => $this->metaService->getWabaId(),
-                'access_token' => $user->access_token ?: $this->metaService->getSystemUserToken(),
+                'access_token' => $whatsItem->access_token ?: $this->metaService->getSystemUserToken(),
             ]);
 
             Log::info('requestCode: phone added to Meta WABA.', [
                 'user_id' => $user->id,
+                'whats_item_id' => $whatsItem->id,
                 'phone_number_id' => $addResult['phone_number_id'],
             ]);
         }
@@ -317,29 +349,31 @@ class UserController extends Controller
 
         Log::info('requestCode: requesting OTP from Meta.', [
             'user_id' => $user->id,
-            'phone_number_id' => $user->phone_number_id,
+            'whats_item_id' => $whatsItem->id,
+            'phone_number_id' => $whatsItem->phone_number_id,
             'code_method' => $codeMethod,
             'language' => $language,
         ]);
 
-        $result = $this->metaService->requestCode($user->phone_number_id, $codeMethod, $language);
+        $result = $this->metaService->requestCode($whatsItem->phone_number_id, $codeMethod, $language);
 
         if ($result['success']) {
             Log::info('requestCode: OTP sent successfully.', [
                 'user_id' => $user->id,
-                'phone' => $user->phone,
+                'phone' => $whatsItem->phone,
             ]);
 
             return response()->json([
                 'status' => true,
-                'message' => "Verification code sent to {$user->phone} via {$codeMethod}.",
+                'message' => "Verification code sent to {$whatsItem->phone} via {$codeMethod}.",
                 'data' => $result['data'] ?? [],
+                'whats_item' => $whatsItem->fresh(),
             ]);
         }
 
         Log::warning('requestCode: failed to send OTP.', [
             'user_id' => $user->id,
-            'phone' => $user->phone,
+            'phone' => $whatsItem->phone,
             'error' => $result['message'] ?? 'unknown',
         ]);
 
@@ -355,27 +389,33 @@ class UserController extends Controller
     public function verifyAndRegister(Request $request, User $user): JsonResponse
     {
         $validated = $request->validate([
+            'whats_item_id' => 'sometimes|exists:whats_items,id',
             'code' => 'required|string|max:10',
             'pin' => 'required|string|size:6|regex:/^[0-9]+$/',
         ]);
 
-        Log::info('verifyAndRegister: initiated', [
-            'user_id' => $user->id,
-            'phone' => $user->phone,
-            'phone_number_id' => $user->phone_number_id,
-        ]);
+        $whatsItem = $request->filled('whats_item_id')
+            ? WhatsItem::where('user_id', $user->id)->findOrFail($request->whats_item_id)
+            : $user->whatsItems()->first();
 
-        if (empty($user->phone_number_id)) {
+        if (! $whatsItem || empty($whatsItem->phone_number_id)) {
             Log::warning('verifyAndRegister: missing phone_number_id.', ['user_id' => $user->id]);
 
             return response()->json([
                 'status' => false,
-                'message' => 'User does not have a phone_number_id from Meta. Request a code first.',
+                'message' => 'WhatsApp item does not have a phone_number_id from Meta. Request a code first.',
             ], Response::HTTP_BAD_REQUEST);
         }
 
+        Log::info('verifyAndRegister: initiated', [
+            'user_id' => $user->id,
+            'whats_item_id' => $whatsItem->id,
+            'phone' => $whatsItem->phone,
+            'phone_number_id' => $whatsItem->phone_number_id,
+        ]);
+
         // 1. Verify the OTP code
-        $verifyResult = $this->metaService->verifyCode($user->phone_number_id, $validated['code']);
+        $verifyResult = $this->metaService->verifyCode($whatsItem->phone_number_id, $validated['code']);
 
         if (! $verifyResult['success']) {
             Log::warning('verifyAndRegister: OTP verification failed.', [
@@ -392,10 +432,10 @@ class UserController extends Controller
         Log::info('verifyAndRegister: OTP verified successfully.', ['user_id' => $user->id]);
 
         // 2. Register the phone number on Cloud API using the 6-digit PIN
-        $registerResult = $this->metaService->registerNumber($user->phone_number_id, $validated['pin']);
+        $registerResult = $this->metaService->registerNumber($whatsItem->phone_number_id, $validated['pin']);
 
         if (! $registerResult['success']) {
-            $user->update(['phone_status' => 'verified']);
+            $whatsItem->update(['phone_status' => 'verified']);
 
             Log::warning('verifyAndRegister: OTP verified but Cloud API registration failed.', [
                 'user_id' => $user->id,
@@ -406,53 +446,60 @@ class UserController extends Controller
                 'status' => false,
                 'message' => 'Code verified, but failed to register on Cloud API: '.($registerResult['message'] ?? ''),
                 'phone_status' => 'verified',
+                'data' => $whatsItem->fresh(),
             ], Response::HTTP_BAD_REQUEST);
         }
 
-        // 3. Mark user as active & verified
-        $user->update([
+        // 3. Mark whatsItem as active & verified
+        $whatsItem->update([
             'phone_status' => 'active',
             'phone_verified_at' => now(),
-            'access_token' => $user->access_token ?: $this->metaService->getSystemUserToken(),
+            'access_token' => $whatsItem->access_token ?: $this->metaService->getSystemUserToken(),
         ]);
 
-        Log::info('verifyAndRegister: phone registered and user activated.', [
+        Log::info('verifyAndRegister: phone registered and item activated.', [
             'user_id' => $user->id,
-            'phone' => $user->phone,
+            'whats_item_id' => $whatsItem->id,
+            'phone' => $whatsItem->phone,
         ]);
 
         return response()->json([
             'status' => true,
             'message' => 'Phone number verified and registered on WhatsApp Cloud API successfully!',
-            'data' => $user->fresh(),
+            'data' => $whatsItem->fresh(),
         ]);
     }
 
     /**
      * Sync phone number status directly from Meta Graph API.
      */
-    public function syncMetaStatus(User $user): JsonResponse
+    public function syncMetaStatus(Request $request, User $user): JsonResponse
     {
-        Log::info('syncMetaStatus: initiated', [
-            'user_id' => $user->id,
-            'phone_number_id' => $user->phone_number_id,
-        ]);
+        $whatsItem = $request->filled('whats_item_id')
+            ? WhatsItem::where('user_id', $user->id)->findOrFail($request->whats_item_id)
+            : $user->whatsItems()->first();
 
-        if (empty($user->phone_number_id)) {
+        if (! $whatsItem || empty($whatsItem->phone_number_id)) {
             Log::warning('syncMetaStatus: user has no phone_number_id.', ['user_id' => $user->id]);
 
             return response()->json([
                 'status' => false,
-                'message' => 'User does not have a phone_number_id from Meta.',
+                'message' => 'WhatsApp item does not have a phone_number_id from Meta.',
             ], Response::HTTP_BAD_REQUEST);
         }
 
-        $details = $this->metaService->getPhoneNumberDetails($user->phone_number_id);
+        Log::info('syncMetaStatus: initiated', [
+            'user_id' => $user->id,
+            'whats_item_id' => $whatsItem->id,
+            'phone_number_id' => $whatsItem->phone_number_id,
+        ]);
+
+        $details = $this->metaService->getPhoneNumberDetails($whatsItem->phone_number_id);
 
         if (! $details['success']) {
             Log::error('syncMetaStatus: failed to fetch details from Meta.', [
                 'user_id' => $user->id,
-                'phone_number_id' => $user->phone_number_id,
+                'phone_number_id' => $whatsItem->phone_number_id,
                 'error' => $details['message'] ?? 'unknown',
             ]);
 
@@ -468,25 +515,29 @@ class UserController extends Controller
 
         Log::info('syncMetaStatus: received Meta data.', [
             'user_id' => $user->id,
+            'whats_item_id' => $whatsItem->id,
             'meta_status' => $status,
             'code_status' => $codeStatus,
         ]);
 
-        // Auto-update user phone_status based on Meta's status
+        // Auto-update whats_item phone_status based on Meta's status
         if ($status === 'CONNECTED' || $codeStatus === 'VERIFIED') {
-            $user->update([
+            $whatsItem->update([
                 'phone_status' => 'active',
-                'phone_verified_at' => $user->phone_verified_at ?: now(),
+                'phone_verified_at' => $whatsItem->phone_verified_at ?: now(),
             ]);
 
-            Log::info('syncMetaStatus: user phone_status updated to active.', ['user_id' => $user->id]);
+            Log::info('syncMetaStatus: whats_item phone_status updated to active.', ['whats_item_id' => $whatsItem->id]);
         }
 
         return response()->json([
             'status' => true,
-            'message' => 'Meta status synchronized successfully.',
-            'meta' => $metaData,
-            'user' => $user->fresh(),
+            'message' => 'Meta status synced successfully.',
+            'data' => [
+                'whats_item_id' => $whatsItem->id,
+                'phone_status' => $whatsItem->fresh()->phone_status,
+                'meta' => $metaData,
+            ],
         ]);
     }
 }

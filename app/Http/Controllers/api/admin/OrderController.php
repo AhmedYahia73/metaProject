@@ -39,7 +39,7 @@ class OrderController extends Controller
             'channel' => 'sometimes|in:whatsapp,messenger',
         ]);
 
-        $query = Order::with(['package:id,name', 'user:id,name,phone'])->latest();
+        $query = Order::with(['package:id,name', 'user:id,name,phone', 'whatsItem:id,phone'])->latest();
 
         if ($request->filled('user_id')) {
             $query->where('user_id', $request->user_id);
@@ -97,6 +97,11 @@ class OrderController extends Controller
                 'status' => $order->status,
                 'channel' => $order->channel,
                 'messenger_account_id' => $order->messenger_account_id,
+                'whats_item_id' => $order->whats_item_id,
+                'whats_item' => $order->whatsItem ? [
+                    'id' => $order->whatsItem->id,
+                    'phone' => $order->whatsItem->phone,
+                ] : null,
                 'created_at' => $order->created_at,
             ];
         };
@@ -267,7 +272,7 @@ class OrderController extends Controller
      */
     public function show(Order $order): JsonResponse
     {
-        $order->load(['package:id,name', 'user:id,name,phone']);
+        $order->load(['package:id,name', 'user:id,name,phone', 'whatsItem:id,phone']);
 
         return response()->json([
             'status' => true,
@@ -287,6 +292,12 @@ class OrderController extends Controller
                 'to' => $order->to ? Carbon::parse($order->to)->toDateString() : null,
                 'status' => $order->status,
                 'channel' => $order->channel,
+                'messenger_account_id' => $order->messenger_account_id,
+                'whats_item_id' => $order->whats_item_id,
+                'whats_item' => $order->whatsItem ? [
+                    'id' => $order->whatsItem->id,
+                    'phone' => $order->whatsItem->phone,
+                ] : null,
                 'created_at' => $order->created_at,
             ],
         ]);
@@ -304,7 +315,7 @@ class OrderController extends Controller
      *   page to the Meta App webhook.
      * - For WhatsApp orders: increments the user's msg_number quota.
      */
-    public function approve(Order $order): JsonResponse
+    public function approve(Request $request, Order $order): JsonResponse
     {
         if (! $order->isPending()) {
             return response()->json([
@@ -312,6 +323,11 @@ class OrderController extends Controller
                 'message' => "Order #{$order->id} is already {$order->status} and cannot be approved.",
             ], Response::HTTP_CONFLICT);
         }
+
+        $validated = $request->validate([
+            'ai_context' => 'sometimes|nullable|string',
+            'ai_file' => 'sometimes|nullable|string|max:500',
+        ]);
 
         $package = Package::findOrFail($order->package_id);
         $fromDate = Carbon::today();
@@ -331,7 +347,20 @@ class OrderController extends Controller
             $account = $order->messengerAccount;
 
             if ($account) {
-                $account->update(['status' => 'active']);
+                $accountUpdate = ['status' => 'active'];
+
+                if ($request->has('ai_context')) {
+                    $accountUpdate['ai_context'] = $validated['ai_context'] ?? null;
+                }
+
+                if ($request->has('ai_file')) {
+                    $accountUpdate['ai_file'] = $validated['ai_file'] ?? null;
+                }
+
+                $msgsToAdd = $order->msgs ?: (int) $package->msg_number;
+                $accountUpdate['msg_number'] = ((int) $account->msg_number) + $msgsToAdd;
+
+                $account->update($accountUpdate);
 
                 // Subscribe the Facebook Page to receive messages via our webhook
                 $graphVersion = config('services.meta.graph_version', 'v21.0');
@@ -359,16 +388,28 @@ class OrderController extends Controller
                     'messenger_subscribed' => $subscribed,
                     'webhook_url' => url('/api/messenger-webhook'),
                     'verify_token' => $account->verify_token,
+                    'msg_number' => $account->msg_number,
                 ];
             }
         } else {
-            // WhatsApp: increment message quota
+            // WhatsApp: message quota
+            $whatsItem = $order->whatsItem;
+            $msgsToAdd = $order->msgs ?: (int) $package->msg_number;
 
-            $activationResult = [
-                'whatsapp_msgs_added' => $order->msgs,
-            ];
+            if ($whatsItem) {
+                $whatsItem->increment('msg_number', $msgsToAdd);
+                $activationResult = [
+                    'whats_item_id' => $whatsItem->id,
+                    'phone' => $whatsItem->phone,
+                    'whatsapp_msgs_added' => $msgsToAdd,
+                    'msg_number' => $whatsItem->fresh()->msg_number,
+                ];
+            } else {
+                $activationResult = [
+                    'whatsapp_msgs_added' => $msgsToAdd,
+                ];
+            }
         }
-        $order->user->increment('msg_number', $order->msgs);
 
         Log::info("Order #{$order->id} approved", [
             'channel' => $order->channel,

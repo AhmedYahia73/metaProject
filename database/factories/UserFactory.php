@@ -32,12 +32,6 @@ class UserFactory extends Factory
             'password' => static::$password ??= Hash::make('password'),
             'remember_token' => Str::random(10),
             'restuarant_name' => fake()->company(),
-            'ai_context' => null,
-            'android_link' => null,
-            'ios_link' => null,
-            'msg_number' => 0,
-            'access_token' => null,
-            'phone_number_id' => null,
             'role' => 'user',
         ];
     }

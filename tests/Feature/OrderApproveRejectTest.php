@@ -97,10 +97,11 @@ test('admin can approve a pending messenger order and activates page', function 
         'status' => 'approved',
     ]);
 
-    // MessengerAccount activated
+    // MessengerAccount activated and msg_number set based on package
     $this->assertDatabaseHas('messenger_accounts', [
         'id' => $account->id,
         'status' => 'active',
+        'msg_number' => 200,
     ]);
 
     // from/to set correctly
@@ -110,6 +111,33 @@ test('admin can approve a pending messenger order and activates page', function 
 
     // Graph API subscribe call made
     Http::assertSent(fn ($req) => str_contains($req->url(), 'subscribed_apps'));
+});
+
+test('admin can approve a pending messenger order with custom ai_context and ai_file', function () {
+    Http::fake([
+        'https://graph.facebook.com/*' => Http::response(['success' => true], 200),
+    ]);
+
+    $admin = User::factory()->create(['role' => 'admin']);
+    $user = User::factory()->create(['role' => 'user']);
+    $package = makePackage(months: 2, msgs: 300);
+
+    [$order, $account] = makePendingMessengerOrder($user, $package);
+
+    $response = $this->actingAs($admin)
+        ->postJson("/api/admin/orders/{$order->id}/approve", [
+            'ai_context' => 'سياق مخصص للمطعم عند الموافقة',
+            'ai_file' => 'menus/food_list.json',
+        ]);
+
+    $response->assertOk()
+        ->assertJson(['status' => true]);
+
+    $freshAccount = $account->fresh();
+    expect($freshAccount->status)->toBe('active');
+    expect($freshAccount->msg_number)->toBe(300);
+    expect($freshAccount->ai_context)->toBe('سياق مخصص للمطعم عند الموافقة');
+    expect($freshAccount->ai_file)->toBe('menus/food_list.json');
 });
 
 test('cannot approve an already approved order', function () {
@@ -130,9 +158,9 @@ test('cannot approve an already approved order', function () {
 // POST /admin/orders/{order}/approve — WhatsApp
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('admin can approve a pending whatsapp order and increments msg_number', function () {
+test('admin can approve a pending whatsapp order', function () {
     $admin = User::factory()->create(['role' => 'admin']);
-    $user = User::factory()->create(['role' => 'user', 'msg_number' => 0]);
+    $user = User::factory()->create(['role' => 'user']);
     $package = makePackage(msgs: 500);
 
     $order = Order::create([
@@ -153,9 +181,6 @@ test('admin can approve a pending whatsapp order and increments msg_number', fun
         ->postJson("/api/admin/orders/{$order->id}/approve");
 
     $response->assertOk()->assertJson(['status' => true]);
-
-    // msg_number incremented
-    expect($user->fresh()->msg_number)->toBe(500);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

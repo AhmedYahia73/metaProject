@@ -42,7 +42,7 @@ return [
         'system_user_token' => env('META_SYSTEM_USER_TOKEN'),
         'configuration_id' => env('META_CONFIGURATION_ID'),
         'graph_version' => env('META_GRAPH_VERSION', 'v21.0'),
-        'verify_token' => env('WHATSAPP_VERIFY_TOKEN'),
+        'verify_token' => env('WHATSAPP_VERIFY_TOKEN', 'test'),
         // Messenger — app-level (per-page tokens stored in messenger_accounts table)
         'messenger_app_secret' => env('META_MESSENGER_APP_SECRET'),
     ],

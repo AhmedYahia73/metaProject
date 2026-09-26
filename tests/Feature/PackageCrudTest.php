@@ -10,7 +10,6 @@ uses(RefreshDatabase::class);
 beforeEach(function () {
     $this->admin = User::factory()->create([
         'role' => 'admin',
-        'phone_status' => 'active',
     ]);
 
     Sanctum::actingAs($this->admin);

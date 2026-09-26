@@ -26,15 +26,6 @@ class User extends Authenticatable
         'password',
         'phone',
         'restuarant_name',
-        'ai_context',
-        'android_link',
-        'ios_link',
-        'msg_number',
-        'access_token',
-        'phone_number_id',
-        'waba_id',
-        'phone_status',
-        'phone_verified_at',
         'role',
         'facebook_id',
         'facebook_access_token',
@@ -60,9 +51,7 @@ class User extends Authenticatable
     {
         return [
             'email_verified_at' => 'datetime',
-            'phone_verified_at' => 'datetime',
             'password' => 'hashed',
-            'msg_number' => 'integer',
         ];
     }
 
@@ -94,5 +83,15 @@ class User extends Authenticatable
     public function messengerAccounts(): HasMany
     {
         return $this->hasMany(MessengerAccount::class);
+    }
+
+    /**
+     * Get all WhatsApp items (numbers) for this user (restaurant).
+     *
+     * @return HasMany<WhatsItem, $this>
+     */
+    public function whatsItems(): HasMany
+    {
+        return $this->hasMany(WhatsItem::class);
     }
 }

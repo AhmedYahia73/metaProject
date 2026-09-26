@@ -30,7 +30,7 @@ class AdminController extends Controller
             'paginate' => 'sometimes|boolean',
         ]);
 
-        $query = User::select('id', 'name', 'email')
+        $query = User::select('id', 'name', 'email', 'role')
             ->latest()->where('role', 'admin');
 
         // Search filter

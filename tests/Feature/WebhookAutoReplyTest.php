@@ -44,7 +44,7 @@ test('webhook fails on invalid token', function () {
 });
 
 test('webhook receives message and processes auto reply', function () {
-    $phoneNumberId = config('services.meta.phone_number_id', '1296872370175605');
+    $phoneNumberId = config('services.meta.phone_number_id') ?: '1296872370175605';
 
     // Fake WhatsApp Cloud API send message endpoint
     Http::fake([

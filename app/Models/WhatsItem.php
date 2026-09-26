@@ -2,24 +2,25 @@
 
 namespace App\Models;
 
+use Database\Factories\WhatsItemFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-class MessengerAccount extends Model
+class WhatsItem extends Model
 {
+    /** @use HasFactory<WhatsItemFactory> */
     use HasFactory;
 
     protected $fillable = [
         'user_id',
-        'page_id',
-        'page_name',
-        'page_access_token',
-        'verify_token',
-        'status',
-        'ai_context',
-        'ai_file',
+        'phone',
+        'phone_number_id',
+        'waba_id',
+        'access_token',
+        'phone_status',
+        'phone_verified_at',
         'android_link',
         'ios_link',
         'msg_number',
@@ -31,7 +32,7 @@ class MessengerAccount extends Model
      * @var list<string>
      */
     protected $hidden = [
-        'page_access_token',
+        'access_token',
     ];
 
     /**
@@ -42,21 +43,29 @@ class MessengerAccount extends Model
     protected function casts(): array
     {
         return [
-            'status' => 'string',
+            'phone_verified_at' => 'datetime',
             'msg_number' => 'integer',
         ];
     }
 
     /**
-     * Check whether this Messenger page account is active.
+     * Check whether this WhatsApp item is active.
      */
     public function isActive(): bool
     {
-        return $this->status === 'active';
+        return $this->phone_status === 'active';
     }
 
     /**
-     * Get the restaurant (user) that owns this Messenger account.
+     * Check whether this WhatsApp item is verified.
+     */
+    public function isVerified(): bool
+    {
+        return in_array($this->phone_status, ['verified', 'active'], true);
+    }
+
+    /**
+     * Get the restaurant (user) that owns this WhatsApp item.
      *
      * @return BelongsTo<User, $this>
      */
@@ -66,7 +75,7 @@ class MessengerAccount extends Model
     }
 
     /**
-     * Get the orders linked to this Messenger account.
+     * Get the orders linked to this WhatsApp item.
      *
      * @return HasMany<Order, $this>
      */

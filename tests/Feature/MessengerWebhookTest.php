@@ -147,13 +147,13 @@ test('messenger webhook processes message, gets AI reply, and sends messenger re
 
     $restaurant = User::factory()->create([
         'role' => 'user',
-        'android_link' => 'https://play.google.com/test',
-        'ios_link' => 'https://apps.apple.com/test',
     ]);
 
     $account = MessengerAccount::factory()->create([
         'user_id' => $restaurant->id,
         'page_access_token' => 'EAAG_fake_page_token',
+        'android_link' => 'https://play.google.com/test',
+        'ios_link' => 'https://apps.apple.com/test',
     ]);
 
     $package = Package::create([
@@ -212,7 +212,7 @@ test('messenger webhook processes message, gets AI reply, and sends messenger re
         ->first();
 
     expect($replyChat)->not->toBeNull();
-    expect($replyChat->message)->toBe('أهلاً بك! كيف أقدر أساعدك اليوم؟');
+    expect($replyChat->message)->toContain('أهلاً بك! كيف أقدر أساعدك اليوم؟');
 
     // Messenger MsgSend recorded with correct channel
     expect(

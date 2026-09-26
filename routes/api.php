@@ -9,8 +9,10 @@ use App\Http\Controllers\api\admin\PackageController;
 use App\Http\Controllers\api\admin\SettingController;
 use App\Http\Controllers\api\admin\TaxController;
 use App\Http\Controllers\api\admin\UserController;
+use App\Http\Controllers\api\admin\WhatsItemController as AdminWhatsItemController;
 use App\Http\Controllers\api\auth\LoginController;
 use App\Http\Controllers\api\HomeController;
+use App\Http\Controllers\api\user\ChatController;
 use App\Http\Controllers\api\user\HomeController as UserHomeController;
 use App\Http\Controllers\api\user\MessengerPagesController;
 use App\Http\Controllers\api\user\WhatsPagesController;
@@ -74,7 +76,31 @@ Route::prefix('user')->group(function () {
         Route::get('messenger/pages', [MessengerPagesController::class, 'pages']);
         Route::post('messenger/orders', [MessengerPagesController::class, 'requestSubscription']);
 
+        // WhatsApp Self-Service — list numbers, add number, OTP activation, and request subscription
+        Route::get('whats/packages', [WhatsPagesController::class, 'whats_packages']);
         Route::get('whats/pages', [WhatsPagesController::class, 'pages']);
+        Route::get('whats/items', [WhatsPagesController::class, 'index']);
+        Route::post('whats/items', [WhatsPagesController::class, 'store']);
+        Route::get('whats/items/{whatsItem}', [WhatsPagesController::class, 'show']);
+        Route::put('whats/items/{whatsItem}', [WhatsPagesController::class, 'update']);
+        Route::delete('whats/items/{whatsItem}', [WhatsPagesController::class, 'destroy']);
+        Route::post('whats/items/{whatsItem}/request-code', [WhatsPagesController::class, 'requestCode']);
+        Route::post('whats/items/{whatsItem}/verify-and-register', [WhatsPagesController::class, 'verifyAndRegister']);
+        Route::get('whats/items/{whatsItem}/meta-status', [WhatsPagesController::class, 'syncMetaStatus']);
+        Route::post('whats/orders', [WhatsPagesController::class, 'requestSubscription']);
+
+        // Live Chat / Inbox (Messenger & WhatsApp)
+        Route::get('chat/messenger/pages', [ChatController::class, 'messengerPages']);
+        Route::get('chat/messenger/conversations', [ChatController::class, 'messengerConversations']);
+        Route::get('chat/messenger/messages', [ChatController::class, 'messengerMessages']);
+        Route::post('chat/messenger/send', [ChatController::class, 'sendMessengerMessage']);
+
+        Route::get('chat/whatsapp/numbers', [ChatController::class, 'whatsNumbers']);
+        Route::get('chat/whatsapp/conversations', [ChatController::class, 'whatsConversations']);
+        Route::get('chat/whatsapp/messages', [ChatController::class, 'whatsMessages']);
+        Route::post('chat/whatsapp/send', [ChatController::class, 'sendWhatsMessage']);
+
+        Route::post('chat/mark-as-read', [ChatController::class, 'markAsRead']);
     });
 });
 
@@ -121,6 +147,21 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::post('users/{user}/verify-and-register', [UserController::class, 'verifyAndRegister']);
     Route::get('users/{user}/meta-status', [UserController::class, 'syncMetaStatus']);
     Route::apiResource('users', UserController::class);
+
+    // WhatsApp Items Management (Admin manual control)
+    Route::post(
+        'users/{user}/whats-items/{whatsItem}/request-code',
+        [AdminWhatsItemController::class, 'requestCode']
+    );
+    Route::post(
+        'users/{user}/whats-items/{whatsItem}/verify-and-register',
+        [AdminWhatsItemController::class, 'verifyAndRegister']
+    );
+    Route::get(
+        'users/{user}/whats-items/{whatsItem}/meta-status',
+        [AdminWhatsItemController::class, 'syncMetaStatus']
+    );
+    Route::apiResource('users/{user}/whats-items', AdminWhatsItemController::class);
 
     // Messenger Pages Management (Admin manual control — kept for override capability)
     Route::post(

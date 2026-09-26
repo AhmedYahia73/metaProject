@@ -26,6 +26,11 @@ class MessengerAccountFactory extends Factory
             'page_access_token' => 'EAA'.Str::random(60),
             'verify_token' => (string) Str::uuid(),
             'status' => 'active',
+            'ai_context' => null,
+            'ai_file' => null,
+            'android_link' => null,
+            'ios_link' => null,
+            'msg_number' => 0,
         ];
     }
 

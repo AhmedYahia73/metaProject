@@ -7,6 +7,7 @@ use App\Models\Order;
 use App\Models\Package;
 use App\Models\Setting;
 use App\Models\User;
+use App\Models\WhatsItem;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 
@@ -37,26 +38,33 @@ class WebhookTestSeeder extends Seeder
         );
 
         // 3. إنشاء أو تحديث حساب المطعم (Restaurant User) المرتبط برقم ميتا
-        $phoneNumberId = config('services.meta.phone_number_id', '1296872370175605');
-        $wabaId = config('services.meta.waba_id', '3732693236881976');
+        $phoneNumberId = config('services.meta.phone_number_id') ?: '1296872370175605';
+        $wabaId = config('services.meta.waba_id') ?: '3732693236881976';
         $token = config('services.meta.system_user_token');
 
         $restaurant = User::updateOrCreate(
-            ['phone_number_id' => $phoneNumberId],
+            ['email' => 'restaurant@burgerlite.com'],
             [
                 'name' => 'مطعم برجر لايت',
                 'restuarant_name' => 'مطعم برجر لايت',
                 'phone' => '201206610346',
-                'email' => 'restaurant@burgerlite.com',
                 'password' => Hash::make('password123'),
                 'role' => 'user',
-                'phone_number_id' => $phoneNumberId,
+            ]
+        );
+
+        $whatsItem = WhatsItem::updateOrCreate(
+            ['phone_number_id' => $phoneNumberId],
+            [
+                'user_id' => $restaurant->id,
+                'phone' => '201206610346',
                 'waba_id' => $wabaId,
                 'access_token' => $token,
                 'phone_status' => 'active',
                 'phone_verified_at' => now(),
                 'android_link' => 'https://play.google.com/store/apps/details?id=com.burgerlite',
                 'ios_link' => 'https://apps.apple.com/app/id123456789',
+                'msg_number' => 10000,
             ]
         );
 
@@ -65,6 +73,7 @@ class WebhookTestSeeder extends Seeder
             ['user_id' => $restaurant->id],
             [
                 'package_id' => $package->id,
+                'whats_item_id' => $whatsItem->id,
                 'price' => 200.00,
                 'final_price' => 200.00,
                 'total_discount' => 0.00,

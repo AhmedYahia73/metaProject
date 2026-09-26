@@ -13,7 +13,6 @@ beforeEach(function () {
         'email' => 'admin@test.com',
         'password' => Hash::make('password123'),
         'role' => 'admin',
-        'phone_status' => 'active',
     ]);
 
     Sanctum::actingAs($this->superAdmin);

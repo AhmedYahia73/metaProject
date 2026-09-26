@@ -1,79 +1,26 @@
 <?php
 
-namespace App\Http\Controllers\api\user;
+namespace App\Http\Controllers\api\admin;
 
 use App\Http\Controllers\Controller;
-use App\Models\Order;
-use App\Models\Package;
+use App\Models\User;
 use App\Models\WhatsItem;
 use App\Services\MetaWhatsAppService;
-use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Validation\Rule;
 use Symfony\Component\HttpFoundation\Response;
 
-class WhatsPagesController extends Controller
+class WhatsItemController extends Controller
 {
     public function __construct(
         protected MetaWhatsAppService $metaService
     ) {}
 
     /**
-     * Get available packages for WhatsApp subscription.
+     * List all WhatsApp numbers for a user.
      */
-    public function whats_packages(Request $request): JsonResponse
+    public function index(User $user): JsonResponse
     {
-        $request->validate([
-            'lang' => 'sometimes|in:ar,en',
-        ]);
-        $rawLang = $request->query('lang', $request->header('Accept-Language', 'ar'));
-        $lang = str_starts_with(strtolower((string) $rawLang), 'en') ? 'en' : 'ar';
-
-        $whats_packages = Package::with(['discount', 'tax'])
-            ->where(function ($query) {
-                $query->where('type', 'all')
-                    ->orWhere('type', 'whats');
-            })
-            ->latest()
-            ->get()
-            ->map(function (Package $package) use ($lang) {
-                $names = is_array($package->name)
-                    ? $package->name
-                    : (json_decode((string) $package->name, true) ?: []);
-
-                $localizedName = $names[$lang] ?? $names['en'] ?? $names['ar'] ?? (is_string($package->name) ? $package->name : '');
-
-                return [
-                    'id' => $package->id,
-                    'name' => $localizedName,
-                    'names' => $names,
-                    'msg_number' => $package->msg_number,
-                    'price' => $package->price,
-                    'months' => $package->months,
-                    'discount_id' => $package->discount_id,
-                    'tax_id' => $package->tax_id,
-                    'discount' => $package->discount,
-                    'tax' => $package->tax,
-                    'created_at' => $package->created_at,
-                    'updated_at' => $package->updated_at,
-                ];
-            });
-
-        return response()->json([
-            'status' => true,
-            'lang' => $lang,
-            'whats_packages' => $whats_packages,
-        ]);
-    }
-
-    /**
-     * List all WhatsApp numbers (WhatsItems) for the authenticated user.
-     */
-    public function index(Request $request): JsonResponse
-    {
-        $user = $request->user();
         $items = $user->whatsItems()->latest()->get();
 
         return response()->json([
@@ -83,20 +30,10 @@ class WhatsPagesController extends Controller
     }
 
     /**
-     * Alias for index to match route 'whats/pages'.
+     * Store a new WhatsApp number for the user.
      */
-    public function pages(Request $request): JsonResponse
+    public function store(Request $request, User $user): JsonResponse
     {
-        return $this->index($request);
-    }
-
-    /**
-     * Add a new WhatsApp phone number for the authenticated restaurant.
-     */
-    public function store(Request $request): JsonResponse
-    {
-        $user = $request->user();
-
         $validated = $request->validate([
             'phone' => 'required|string|max:50',
             'android_link' => 'sometimes|nullable|string|max:500',
@@ -156,18 +93,18 @@ class WhatsPagesController extends Controller
 
         return response()->json([
             'status' => true,
-            'message' => 'WhatsApp number added successfully. Verification OTP has been initiated.',
+            'message' => 'WhatsApp number added successfully.',
             'data' => $whatsItem,
             'meta' => $metaResponseInfo,
         ], Response::HTTP_CREATED);
     }
 
     /**
-     * Show a single WhatsApp item for the authenticated user.
+     * Display a specific WhatsApp item.
      */
-    public function show(Request $request, WhatsItem $whatsItem): JsonResponse
+    public function show(User $user, WhatsItem $whatsItem): JsonResponse
     {
-        $this->authorizeItem($request->user(), $whatsItem);
+        $this->authorizeItem($user, $whatsItem);
 
         return response()->json([
             'status' => true,
@@ -176,15 +113,17 @@ class WhatsPagesController extends Controller
     }
 
     /**
-     * Update an existing WhatsApp item.
+     * Update a WhatsApp item.
      */
-    public function update(Request $request, WhatsItem $whatsItem): JsonResponse
+    public function update(Request $request, User $user, WhatsItem $whatsItem): JsonResponse
     {
-        $this->authorizeItem($request->user(), $whatsItem);
+        $this->authorizeItem($user, $whatsItem);
 
         $validated = $request->validate([
+            'phone' => 'sometimes|required|string|max:50',
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
+            'phone_status' => 'sometimes|in:pending_otp,verified,active',
         ]);
 
         $whatsItem->update($validated);
@@ -199,9 +138,9 @@ class WhatsPagesController extends Controller
     /**
      * Delete a WhatsApp item.
      */
-    public function destroy(Request $request, WhatsItem $whatsItem): JsonResponse
+    public function destroy(User $user, WhatsItem $whatsItem): JsonResponse
     {
-        $this->authorizeItem($request->user(), $whatsItem);
+        $this->authorizeItem($user, $whatsItem);
 
         $whatsItem->delete();
 
@@ -212,11 +151,10 @@ class WhatsPagesController extends Controller
     }
 
     /**
-     * Request verification OTP code for this WhatsApp item.
+     * Request verification OTP code for this WhatsApp item from Meta.
      */
-    public function requestCode(Request $request, WhatsItem $whatsItem): JsonResponse
+    public function requestCode(Request $request, User $user, WhatsItem $whatsItem): JsonResponse
     {
-        $user = $request->user();
         $this->authorizeItem($user, $whatsItem);
 
         $validated = $request->validate([
@@ -267,9 +205,8 @@ class WhatsPagesController extends Controller
     /**
      * Verify OTP code and register phone number on WhatsApp Cloud API.
      */
-    public function verifyAndRegister(Request $request, WhatsItem $whatsItem): JsonResponse
+    public function verifyAndRegister(Request $request, User $user, WhatsItem $whatsItem): JsonResponse
     {
-        $user = $request->user();
         $this->authorizeItem($user, $whatsItem);
 
         $validated = $request->validate([
@@ -325,9 +262,9 @@ class WhatsPagesController extends Controller
     /**
      * Sync phone number status directly from Meta Graph API.
      */
-    public function syncMetaStatus(Request $request, WhatsItem $whatsItem): JsonResponse
+    public function syncMetaStatus(User $user, WhatsItem $whatsItem): JsonResponse
     {
-        $this->authorizeItem($request->user(), $whatsItem);
+        $this->authorizeItem($user, $whatsItem);
 
         if (empty($whatsItem->phone_number_id)) {
             return response()->json([
@@ -368,126 +305,9 @@ class WhatsPagesController extends Controller
     }
 
     /**
-     * Request a WhatsApp subscription order for a WhatsItem.
+     * Authorize that the WhatsItem belongs to the User.
      */
-    public function requestSubscription(Request $request): JsonResponse
-    {
-        $user = $request->user();
-
-        $validated = $request->validate([
-            'whats_item_id' => 'required|exists:whats_items,id',
-            'package_id' => [
-                'required',
-                Rule::exists('packages', 'id')->where(function ($query) {
-                    $query->whereIn('type', ['whats', 'all']);
-                }),
-            ],
-        ], [
-            'package_id.exists' => 'The selected package is invalid or not available for WhatsApp.',
-        ]);
-
-        $whatsItem = WhatsItem::where('user_id', $user->id)->findOrFail($validated['whats_item_id']);
-
-        // Check if there is already a pending order for this WhatsApp item
-        $pendingOrder = Order::where('whats_item_id', $whatsItem->id)
-            ->where('status', 'pending')
-            ->exists();
-
-        if ($pendingOrder) {
-            return response()->json([
-                'status' => false,
-                'message' => 'This WhatsApp number already has a pending subscription request awaiting approval.',
-            ], Response::HTTP_CONFLICT);
-        }
-
-        $package = Package::with(['discount', 'tax'])->findOrFail($validated['package_id']);
-
-        $basePrice = (float) $package->price;
-        $today = Carbon::today();
-
-        $totalDiscount = 0.0;
-        $discount = $package->discount;
-
-        if ($discount) {
-            $isWithinPeriod = true;
-
-            if ($discount->from && $today->lt(Carbon::parse($discount->from)->startOfDay())) {
-                $isWithinPeriod = false;
-            }
-
-            if ($discount->to && $today->gt(Carbon::parse($discount->to)->endOfDay())) {
-                $isWithinPeriod = false;
-            }
-
-            if ($isWithinPeriod) {
-                $totalDiscount = $discount->type === 'percentage'
-                    ? ($basePrice * (float) $discount->amount) / 100
-                    : (float) $discount->amount;
-
-                $totalDiscount = min($totalDiscount, $basePrice);
-            }
-        }
-
-        $priceAfterDiscount = max(0.0, $basePrice - $totalDiscount);
-        $totalTax = 0.0;
-        $tax = $package->tax;
-
-        if ($tax) {
-            $totalTax = $tax->type === 'percentage'
-                ? ($priceAfterDiscount * (float) $tax->amount) / 100
-                : (float) $tax->amount;
-        }
-
-        $finalPrice = $basePrice - $totalDiscount + $totalTax;
-        $msgs = (int) $package->msg_number;
-
-        $order = Order::create([
-            'package_id' => $package->id,
-            'user_id' => $user->id,
-            'total_discount' => round($totalDiscount, 2),
-            'total_tax' => round($totalTax, 2),
-            'price' => round($basePrice, 2),
-            'final_price' => round($finalPrice, 2),
-            'msgs' => $msgs,
-            'status' => 'pending',
-            'channel' => 'whatsapp',
-            'whats_item_id' => $whatsItem->id,
-            'from' => null,
-            'to' => null,
-        ]);
-
-        Log::info('WhatsApp subscription requested', [
-            'user_id' => $user->id,
-            'whats_item_id' => $whatsItem->id,
-            'order_id' => $order->id,
-        ]);
-
-        return response()->json([
-            'status' => true,
-            'message' => 'Subscription request submitted. Awaiting admin approval.',
-            'data' => [
-                'order_id' => $order->id,
-                'whats_item_id' => $whatsItem->id,
-                'phone' => $whatsItem->phone,
-                'package' => [
-                    'id' => $package->id,
-                    'name' => $package->name,
-                    'msg_number' => $msgs,
-                    'months' => $package->months,
-                ],
-                'price' => round($basePrice, 2),
-                'total_discount' => round($totalDiscount, 2),
-                'total_tax' => round($totalTax, 2),
-                'final_price' => round($finalPrice, 2),
-                'status' => 'pending',
-            ],
-        ], Response::HTTP_CREATED);
-    }
-
-    /**
-     * Authorize that the WhatsItem belongs to the authenticated user.
-     */
-    private function authorizeItem(mixed $user, WhatsItem $whatsItem): void
+    private function authorizeItem(User $user, WhatsItem $whatsItem): void
     {
         abort_if(
             $whatsItem->user_id !== $user->id,
