@@ -456,3 +456,96 @@ test('user whatsapp requestSubscription can optionally pass android_link, ios_li
     Storage::disk('public')->assertMissing($oldFilePath);
     Storage::disk('public')->assertExists($freshItem->ai_file);
 });
+
+test('whatsapp webhook instructs AI to politely share ordering links when customer asks to order', function () {
+    $capturedInstructions = null;
+
+    OpenAI::fake([
+        CreateResponse::fake([
+            'output' => [
+                0 => [
+                    'type' => 'message',
+                    'id' => 'msg_whats_order',
+                    'status' => 'completed',
+                    'role' => 'assistant',
+                    'content' => [
+                        [
+                            'type' => 'output_text',
+                            'text' => "أهلاً بحضرتك! تقدر تطلب من هنا:\nالموقع: https://burger.com\nأندرويد: https://play.google.com/burger\niOS: https://apple.com/burger",
+                            'annotations' => [],
+                        ],
+                    ],
+                ],
+            ],
+        ]),
+    ]);
+
+    $restaurant = User::factory()->create(['role' => 'user']);
+    $item = WhatsItem::factory()->create([
+        'user_id' => $restaurant->id,
+        'phone_number_id' => 'pid_whats_order_test',
+        'phone_status' => 'active',
+        'msg_number' => 50,
+        'website_url' => 'https://burger.com',
+        'android_link' => 'https://play.google.com/burger',
+        'ios_link' => 'https://apple.com/burger',
+    ]);
+
+    $package = Package::create([
+        'name' => ['ar' => 'باقة', 'en' => 'Package'],
+        'type' => 'whats',
+        'msg_number' => 50,
+        'price' => 50,
+        'months' => 1,
+    ]);
+
+    Order::create([
+        'package_id' => $package->id,
+        'user_id' => $restaurant->id,
+        'price' => 50,
+        'final_price' => 50,
+        'from' => now()->subDay()->toDateString(),
+        'to' => now()->addMonth()->toDateString(),
+        'msgs' => 50,
+        'status' => 'approved',
+        'channel' => 'whatsapp',
+        'whats_item_id' => $item->id,
+    ]);
+
+    $response = $this->postJson('/api/web-hook', [
+        'object' => 'whatsapp_business_account',
+        'entry' => [
+            [
+                'id' => 'waba_order_test',
+                'changes' => [
+                    [
+                        'value' => [
+                            'metadata' => ['phone_number_id' => 'pid_whats_order_test'],
+                            'contacts' => [['profile' => ['name' => 'Ahmed'], 'wa_id' => '201099887766']],
+                            'messages' => [
+                                [
+                                    'id' => 'wamid.order_incoming_1',
+                                    'from' => '201099887766',
+                                    'text' => ['body' => 'عاوز اطلب برجر'],
+                                    'type' => 'text',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ],
+    ]);
+
+    $response->assertOk();
+
+    OpenAI::assertSent(Responses::class, function (string $method, array $parameters) use (&$capturedInstructions) {
+        $capturedInstructions = $parameters['instructions'] ?? '';
+
+        return $method === 'create'
+            && str_contains($capturedInstructions, 'تقدر تطلب من هنا')
+            && str_contains($capturedInstructions, 'https://burger.com')
+            && str_contains($capturedInstructions, 'https://play.google.com/burger')
+            && str_contains($capturedInstructions, 'https://apple.com/burger');
+    });
+});

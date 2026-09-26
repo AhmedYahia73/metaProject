@@ -545,3 +545,94 @@ test('user requestSubscription can optionally pass android_link, ios_link, websi
     Storage::disk('public')->assertMissing($oldFilePath);
     Storage::disk('public')->assertExists($freshAccount->ai_file);
 });
+
+test('messenger webhook instructs AI to politely share ordering links when customer asks to order', function () {
+    Http::fake([
+        'https://graph.facebook.com/*/me/messages' => Http::response([
+            'recipient_id' => 'PSID_999',
+            'message_id' => 'mid.reply_order',
+        ], 200),
+    ]);
+
+    $capturedInstructions = null;
+
+    OpenAI::fake([
+        CreateResponse::fake([
+            'output' => [
+                0 => [
+                    'type' => 'message',
+                    'id' => 'msg_order_1',
+                    'status' => 'completed',
+                    'role' => 'assistant',
+                    'content' => [
+                        [
+                            'type' => 'output_text',
+                            'text' => "أهلاً بحضرتك! تقدر تطلب من هنا:\nالموقع: https://pizza.com\nأندرويد: https://play.google.com/pizza\niOS: https://apple.com/pizza",
+                            'annotations' => [],
+                        ],
+                    ],
+                ],
+            ],
+        ]),
+    ]);
+
+    $restaurant = User::factory()->create(['role' => 'user']);
+    $account = MessengerAccount::factory()->create([
+        'user_id' => $restaurant->id,
+        'page_access_token' => 'EAAG_test_page_token',
+        'status' => 'active',
+        'msg_number' => 50,
+        'website_url' => 'https://pizza.com',
+        'android_link' => 'https://play.google.com/pizza',
+        'ios_link' => 'https://apple.com/pizza',
+    ]);
+
+    $package = Package::create([
+        'name' => ['ar' => 'باقة', 'en' => 'Pkg'],
+        'type' => 'face',
+        'msg_number' => 50,
+        'price' => 50,
+        'months' => 1,
+    ]);
+
+    Order::create([
+        'package_id' => $package->id,
+        'user_id' => $restaurant->id,
+        'price' => 50,
+        'final_price' => 50,
+        'from' => now()->subDay()->toDateString(),
+        'to' => now()->addMonth()->toDateString(),
+        'msgs' => 50,
+        'status' => 'approved',
+        'channel' => 'messenger',
+    ]);
+
+    $response = $this->postJson('/api/messenger-webhook', [
+        'object' => 'page',
+        'entry' => [
+            [
+                'id' => $account->page_id,
+                'messaging' => [
+                    [
+                        'sender' => ['id' => 'PSID_999'],
+                        'recipient' => ['id' => $account->page_id],
+                        'timestamp' => now()->timestamp,
+                        'message' => ['mid' => 'mid.order_1', 'text' => 'عاوز اطلب بيتزا'],
+                    ],
+                ],
+            ],
+        ],
+    ]);
+
+    $response->assertOk();
+
+    OpenAI::assertSent(Responses::class, function (string $method, array $parameters) use (&$capturedInstructions) {
+        $capturedInstructions = $parameters['instructions'] ?? '';
+
+        return $method === 'create'
+            && str_contains($capturedInstructions, 'تقدر تطلب من هنا')
+            && str_contains($capturedInstructions, 'https://pizza.com')
+            && str_contains($capturedInstructions, 'https://play.google.com/pizza')
+            && str_contains($capturedInstructions, 'https://apple.com/pizza');
+    });
+});

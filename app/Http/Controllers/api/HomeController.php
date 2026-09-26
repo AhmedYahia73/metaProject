@@ -581,15 +581,15 @@ class HomeController extends Controller
         // 3. App links and website
         $linksSection = '';
         if ($whatsItem && ($whatsItem->android_link || $whatsItem->ios_link || $whatsItem->website_url)) {
-            $linksSection = "\n\nروابط وتفاصيل التواصل:";
+            $linksSection = "\n\nروابط وتفاصيل الطلب المتاحة:";
+            if ($whatsItem->website_url) {
+                $linksSection .= "\n- الموقع الإلكتروني: {$whatsItem->website_url}";
+            }
             if ($whatsItem->android_link) {
-                $linksSection .= "\nAndroid: {$whatsItem->android_link}";
+                $linksSection .= "\n- تطبيق أندرويد (Android): {$whatsItem->android_link}";
             }
             if ($whatsItem->ios_link) {
-                $linksSection .= "\niOS: {$whatsItem->ios_link}";
-            }
-            if ($whatsItem->website_url) {
-                $linksSection .= "\nالموقع الإلكتروني: {$whatsItem->website_url}";
+                $linksSection .= "\n- تطبيق آيفون (iOS): {$whatsItem->ios_link}";
             }
         }
 
@@ -599,9 +599,11 @@ class HomeController extends Controller
         {$linksSection}
 
         التعليمات:
-        - الرد باللغة العربية فقط بأسلوب مهذب ومساعد وموجز.
+        - الرد باللغة العربية فقط بأسلوب مهذب ومساعد وموجز ومحترم.
         - اعتمد على البيانات المذكورة أعلاه في الرد على استفسارات العميل ولا تخترع أي معلومات أو أسعار غير موجودة.
         - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، أخبره بلباقة أنه غير متوفر حالياً.
+        - أول ما يطلب العميل (عندما يريد طلب، يسأل كيف يطلب، يريد عمل أوردر، أو يطلب أي صنف أو وجبة): يجب الرد عليه بأسلوب مهذب ومحترم وإخباره: «تقدر تطلب من هنا» مع إرسال روابط الطلب المتوفرة (الموقع الإلكتروني، تطبيق أندرويد، وتطبيق iOS) المذكورة أعلاه.
+        - في حال عدم توفر روابط طلب أعلاه، أخبر العميل بلباقة أنه يمكنه كتابة طلبه وتفاصيله هنا لمساعدته.
         PROMPT;
 
         try {
@@ -613,11 +615,34 @@ class HomeController extends Controller
                 'input' => $userMessage,
             ]);
 
-            return trim((string) ($response->outputText ?? '')) ?: null;
+            $reply = trim((string) ($response->outputText ?? ''));
+
+            if (! empty($reply) && $this->isOrderIntent($userMessage) && $whatsItem) {
+                $hasLink = ($whatsItem->website_url && str_contains($reply, $whatsItem->website_url))
+                    || ($whatsItem->android_link && str_contains($reply, $whatsItem->android_link))
+                    || ($whatsItem->ios_link && str_contains($reply, $whatsItem->ios_link));
+
+                if (! $hasLink) {
+                    $orderLinksMsg = $this->formatOrderingLinksMessage($whatsItem->website_url, $whatsItem->android_link, $whatsItem->ios_link);
+                    if ($orderLinksMsg) {
+                        $reply .= "\n\n{$orderLinksMsg}";
+                    }
+                }
+            }
+
+            return $reply ?: null;
         } catch (\Throwable $e) {
             Log::warning('OpenAI getAiReply fallback triggered: '.$e->getMessage());
 
-            return 'أهلاً بك! نسعد بخدمتك. يمكنك طرح استفسارك أو طلبك مباشرة، وسنكون سعداء بمساعدتك.';
+            $fallback = 'أهلاً بك! نسعد بخدمتك.';
+            $orderLinksMsg = $this->formatOrderingLinksMessage($whatsItem?->website_url, $whatsItem?->android_link, $whatsItem?->ios_link);
+            if ($orderLinksMsg) {
+                $fallback .= "\n{$orderLinksMsg}";
+            } else {
+                $fallback .= ' يمكنك طرح استفسارك أو طلبك مباشرة، وسنكون سعداء بمساعدتك.';
+            }
+
+            return $fallback;
         }
     }
 
@@ -643,15 +668,15 @@ class HomeController extends Controller
 
         $linksSection = '';
         if ($messengerAccount->android_link || $messengerAccount->ios_link || $messengerAccount->website_url) {
-            $linksSection = "\n\nروابط وتفاصيل التواصل:";
+            $linksSection = "\n\nروابط وتفاصيل الطلب المتاحة:";
+            if ($messengerAccount->website_url) {
+                $linksSection .= "\n- الموقع الإلكتروني: {$messengerAccount->website_url}";
+            }
             if ($messengerAccount->android_link) {
-                $linksSection .= "\nAndroid: {$messengerAccount->android_link}";
+                $linksSection .= "\n- تطبيق أندرويد (Android): {$messengerAccount->android_link}";
             }
             if ($messengerAccount->ios_link) {
-                $linksSection .= "\niOS: {$messengerAccount->ios_link}";
-            }
-            if ($messengerAccount->website_url) {
-                $linksSection .= "\nالموقع الإلكتروني: {$messengerAccount->website_url}";
+                $linksSection .= "\n- تطبيق آيفون (iOS): {$messengerAccount->ios_link}";
             }
         }
 
@@ -661,9 +686,11 @@ class HomeController extends Controller
         {$linksSection}
 
         التعليمات:
-        - الرد باللغة العربية فقط بأسلوب مهذب ومساعد وموجز.
+        - الرد باللغة العربية فقط بأسلوب مهذب ومساعد وموجز ومحترم.
         - اعتمد على البيانات المذكورة أعلاه في الرد على استفسارات العميل ولا تخترع أي معلومات أو أسعار غير موجودة.
         - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، أخبره بلباقة أنه غير متوفر حالياً.
+        - أول ما يطلب العميل (عندما يريد طلب، يسأل كيف يطلب، يريد عمل أوردر، أو يطلب أي صنف أو وجبة): يجب الرد عليه بأسلوب مهذب ومحترم وإخباره: «تقدر تطلب من هنا» مع إرسال روابط الطلب المتوفرة (الموقع الإلكتروني، تطبيق أندرويد، وتطبيق iOS) المذكورة أعلاه.
+        - في حال عدم توفر روابط طلب أعلاه، أخبر العميل بلباقة أنه يمكنه كتابة طلبه وتفاصيله هنا لمساعدته.
         PROMPT;
 
         try {
@@ -675,12 +702,80 @@ class HomeController extends Controller
                 'input' => $userMessage,
             ]);
 
-            return trim((string) ($response->outputText ?? '')) ?: null;
+            $reply = trim((string) ($response->outputText ?? ''));
+
+            if (! empty($reply) && $this->isOrderIntent($userMessage)) {
+                $hasLink = ($messengerAccount->website_url && str_contains($reply, $messengerAccount->website_url))
+                    || ($messengerAccount->android_link && str_contains($reply, $messengerAccount->android_link))
+                    || ($messengerAccount->ios_link && str_contains($reply, $messengerAccount->ios_link));
+
+                if (! $hasLink) {
+                    $orderLinksMsg = $this->formatOrderingLinksMessage($messengerAccount->website_url, $messengerAccount->android_link, $messengerAccount->ios_link);
+                    if ($orderLinksMsg) {
+                        $reply .= "\n\n{$orderLinksMsg}";
+                    }
+                }
+            }
+
+            return $reply ?: null;
         } catch (\Throwable $e) {
             Log::warning('OpenAI getMessengerAiReply fallback triggered: '.$e->getMessage());
 
-            return 'أهلاً بك! نسعد بخدمتك. يمكنك طرح استفسارك أو طلبك مباشرة، وسنكون سعداء بمساعدتك.';
+            $fallback = 'أهلاً بك! نسعد بخدمتك.';
+            $orderLinksMsg = $this->formatOrderingLinksMessage($messengerAccount->website_url, $messengerAccount->android_link, $messengerAccount->ios_link);
+            if ($orderLinksMsg) {
+                $fallback .= "\n{$orderLinksMsg}";
+            } else {
+                $fallback .= ' يمكنك طرح استفسارك أو طلبك مباشرة، وسنكون سعداء بمساعدتك.';
+            }
+
+            return $fallback;
         }
+    }
+
+    /**
+     * Check if the customer message expresses an intent to order.
+     */
+    private function isOrderIntent(string $message): bool
+    {
+        $normalized = mb_strtolower(trim($message));
+
+        $keywords = [
+            'اطلب', 'أطلب', 'طلب', 'اوردر', 'أوردر', 'order',
+            'دليفري', 'توصيل', 'شراء', 'احجز', 'أحجز', 'حجز',
+        ];
+
+        foreach ($keywords as $keyword) {
+            if (str_contains($normalized, $keyword)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Format a polite ordering message with the available links.
+     */
+    private function formatOrderingLinksMessage(?string $websiteUrl, ?string $androidLink, ?string $iosLink): ?string
+    {
+        if (! $websiteUrl && ! $androidLink && ! $iosLink) {
+            return null;
+        }
+
+        $lines = ['تقدر تطلب من هنا:'];
+
+        if ($websiteUrl) {
+            $lines[] = "الموقع الإلكتروني: {$websiteUrl}";
+        }
+        if ($androidLink) {
+            $lines[] = "تطبيق أندرويد: {$androidLink}";
+        }
+        if ($iosLink) {
+            $lines[] = "تطبيق iOS: {$iosLink}";
+        }
+
+        return implode("\n", $lines);
     }
 
     /**
