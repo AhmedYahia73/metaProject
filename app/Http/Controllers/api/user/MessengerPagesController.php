@@ -125,6 +125,7 @@ class MessengerPagesController extends Controller
         return response()->json([
             'status' => true,
             'data' => $pages,
+            'rawPages' => $rawPages,
         ]);
     }
 
