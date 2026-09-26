@@ -17,9 +17,15 @@ class PackageController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
+        $query = Package::with(['discount', 'tax'])->latest();
+
+        if ($request->filled('type')) {
+            $query->where('type', $request->input('type'));
+        }
+
         $packages = $request->boolean('paginate')
-            ? Package::with(['discount', 'tax'])->latest()->paginate($request->integer('per_page', 15))
-            : Package::with(['discount', 'tax'])->latest()->get();
+            ? $query->paginate($request->integer('per_page', 15))
+            : $query->get();
 
         return response()->json([
             'status' => true,
@@ -50,6 +56,7 @@ class PackageController extends Controller
             'name' => 'required|array',
             'name.en' => 'required|string|max:255',
             'name.ar' => 'required|string|max:255',
+            'type' => 'required|in:whats,face,all',
             'msg_number' => 'required|integer|min:0',
             'price' => 'required|numeric|min:0',
             'discount_id' => 'nullable|exists:discounts,id',
@@ -89,6 +96,7 @@ class PackageController extends Controller
             'name' => 'sometimes|required|array',
             'name.en' => 'required_with:name|string|max:255',
             'name.ar' => 'required_with:name|string|max:255',
+            'type' => 'sometimes|required|in:whats,face,all',
             'msg_number' => 'sometimes|required|integer|min:0',
             'price' => 'sometimes|required|numeric|min:0',
             'discount_id' => 'nullable|exists:discounts,id',

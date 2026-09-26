@@ -21,9 +21,10 @@ test('packages can be fetched without auth with arabic localization by default o
     $response->assertOk()
         ->assertJsonPath('status', true)
         ->assertJsonPath('lang', 'ar')
-        ->assertJsonPath('data.0.name', 'الباقة الفضية')
-        ->assertJsonPath('data.0.names.en', 'Silver Plan')
-        ->assertJsonPath('data.0.msg_number', 1500);
+        ->assertJsonPath('face_packages.0.name', 'الباقة الفضية')
+        ->assertJsonPath('face_packages.0.names.en', 'Silver Plan')
+        ->assertJsonPath('face_packages.0.msg_number', 1500)
+        ->assertJsonPath('whats_packages.0.name', 'الباقة الفضية');
 });
 
 test('packages can be fetched with english localization', function () {
@@ -42,8 +43,9 @@ test('packages can be fetched with english localization', function () {
     $response->assertOk()
         ->assertJsonPath('status', true)
         ->assertJsonPath('lang', 'en')
-        ->assertJsonPath('data.0.name', 'Diamond Plan')
-        ->assertJsonPath('data.0.names.ar', 'الباقة الماسية');
+        ->assertJsonPath('face_packages.0.name', 'Diamond Plan')
+        ->assertJsonPath('face_packages.0.names.ar', 'الباقة الماسية')
+        ->assertJsonPath('whats_packages.0.name', 'Diamond Plan');
 });
 
 test('contact us requires f_name, l_name, phone, email, and message', function () {

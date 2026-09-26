@@ -30,9 +30,8 @@ class AdminController extends Controller
             'paginate' => 'sometimes|boolean',
         ]);
 
-        $query = User::
-        select('id', 'name', 'email')
-        ->latest()->where('role', 'admin');
+        $query = User::select('id', 'name', 'email')
+            ->latest()->where('role', 'admin');
 
         // Search filter
         if ($request->filled('search')) {
@@ -117,11 +116,11 @@ class AdminController extends Controller
 
         return response()->json([
             'status' => true,
-            "data" => [
+            'data' => [
                 'id' => $admin->id,
                 'name' => $admin->name,
-                'email' => $admin->email, 
-            ], 
+                'email' => $admin->email,
+            ],
         ]);
     }
 
@@ -199,4 +198,3 @@ class AdminController extends Controller
         ]);
     }
 }
-

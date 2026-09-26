@@ -13,6 +13,7 @@ use App\Http\Controllers\api\auth\LoginController;
 use App\Http\Controllers\api\HomeController;
 use App\Http\Controllers\api\user\HomeController as UserHomeController;
 use App\Http\Controllers\api\user\MessengerPagesController;
+use App\Http\Controllers\api\user\WhatsPagesController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -69,8 +70,11 @@ Route::prefix('user')->group(function () {
         Route::get('dashboard', [UserHomeController::class, 'index']);
 
         // Messenger Self-Service — list pages & request subscription
+        Route::get('messenger/facebook_packages', [MessengerPagesController::class, 'facebook_packages']);
         Route::get('messenger/pages', [MessengerPagesController::class, 'pages']);
         Route::post('messenger/orders', [MessengerPagesController::class, 'requestSubscription']);
+
+        Route::get('whats/pages', [WhatsPagesController::class, 'pages']);
     });
 });
 

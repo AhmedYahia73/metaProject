@@ -12,12 +12,57 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Symfony\Component\HttpFoundation\Response;
 
 class MessengerPagesController extends Controller
 {
     private const GRAPH_API_BASE = 'https://graph.facebook.com';
 
+    public function facebook_packages(Request $request): JsonResponse
+    {
+        $request->validate([
+            'lang' => 'required|in:ar,en',
+        ]);
+        $rawLang = $request->query('lang', $request->header('Accept-Language', 'ar'));
+        $lang = str_starts_with(strtolower((string) $rawLang), 'en') ? 'en' : 'ar';
+
+        $face_packages = Package::with(['discount', 'tax'])
+            ->where(function ($query) {
+                $query->where('type', 'all')
+                    ->orWhere('type', 'face');
+            })
+            ->latest()
+            ->get()
+            ->map(function (Package $package) use ($lang) {
+                $names = is_array($package->name)
+                    ? $package->name
+                    : (json_decode((string) $package->name, true) ?: []);
+
+                $localizedName = $names[$lang] ?? $names['en'] ?? $names['ar'] ?? (is_string($package->name) ? $package->name : '');
+
+                return [
+                    'id' => $package->id,
+                    'name' => $localizedName,
+                    'names' => $names,
+                    'msg_number' => $package->msg_number,
+                    'price' => $package->price,
+                    'months' => $package->months,
+                    'discount_id' => $package->discount_id,
+                    'tax_id' => $package->tax_id,
+                    'discount' => $package->discount,
+                    'tax' => $package->tax,
+                    'created_at' => $package->created_at,
+                    'updated_at' => $package->updated_at,
+                ];
+            });
+
+        return response()->json([
+            'status' => true,
+            'lang' => $lang,
+            'face_packages' => $face_packages,
+        ]);
+    }
     // ─────────────────────────────────────────────────────────────────────────
     // GET /api/user/messenger/pages
     // ─────────────────────────────────────────────────────────────────────────
@@ -107,7 +152,14 @@ class MessengerPagesController extends Controller
 
         $validated = $request->validate([
             'page_id' => 'required|string|max:255',
-            'package_id' => 'required|exists:packages,id',
+            'package_id' => [
+                'required',
+                Rule::exists('packages', 'id')->where(function ($query) {
+                    $query->whereIn('type', ['face', 'all']);
+                }),
+            ],
+        ], [
+            'package_id.exists' => 'The selected package is invalid or not available for Facebook Messenger.',
         ]);
 
         $graphVersion = config('services.meta.graph_version', 'v21.0');
@@ -153,6 +205,13 @@ class MessengerPagesController extends Controller
 
         // 3. Calculate price (same logic as admin OrderController::store)
         $package = Package::with(['discount', 'tax'])->findOrFail($validated['package_id']);
+
+        if (! in_array($package->type, ['face', 'all'], true)) {
+            return response()->json([
+                'status' => false,
+                'message' => 'The selected package is not available for Facebook Messenger.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
 
         $basePrice = (float) $package->price;
         $today = Carbon::today();

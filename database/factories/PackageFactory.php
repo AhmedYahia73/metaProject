@@ -24,6 +24,7 @@ class PackageFactory extends Factory
                 'en' => 'Gold Plan',
                 'ar' => 'الباقة الذهبية',
             ],
+            'type' => 'all',
             'msg_number' => 1000,
             'price' => 99.99,
             'months' => 1,
