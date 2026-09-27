@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\api;
 
+use App\Events\TypingEvent;
 use App\Events\WhatsEvent;
 use App\Http\Controllers\Controller;
 use App\Models\Chat;
@@ -131,7 +132,16 @@ class HomeController extends Controller
             ]);
             WhatsEvent::dispatch($new_chat);
 
-            // 6. Show typing indicator to customer while AI is processing
+            // 6. Broadcast typing indicator to admin dashboard (Realtime dots)
+            TypingEvent::dispatch(
+                channel: 'whatsapp',
+                phone: $senderPhone,
+                senderId: null,
+                pageId: null,
+                isTyping: true,
+            );
+
+            // Mark customer message as read (shows ✓✓ in WhatsApp)
             $incomingMessageId = data_get($incomingMessage, 'id');
             $token = $whatsItem->access_token ?: config('services.meta.system_user_token');
             if ($incomingMessageId) {
@@ -428,7 +438,16 @@ class HomeController extends Controller
 
             Log::channel('stack')->info('[MESSENGER] ✓ Customer message saved to DB');
 
-            // Show typing dots to customer while AI is processing
+            // Broadcast typing indicator to admin dashboard (Realtime dots)
+            TypingEvent::dispatch(
+                channel: 'messenger',
+                phone: null,
+                senderId: $senderId,
+                pageId: $messengerAccount->page_id,
+                isTyping: true,
+            );
+
+            // Show typing dots to Messenger customer (Facebook API)
             $this->showMessengerTyping(
                 pageAccessToken: $messengerAccount->page_access_token,
                 recipientId: $senderId,
@@ -952,8 +971,9 @@ class HomeController extends Controller
     }
 
     /**
-     * Send WhatsApp typing action using the correct endpoint.
-     * Mark message as read and show typing bubble.
+     * Mark the incoming WhatsApp message as read (shows ✓✓ blue checkmarks).
+     * NOTE: WhatsApp Cloud API does NOT support typing indicators.
+     * Mark-as-read is the only available visual feedback to the customer.
      */
     private function showWhatsAppTyping(
         string $accessToken,
@@ -962,25 +982,14 @@ class HomeController extends Controller
         string $incomingMessageId,
     ): void {
         try {
-            // Mark incoming message as read
             Http::withToken($accessToken)
                 ->post(self::GRAPH_API_BASE."/{$phoneNumberId}/messages", [
                     'messaging_product' => 'whatsapp',
                     'status' => 'read',
                     'message_id' => $incomingMessageId,
                 ]);
-
-            // Show typing indicator
-            Http::withToken($accessToken)
-                ->post(self::GRAPH_API_BASE."/{$phoneNumberId}/messages", [
-                    'messaging_product' => 'whatsapp',
-                    'recipient_type' => 'individual',
-                    'to' => $senderPhone,
-                    'type' => 'text',
-                    'typing' => ['status' => 'typing_on'],
-                ]);
         } catch (\Throwable $e) {
-            Log::warning('WhatsApp typing indicator failed: '.$e->getMessage());
+            Log::warning('WhatsApp mark-as-read failed: '.$e->getMessage());
         }
     }
 

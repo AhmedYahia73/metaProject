@@ -1,5 +1,6 @@
 <?php
 
+use App\Events\TypingEvent;
 use App\Events\WhatsEvent;
 use App\Models\Chat;
 use App\Models\MessengerAccount;
@@ -134,7 +135,7 @@ test('messenger webhook ignores echo messages', function () {
 });
 
 test('messenger webhook processes message, gets AI reply, and sends messenger response', function () {
-    Event::fake([WhatsEvent::class]);
+    Event::fake([WhatsEvent::class, TypingEvent::class]);
 
     Http::fake([
         'https://graph.facebook.com/*/me/messages' => Http::response([
