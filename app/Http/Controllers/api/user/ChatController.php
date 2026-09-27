@@ -214,7 +214,7 @@ class ChatController extends Controller
         $query = Chat::where('user_id', $user->id)
             ->where('messenger_account_id', $account->id)
             ->where('messenger_sender_id', $senderId)
-            ->orderBy('id', 'asc');
+            ->orderBy('id', 'desc');
 
         if ($request->filled('search')) {
             $search = $request->search;
@@ -534,7 +534,7 @@ class ChatController extends Controller
         $query = Chat::where('user_id', $user->id)
             ->where('whats_item_id', $item->id)
             ->where('phone', $customerPhone)
-            ->orderBy('id', 'asc');
+            ->orderBy('id', 'desc');
 
         if ($request->filled('search')) {
             $search = $request->search;
