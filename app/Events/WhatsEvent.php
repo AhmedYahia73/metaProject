@@ -24,8 +24,8 @@ class WhatsEvent implements ShouldBroadcastNow
     public function broadcastOn(): array
     {
         return [
-            new Channel('userChat_'.$this->chat['phone']),
-            new Channel('userChat_'),
+            new Channel('userWhats_'.$this->chat['phone']),
+            new Channel('userWhats_'),
         ];
     }
 
