@@ -131,7 +131,19 @@ class HomeController extends Controller
             ]);
             WhatsEvent::dispatch($new_chat);
 
-            // 6. Get AI reply
+            // 6. Show typing indicator to customer while AI is processing
+            $incomingMessageId = data_get($incomingMessage, 'id');
+            $token = $whatsItem->access_token ?: config('services.meta.system_user_token');
+            if ($incomingMessageId) {
+                $this->showWhatsAppTyping(
+                    accessToken: (string) $token,
+                    phoneNumberId: $whatsItem->phone_number_id,
+                    senderPhone: $senderPhone,
+                    incomingMessageId: $incomingMessageId,
+                );
+            }
+
+            // 7. Get AI reply
             $reply = $this->getAiReply($restaurant, $messageText, $whatsItem);
 
             if (! $reply) {
@@ -410,11 +422,17 @@ class HomeController extends Controller
                 'messenger_sender_id' => $senderId,
                 'meta_message_id' => data_get($messagingEvent, 'message.mid'),
             ]);
-            $new_chat->toArray();
-            $new_chat['page_id'] = $messengerAccount->page_id;
-            WhatsEvent::dispatch($new_chat);
+            $chatData = $new_chat->toArray();
+            $chatData['page_id'] = $messengerAccount->page_id;
+            WhatsEvent::dispatch($chatData);
 
             Log::channel('stack')->info('[MESSENGER] ✓ Customer message saved to DB');
+
+            // Show typing dots to customer while AI is processing
+            $this->showMessengerTyping(
+                pageAccessToken: $messengerAccount->page_access_token,
+                recipientId: $senderId,
+            );
 
             // Get AI reply for Messenger using MessengerAccount context & ai_file
             Log::channel('stack')->info('[MESSENGER] ⏳ Calling OpenAI...');
@@ -904,6 +922,84 @@ class HomeController extends Controller
         }
 
         return $toolOutputs;
+    }
+
+    /**
+     * Send WhatsApp typing indicator (mark as read + typing_on).
+     * WhatsApp requires the message to be marked as read first.
+     */
+    private function sendWhatsAppTypingIndicator(
+        string $accessToken,
+        string $phoneNumberId,
+        string $messageId,
+    ): void {
+        // Step 1: Mark message as read (required before showing typing)
+        Http::withToken($accessToken)
+            ->post(self::GRAPH_API_BASE."/{$phoneNumberId}/messages", [
+                'messaging_product' => 'whatsapp',
+                'status' => 'read',
+                'message_id' => $messageId,
+            ]);
+
+        // Step 2: Show typing indicator
+        Http::withToken($accessToken)
+            ->post(self::GRAPH_API_BASE."/{$phoneNumberId}/messages", [
+                'messaging_product' => 'whatsapp',
+                'recipient_type' => 'individual',
+                'to' => $messageId, // not used here — Meta uses context from read
+                'type' => 'reaction',
+            ]);
+    }
+
+    /**
+     * Send WhatsApp typing action using the correct endpoint.
+     * Mark message as read and show typing bubble.
+     */
+    private function showWhatsAppTyping(
+        string $accessToken,
+        string $phoneNumberId,
+        string $senderPhone,
+        string $incomingMessageId,
+    ): void {
+        try {
+            // Mark incoming message as read
+            Http::withToken($accessToken)
+                ->post(self::GRAPH_API_BASE."/{$phoneNumberId}/messages", [
+                    'messaging_product' => 'whatsapp',
+                    'status' => 'read',
+                    'message_id' => $incomingMessageId,
+                ]);
+
+            // Show typing indicator
+            Http::withToken($accessToken)
+                ->post(self::GRAPH_API_BASE."/{$phoneNumberId}/messages", [
+                    'messaging_product' => 'whatsapp',
+                    'recipient_type' => 'individual',
+                    'to' => $senderPhone,
+                    'type' => 'text',
+                    'typing' => ['status' => 'typing_on'],
+                ]);
+        } catch (\Throwable $e) {
+            Log::warning('WhatsApp typing indicator failed: '.$e->getMessage());
+        }
+    }
+
+    /**
+     * Send Messenger typing_on sender action to show typing dots.
+     */
+    private function showMessengerTyping(
+        string $pageAccessToken,
+        string $recipientId,
+    ): void {
+        try {
+            Http::withToken($pageAccessToken)
+                ->post(self::GRAPH_API_BASE.'/me/messages', [
+                    'recipient' => ['id' => $recipientId],
+                    'sender_action' => 'typing_on',
+                ]);
+        } catch (\Throwable $e) {
+            Log::warning('Messenger typing indicator failed: '.$e->getMessage());
+        }
     }
 
     /**
