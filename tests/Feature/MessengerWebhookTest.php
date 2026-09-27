@@ -237,11 +237,12 @@ test('messenger webhook processes message, gets AI reply, and sends messenger re
         MsgSend::where('user_id', $restaurant->id)->where('channel', 'messenger')->count()
     )->toBe(1);
 
-    // Messenger API called correctly
+    // Messenger API called correctly (actual message, not typing indicator)
     Http::assertSent(function ($request) {
         return str_contains($request->url(), 'me/messages')
-            && $request['recipient']['id'] === 'PSID_456'
-            && $request['messaging_type'] === 'RESPONSE';
+            && isset($request->data()['messaging_type'])
+            && $request->data()['messaging_type'] === 'RESPONSE'
+            && $request->data()['recipient']['id'] === 'PSID_456';
     });
 });
 

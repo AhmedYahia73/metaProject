@@ -17,16 +17,18 @@ class WhatsEvent implements ShouldBroadcastNow
 
     public function __construct($chat)
     {
-        $this->chat = $chat;
-        Log::info('🎯 New Chat', ['phone' => $chat['phone']]);
+        $this->chat = is_array($chat) ? $chat : $chat->toArray();
+        Log::info('🎯 New Chat', ['phone' => $this->chat['phone'] ?? 'messenger']);
     }
 
     public function broadcastOn(): array
     {
-        return [
-            new Channel('userWhats_'.$this->chat['phone']),
+        $phone = $this->chat['phone'] ?? null;
+
+        return array_filter([
+            $phone ? new Channel('userWhats_'.$phone) : null,
             new Channel('userWhats_'),
-        ];
+        ]);
     }
 
     public function broadcastAs(): string
@@ -38,10 +40,16 @@ class WhatsEvent implements ShouldBroadcastNow
 
     public function broadcastWith(): array
     {
+        $createdAt = $this->chat['created_at'] ?? null;
+
+        if ($createdAt instanceof \DateTimeInterface) {
+            $createdAt = $createdAt->format('Y-m-d H:i:s');
+        }
+
         $data = [
-            'phone' => $this->chat['phone'],
-            'message' => $this->chat['message'],
-            'created_at' => $this->chat['created_at']?->format('Y-m-d H:i:s'),
+            'phone' => $this->chat['phone'] ?? null,
+            'message' => $this->chat['message'] ?? '',
+            'created_at' => $createdAt,
         ];
 
         Log::info('📦 Broadcasting Data:', $data);
