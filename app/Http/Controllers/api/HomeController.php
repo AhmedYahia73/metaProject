@@ -410,6 +410,8 @@ class HomeController extends Controller
                 'messenger_sender_id' => $senderId,
                 'meta_message_id' => data_get($messagingEvent, 'message.mid'),
             ]);
+            $new_chat->toArray();
+            $new_chat['page_id'] = $messengerAccount->page_id;
             WhatsEvent::dispatch($new_chat);
 
             Log::channel('stack')->info('[MESSENGER] ✓ Customer message saved to DB');

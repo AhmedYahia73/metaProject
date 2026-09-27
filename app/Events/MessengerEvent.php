@@ -26,7 +26,7 @@ class MessengerEvent implements ShouldBroadcastNow
     public function broadcastOn(): array
     {
         return [
-            new Channel('userChat_' . $this->chat['messenger_sender_id']), 
+            new Channel('userChat_' . $this->chat['messenger_sender_id'] . "_" . $this->chat['messenger_sender_id']) , 
             new Channel('userChat_'), 
         ];
     }
