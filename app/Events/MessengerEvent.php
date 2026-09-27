@@ -4,49 +4,59 @@ namespace App\Events;
 
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
-use Illuminate\Broadcasting\PresenceChannel;
-use Illuminate\Broadcasting\PrivateChannel;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
-use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
+use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
 
 class MessengerEvent implements ShouldBroadcastNow
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
- 
-    public $chat;
 
-    public function __construct($chat)
+    public array $chat;
+
+    public function __construct(array $chat)
     {
         $this->chat = $chat;
-        Log::info('🎯 New Chat', ['messenger_sender_id' => $chat['messenger_sender_id']]);
-    } 
- 
+        Log::info('🎯 [Messenger] New Chat', [
+            'messenger_sender_id' => $chat['messenger_sender_id'] ?? null,
+            'page_id' => $chat['page_id'] ?? null,
+        ]);
+    }
+
     public function broadcastOn(): array
     {
+        $senderId = $this->chat['messenger_sender_id'] ?? '';
+        $pageId = $this->chat['page_id'] ?? '';
+
         return [
-            new Channel('userChat_' . $this->chat['messenger_sender_id'] . "_" . $this->chat['page_id']) , 
-            new Channel('userChat_'), 
+            new Channel('userChat_'.$senderId.'_'.$pageId),
+            new Channel('userChat_'.$senderId),
+            new Channel('userChat_'),
         ];
     }
 
     public function broadcastAs(): string
     {
-        Log::info('📢 Broadcast As: NewchatEvent');
         return 'UserChatEvent';
     }
 
     public function broadcastWith(): array
     {
-        $data = [
-            'messenger_sender_id' => $this->chat['messenger_sender_id'],
-            'message' => $this->chat['message'],
-            'created_at' => $this->chat['created_at']?->format('Y-m-d H:i:s'), 
+        $createdAt = $this->chat['created_at'] ?? null;
+        if ($createdAt instanceof \DateTimeInterface) {
+            $createdAt = $createdAt->format('Y-m-d H:i:s');
+        }
+
+        return [
+            'id' => $this->chat['id'] ?? null,
+            'messenger_sender_id' => $this->chat['messenger_sender_id'] ?? null,
+            'page_id' => $this->chat['page_id'] ?? null,
+            'message' => $this->chat['message'] ?? '',
+            'sender_type' => $this->chat['sender_type'] ?? 'customer',
+            'is_admin' => $this->chat['is_admin'] ?? false,
+            'channel' => 'messenger',
+            'created_at' => $createdAt,
         ];
-        
-        Log::info('📦 Broadcasting Data:', $data);
-        
-        return $data;
     }
 }

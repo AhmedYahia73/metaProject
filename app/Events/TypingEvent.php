@@ -38,7 +38,7 @@ class TypingEvent implements ShouldBroadcastNow
 
         if ($this->channel === 'messenger' && $this->senderId) {
             return [
-                new Channel('userChat_'.($this->pageId ?? '').'_'.$this->senderId),
+                new Channel('userChat_'.$this->senderId.'_'.($this->pageId ?? '')),
                 new Channel('userChat_'.$this->senderId),
                 new Channel('userChat_'),
             ];
