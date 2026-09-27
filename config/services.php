@@ -45,6 +45,7 @@ return [
         'verify_token' => env('WHATSAPP_VERIFY_TOKEN', 'test'),
         // Messenger — app-level (per-page tokens stored in messenger_accounts table)
         'messenger_app_secret' => env('META_MESSENGER_APP_SECRET'),
+        'messenger_verify_token' => env('MESSENGER_VERIFY_TOKEN', env('WHATSAPP_VERIFY_TOKEN')),
     ],
 
 ];

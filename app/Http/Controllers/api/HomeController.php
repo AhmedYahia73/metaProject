@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\api;
 
+use App\Events\WhatsEvent;
 use App\Http\Controllers\Controller;
 use App\Models\Chat;
 use App\Models\Food;
@@ -19,7 +20,6 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use OpenAI\Laravel\Facades\OpenAI;
-use App\Events\WhatsEvent;
 
 class HomeController extends Controller
 {
@@ -128,7 +128,7 @@ class HomeController extends Controller
                 'is_read' => false,
                 'channel' => 'whatsapp',
                 'meta_message_id' => data_get($incomingMessage, 'id'),
-            ]); 
+            ]);
             WhatsEvent::dispatch($new_chat);
 
             // 6. Get AI reply
@@ -503,20 +503,33 @@ class HomeController extends Controller
      */
     private function messengerVerify(Request $request): Response
     {
-        $mode = $request->input('hub_mode');
-        $token = $request->input('hub_verify_token');
-        $challenge = $request->input('hub_challenge');
+        $mode = $request->input('hub_mode') ?? $request->input('hub.mode');
+        $token = $request->input('hub_verify_token') ?? $request->input('hub.verify_token');
+        $challenge = $request->input('hub_challenge') ?? $request->input('hub.challenge');
+
+        $appVerifyToken = config('services.meta.messenger_verify_token')
+            ?: config('services.meta.verify_token');
 
         Log::info('Messenger webhook verify attempt', [
             'hub_mode' => $mode,
+            'token_match_app' => $appVerifyToken && hash_equals((string) $appVerifyToken, (string) $token),
             'ip' => $request->ip(),
         ]);
 
         if ($mode === 'subscribe' && $token) {
+            // 1. Verify against App-level verify token from .env (used during Meta Dashboard setup)
+            if ($appVerifyToken && hash_equals((string) $appVerifyToken, (string) $token)) {
+                Log::info('Messenger webhook verified successfully via app verify token.');
+
+                return response((string) $challenge, Response::HTTP_OK)
+                    ->header('Content-Type', 'text/plain');
+            }
+
+            // 2. Verify against per-page verify token stored in messenger_accounts table
             $account = MessengerAccount::where('verify_token', $token)->first();
 
             if ($account) {
-                Log::info('Messenger webhook verified successfully.', ['page_id' => $account->page_id]);
+                Log::info('Messenger webhook verified successfully via page verify token.', ['page_id' => $account->page_id]);
 
                 return response((string) $challenge, Response::HTTP_OK)
                     ->header('Content-Type', 'text/plain');

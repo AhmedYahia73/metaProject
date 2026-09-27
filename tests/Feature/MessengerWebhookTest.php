@@ -1,5 +1,6 @@
 <?php
 
+use App\Events\WhatsEvent;
 use App\Models\Chat;
 use App\Models\MessengerAccount;
 use App\Models\MsgSend;
@@ -7,6 +8,7 @@ use App\Models\Order;
 use App\Models\Package;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use OpenAI\Laravel\Facades\OpenAI;
 use OpenAI\Responses\Responses\CreateResponse;
@@ -30,7 +32,21 @@ test('messenger webhook verifies correctly with a known verify_token', function 
     expect($response->getContent())->toBe('CHALLENGE_999');
 });
 
+test('messenger webhook verifies correctly with app-level verify_token from config', function () {
+    config(['services.meta.messenger_verify_token' => 'my-app-verify-token']);
+
+    $response = $this->get(
+        '/api/messenger-webhook?hub_mode=subscribe&hub_verify_token=my-app-verify-token&hub_challenge=CHALLENGE_APP'
+    );
+
+    $response->assertOk();
+    expect($response->getContent())->toBe('CHALLENGE_APP');
+});
+
 test('messenger webhook verification fails with unknown verify_token', function () {
+    config(['services.meta.messenger_verify_token' => 'secret-app-token']);
+    config(['services.meta.verify_token' => 'secret-app-token']);
+
     $response = $this->get(
         '/api/messenger-webhook?hub_mode=subscribe&hub_verify_token=wrong-token&hub_challenge=CHALLENGE_999'
     );
@@ -118,6 +134,8 @@ test('messenger webhook ignores echo messages', function () {
 });
 
 test('messenger webhook processes message, gets AI reply, and sends messenger response', function () {
+    Event::fake([WhatsEvent::class]);
+
     Http::fake([
         'https://graph.facebook.com/*/me/messages' => Http::response([
             'recipient_id' => 'PSID_456',
