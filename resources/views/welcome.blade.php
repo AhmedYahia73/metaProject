@@ -52,8 +52,8 @@
         });
 
         // 2. الاستماع للقناة newOrder والحدث NewOrderEvent
-        window.Echo.channel('newOrder')
-            .listen('.NewOrderEvent', (data) => {
+        window.Echo.channel('userChat_29269086176028063_106565280821724')
+            .listen('.UserChatEvent', (data) => {
                 console.log('🎯 وصلت نوتيفيكيشن جديدة لايف!!');
                 console.log('📦 Data Received:', data);
                 alert('تم استلام طلب جديد برقم: ' + data.order_id);
