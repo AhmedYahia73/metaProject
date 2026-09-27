@@ -130,16 +130,25 @@ class HomeController extends Controller
                 'channel' => 'whatsapp',
                 'meta_message_id' => data_get($incomingMessage, 'id'),
             ]);
-            WhatsEvent::dispatch($new_chat);
+            // Broadcast to admin dashboard (non-blocking — failure must not stop AI reply)
+            try {
+                WhatsEvent::dispatch($new_chat);
+            } catch (\Throwable $broadcastException) {
+                Log::warning('WhatsApp WhatsEvent broadcast failed (non-fatal): '.$broadcastException->getMessage());
+            }
 
             // 6. Broadcast typing indicator to admin dashboard (Realtime dots)
-            TypingEvent::dispatch(
-                channel: 'whatsapp',
-                phone: $senderPhone,
-                senderId: null,
-                pageId: null,
-                isTyping: true,
-            );
+            try {
+                TypingEvent::dispatch(
+                    channel: 'whatsapp',
+                    phone: $senderPhone,
+                    senderId: null,
+                    pageId: null,
+                    isTyping: true,
+                );
+            } catch (\Throwable $broadcastException) {
+                Log::warning('WhatsApp TypingEvent broadcast failed (non-fatal): '.$broadcastException->getMessage());
+            }
 
             // Mark customer message as read (shows ✓✓ in WhatsApp)
             $incomingMessageId = data_get($incomingMessage, 'id');
@@ -434,18 +443,28 @@ class HomeController extends Controller
             ]);
             $chatData = $new_chat->toArray();
             $chatData['page_id'] = $messengerAccount->page_id;
-            WhatsEvent::dispatch($chatData);
+
+            // Broadcast to admin dashboard (non-blocking — failure must not stop AI reply)
+            try {
+                WhatsEvent::dispatch($chatData);
+            } catch (\Throwable $broadcastException) {
+                Log::warning('[MESSENGER] ⚠ WhatsEvent broadcast failed (non-fatal): '.$broadcastException->getMessage());
+            }
 
             Log::channel('stack')->info('[MESSENGER] ✓ Customer message saved to DB');
 
             // Broadcast typing indicator to admin dashboard (Realtime dots)
-            TypingEvent::dispatch(
-                channel: 'messenger',
-                phone: null,
-                senderId: $senderId,
-                pageId: $messengerAccount->page_id,
-                isTyping: true,
-            );
+            try {
+                TypingEvent::dispatch(
+                    channel: 'messenger',
+                    phone: null,
+                    senderId: $senderId,
+                    pageId: $messengerAccount->page_id,
+                    isTyping: true,
+                );
+            } catch (\Throwable $broadcastException) {
+                Log::warning('[MESSENGER] ⚠ TypingEvent broadcast failed (non-fatal): '.$broadcastException->getMessage());
+            }
 
             // Show typing dots to Messenger customer (Facebook API)
             $this->showMessengerTyping(
