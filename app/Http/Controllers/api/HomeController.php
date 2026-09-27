@@ -19,6 +19,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use OpenAI\Laravel\Facades\OpenAI;
+use App\Events\WhatsEvent;
 
 class HomeController extends Controller
 {
@@ -115,7 +116,7 @@ class HomeController extends Controller
             }
 
             // 5. Save the customer's incoming message
-            Chat::create([
+            $new_chat = Chat::create([
                 'user_id' => $restaurant->id,
                 'whats_item_id' => $whatsItem->id,
                 'name' => $senderName,
@@ -127,7 +128,8 @@ class HomeController extends Controller
                 'is_read' => false,
                 'channel' => 'whatsapp',
                 'meta_message_id' => data_get($incomingMessage, 'id'),
-            ]);
+            ]); 
+            WhatsEvent::dispatch($new_chat);
 
             // 6. Get AI reply
             $reply = $this->getAiReply($restaurant, $messageText, $whatsItem);
@@ -394,7 +396,7 @@ class HomeController extends Controller
             }
 
             // Save incoming customer message
-            Chat::create([
+            $new_chat = Chat::create([
                 'user_id' => $restaurant->id,
                 'messenger_account_id' => $messengerAccount->id,
                 'name' => 'Messenger User',
@@ -408,6 +410,7 @@ class HomeController extends Controller
                 'messenger_sender_id' => $senderId,
                 'meta_message_id' => data_get($messagingEvent, 'message.mid'),
             ]);
+            WhatsEvent::dispatch($new_chat);
 
             Log::channel('stack')->info('[MESSENGER] ✓ Customer message saved to DB');
 

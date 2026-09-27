@@ -20,8 +20,12 @@ class MessengerAccountController extends Controller
      */
     public function index(User $user): JsonResponse
     {
-        $accounts = $user->messengerAccounts()->get();
-
+        $accounts = $user->messengerAccounts()
+        ->select("id", "user_id", "page_id", "page_name",
+        "verify_token", "status", "ai_context", "ai_file",
+        "android_link", "ios_link", "website_url")
+        ->get();
+ 
         return response()->json([
             'status' => true,
             'data' => $accounts,
@@ -82,7 +86,19 @@ class MessengerAccountController extends Controller
 
         return response()->json([
             'status' => true,
-            'data' => $messengerAccount,
+            'data' => [
+                "id" => $messengerAccount->id,
+                "user_id" => $messengerAccount->user_id,
+                "page_id" => $messengerAccount->page_id,
+                "page_name" => $messengerAccount->page_name,
+                "verify_token" => $messengerAccount->verify_token,
+                "status" => $messengerAccount->status,
+                "ai_context" => $messengerAccount->ai_context,
+                "ai_file" => $messengerAccount->ai_file,
+                "android_link" => $messengerAccount->android_link,
+                "ios_link" => $messengerAccount->ios_link,
+                "website_url" => $messengerAccount->website_url,
+            ],
         ]);
     }
 

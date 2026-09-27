@@ -19,17 +19,10 @@ use App\Http\Controllers\api\user\WhatsPagesController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
-/*
-|--------------------------------------------------------------------------
-| General API Routes
-|--------------------------------------------------------------------------
-*/
+use Illuminate\Support\Facades\Broadcast;
 
-/**
- * Get currently authenticated user.
- *
- * @response array{id: int, name: string, email: string, phone: string, restuarant_name: string, role: string}
- */
+Broadcast::routes(['middleware' => ['auth:sanctum']]);
+
 Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');

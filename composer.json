@@ -13,6 +13,7 @@
         "dedoc/scramble": "^0.13.43",
         "inertiajs/inertia-laravel": "^2.0",
         "laravel/framework": "^12.0",
+        "laravel/reverb": "^1.0",
         "laravel/sanctum": "^4.0",
         "laravel/tinker": "^2.10.1",
         "openai-php/laravel": "^0.21.0",
