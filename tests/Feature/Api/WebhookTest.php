@@ -245,8 +245,13 @@ test('webhook processes incoming message, generates AI reply, and sends whatsapp
     // Check message counter was recorded
     expect(MsgSend::where('user_id', $restaurant->id)->count())->toBe(1);
 
-    // Verify WhatsApp Graph API was called
+    // Verify WhatsApp Graph API was called with the reply message
     Http::assertSent(function ($request) {
+        // Skip mark-as-read requests (they don't have a 'to' field)
+        if (! isset($request->data()['to'])) {
+            return false;
+        }
+
         return str_contains($request->url(), '999888777/messages')
             && $request['to'] === '201012345678'
             && $request['text']['body'] === 'أهلاً بك في مطعمنا! كيف أقدر أساعدك؟';

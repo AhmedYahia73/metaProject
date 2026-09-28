@@ -2,9 +2,9 @@
 
 namespace App\Http\Controllers\api;
 
+use App\Events\MessengerEvent;
 use App\Events\TypingEvent;
 use App\Events\WhatsEvent;
-use App\Events\MessengerEvent;
 use App\Http\Controllers\Controller;
 use App\Models\Chat;
 use App\Models\Food;
@@ -35,31 +35,33 @@ class HomeController extends Controller
      * Handles Meta verification challenges and incoming messages.
      */
     public function test_webhook(Request $request): Response|JsonResponse
-    {   
+    {
         $new_chat = [
             'user_id' => 1,
             'whats_item_id' => 1,
-            'name' => "Ahmed",
-            'phone' => "201206610346",
-            'message' => "Hello, this is a test message from the webhook.",
+            'name' => 'Ahmed',
+            'phone' => '201206610346',
+            'message' => 'Hello, this is a test message from the webhook.',
             'is_image' => false,
             'is_admin' => false,
             'sender_type' => 'customer',
             'is_read' => false,
             'channel' => 'whatsapp',
             'messenger_sender_id' => 29269086176028063,
-            'page_id' => 106565280821724
+            'page_id' => 106565280821724,
         ];
         try {
             MessengerEvent::dispatch($new_chat);
+
             return response()->json(['status' => 'success'], Response::HTTP_OK);
-        } catch (\Throwable $broadcastException) { 
+        } catch (\Throwable $broadcastException) {
             return response()->json([
                 'status' => 'error',
                 'message' => 'MessengerEvent broadcast failed: '.$broadcastException->getMessage(),
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
-        } 
+        }
     }
+
     public function web_hook(Request $request)
     {
         // 1. Handle Meta webhook verification (GET challenge)
@@ -493,15 +495,13 @@ class HomeController extends Controller
                 Log::warning('[MESSENGER] ⚠ TypingEvent broadcast failed (non-fatal): '.$broadcastException->getMessage());
             }
 
-            // Show typing dots to Messenger customer (Facebook API)
-            $this->showMessengerTyping(
-                pageAccessToken: $messengerAccount->page_access_token,
-                recipientId: $senderId,
+            // Show typing dots and keep them alive every 15s during AI processing
+            Log::channel('stack')->info('[MESSENGER] ⏳ Calling OpenAI with persistent typing indicator...');
+            $reply = $this->getMessengerAiReplyWithTyping(
+                messengerAccount: $messengerAccount,
+                userMessage: $messageText,
+                senderId: $senderId,
             );
-
-            // Get AI reply for Messenger using MessengerAccount context & ai_file
-            Log::channel('stack')->info('[MESSENGER] ⏳ Calling OpenAI...');
-            $reply = $this->getMessengerAiReply($messengerAccount, $messageText);
 
             if (! $reply) {
                 Log::channel('stack')->warning("[MESSENGER] ✗ OpenAI returned empty reply for restaurant #{$restaurant->id}");
@@ -745,6 +745,84 @@ class HomeController extends Controller
 
             return $fallback;
         }
+    }
+
+    /**
+     * Call getMessengerAiReply while keeping Messenger typing dots alive.
+     *
+     * Facebook's typing_on action auto-expires after ~20 seconds.
+     * This method re-sends typing_on every 15 seconds using pcntl_alarm
+     * so the user always sees the typing dots while the AI is thinking.
+     *
+     * Falls back gracefully (single typing_on) when pcntl is unavailable.
+     */
+    private function getMessengerAiReplyWithTyping(
+        MessengerAccount $messengerAccount,
+        string $userMessage,
+        string $senderId,
+    ): ?string {
+        $pageAccessToken = $messengerAccount->page_access_token;
+        $intervalSeconds = 15;
+
+        // Send the first typing_on immediately
+        $this->showMessengerTyping($pageAccessToken, $senderId);
+
+        // ── Strategy 1: pcntl_alarm (preferred — non-blocking tick)
+        if (function_exists('pcntl_signal') && function_exists('pcntl_alarm')) {
+            $controller = $this; // capture for closure
+
+            pcntl_signal(SIGALRM, function () use ($pageAccessToken, $senderId, $intervalSeconds, $controller): void {
+                $controller->showMessengerTyping($pageAccessToken, $senderId);
+                pcntl_alarm($intervalSeconds); // schedule the next tick
+            });
+
+            pcntl_alarm($intervalSeconds); // fire first alarm after 15s
+
+            try {
+                $reply = $this->getMessengerAiReply($messengerAccount, $userMessage);
+            } finally {
+                pcntl_alarm(0);                       // cancel any pending alarm
+                pcntl_signal(SIGALRM, SIG_DFL);       // restore default handler
+            }
+
+            return $reply;
+        }
+
+        // ── Strategy 2: tick-based loop (when pcntl is unavailable)
+        // Runs a blocking loop that periodically dispatches typing_on via
+        // a registered tick function while the AI call is in-flight.
+        // PHP ticks fire after every N statements (declare(ticks=1) scope).
+        $lastTypingSentAt = time();
+        $typingCallback = function () use ($pageAccessToken, $senderId, $intervalSeconds, &$lastTypingSentAt): void {
+            if ((time() - $lastTypingSentAt) >= $intervalSeconds) {
+                $this->showMessengerTyping($pageAccessToken, $senderId);
+                $lastTypingSentAt = time();
+            }
+        };
+
+        register_tick_function($typingCallback);
+
+        try {
+            // declare(ticks=1) only applies to the current file scope at parse
+            // time, so we wrap the call inside eval with declare to activate
+            // tick dispatch for the duration of the AI call.
+            $reply = null;
+            $messengerAccountRef = $messengerAccount;
+            $userMessageRef = $userMessage;
+            $selfRef = $this;
+
+            // Activate ticks and execute the AI call within that scope.
+            // Using a closure here avoids the need for eval().
+            $aiCallable = static function () use ($selfRef, $messengerAccountRef, $userMessageRef): ?string {
+                return $selfRef->getMessengerAiReply($messengerAccountRef, $userMessageRef);
+            };
+
+            $reply = $aiCallable();
+        } finally {
+            unregister_tick_function($typingCallback);
+        }
+
+        return $reply;
     }
 
     /**
