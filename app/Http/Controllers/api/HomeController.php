@@ -50,12 +50,12 @@ class HomeController extends Controller
             'page_id' => 106565280821724
         ];
         try {
-            WhatsEvent::dispatch($new_chat);
+            MessengerEvent::dispatch($new_chat);
             return response()->json(['status' => 'success'], Response::HTTP_OK);
         } catch (\Throwable $broadcastException) { 
             return response()->json([
                 'status' => 'error',
-                'message' => 'WhatsEvent broadcast failed: '.$broadcastException->getMessage(),
+                'message' => 'MessengerEvent broadcast failed: '.$broadcastException->getMessage(),
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         } 
     }
@@ -472,9 +472,9 @@ class HomeController extends Controller
 
             // Broadcast to admin dashboard (non-blocking — failure must not stop AI reply)
             try {
-                WhatsEvent::dispatch($chatData);
+                MessengerEvent::dispatch($chatData);
             } catch (\Throwable $broadcastException) {
-                Log::warning('[MESSENGER] ⚠ WhatsEvent broadcast failed (non-fatal): '.$broadcastException->getMessage());
+                Log::warning('[MESSENGER] ⚠ MessengerEvent broadcast failed (non-fatal): '.$broadcastException->getMessage());
             }
 
             Log::channel('stack')->info('[MESSENGER] ✓ Customer message saved to DB');
