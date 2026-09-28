@@ -4,6 +4,7 @@ namespace App\Http\Controllers\api;
 
 use App\Events\TypingEvent;
 use App\Events\WhatsEvent;
+use App\Events\MessengerEvent;
 use App\Http\Controllers\Controller;
 use App\Models\Chat;
 use App\Models\Food;
