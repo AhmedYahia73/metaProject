@@ -1125,13 +1125,23 @@ class HomeController extends Controller
         string $recipientId,
     ): void {
         try {
-            Http::withToken($pageAccessToken)
+            $response = Http::withToken($pageAccessToken)
                 ->post(self::GRAPH_API_BASE.'/me/messages', [
                     'recipient' => ['id' => $recipientId],
                     'sender_action' => 'typing_on',
                 ]);
+
+            if (! $response->successful()) {
+                Log::channel('stack')->warning('[MESSENGER] ✗ typing_on failed', [
+                    'recipient_id' => $recipientId,
+                    'status' => $response->status(),
+                    'body' => $response->json(),
+                ]);
+            } else {
+                Log::channel('stack')->info('[MESSENGER] ✓ typing_on sent successfully to PSID: '.$recipientId);
+            }
         } catch (\Throwable $e) {
-            Log::warning('Messenger typing indicator failed: '.$e->getMessage());
+            Log::channel('stack')->warning('[MESSENGER] ⚠ typing_on exception: '.$e->getMessage());
         }
     }
 
