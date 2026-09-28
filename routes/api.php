@@ -28,6 +28,7 @@ Route::get('/user', function (Request $request) {
 })->middleware('auth:sanctum');
 
 // WhatsApp Webhook (public — Meta requires GET for verification + POST for messages)
+Route::get('/test_webhook', [HomeController::class, 'test_webhook']);
 Route::get('/web-hook', [HomeController::class, 'web_hook']);
 Route::post('/web-hook', [HomeController::class, 'web_hook']);
 

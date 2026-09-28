@@ -33,6 +33,18 @@ class HomeController extends Controller
      * Main webhook entry point.
      * Handles Meta verification challenges and incoming messages.
      */
+    public function test_webhook(Request $request): Response|JsonResponse
+    { 
+        try {
+            WhatsEvent::dispatch($new_chat);
+            return response()->json(['status' => 'success'], Response::HTTP_OK);
+        } catch (\Throwable $broadcastException) { 
+            return response()->json([
+                'status' => 'error',
+                'message' => 'WhatsEvent broadcast failed: '.$broadcastException->getMessage(),
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        } 
+    }
     public function web_hook(Request $request)
     {
         // 1. Handle Meta webhook verification (GET challenge)
