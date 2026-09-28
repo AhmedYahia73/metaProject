@@ -34,7 +34,21 @@ class HomeController extends Controller
      * Handles Meta verification challenges and incoming messages.
      */
     public function test_webhook(Request $request): Response|JsonResponse
-    { 
+    {   
+        $new_chat = [
+            'user_id' => 1,
+            'whats_item_id' => 1,
+            'name' => "Ahmed",
+            'phone' => "201206610346",
+            'message' => "Hello, this is a test message from the webhook.",
+            'is_image' => false,
+            'is_admin' => false,
+            'sender_type' => 'customer',
+            'is_read' => false,
+            'channel' => 'whatsapp',
+            'messenger_sender_id' => 29269086176028063,
+            'page_id' => 106565280821724
+        ];
         try {
             WhatsEvent::dispatch($new_chat);
             return response()->json(['status' => 'success'], Response::HTTP_OK);

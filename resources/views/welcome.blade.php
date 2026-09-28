@@ -127,7 +127,7 @@
             const senderId = document.getElementById('senderId').value.trim();
             if (!pageId || !senderId) { alert('ادخل Page ID و Sender ID'); return; }
 
-            const channelName = `userChat_${senderId}_${pageId}`;
+            const channelName = `userChat_29269086176028063_106565280821724`;
 
             window.Echo.channel(channelName)
                 .listen('.UserChatEvent', (data) => {
