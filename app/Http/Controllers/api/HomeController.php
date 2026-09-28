@@ -762,17 +762,18 @@ class HomeController extends Controller
         string $senderId,
     ): ?string {
         $pageAccessToken = $messengerAccount->page_access_token;
+        $pageId = $messengerAccount->page_id;
         $intervalSeconds = 15;
 
         // Send the first typing_on immediately
-        $this->showMessengerTyping($pageAccessToken, $senderId);
+        $this->showMessengerTyping($pageAccessToken, $senderId, $pageId);
 
         // ── Strategy 1: pcntl_alarm (preferred — non-blocking tick)
         if (function_exists('pcntl_signal') && function_exists('pcntl_alarm')) {
             $controller = $this; // capture for closure
 
-            pcntl_signal(SIGALRM, function () use ($pageAccessToken, $senderId, $intervalSeconds, $controller): void {
-                $controller->showMessengerTyping($pageAccessToken, $senderId);
+            pcntl_signal(SIGALRM, function () use ($pageAccessToken, $senderId, $pageId, $intervalSeconds, $controller): void {
+                $controller->showMessengerTyping($pageAccessToken, $senderId, $pageId);
                 pcntl_alarm($intervalSeconds); // schedule the next tick
             });
 
@@ -793,9 +794,9 @@ class HomeController extends Controller
         // a registered tick function while the AI call is in-flight.
         // PHP ticks fire after every N statements (declare(ticks=1) scope).
         $lastTypingSentAt = time();
-        $typingCallback = function () use ($pageAccessToken, $senderId, $intervalSeconds, &$lastTypingSentAt): void {
+        $typingCallback = function () use ($pageAccessToken, $senderId, $pageId, $intervalSeconds, &$lastTypingSentAt): void {
             if ((time() - $lastTypingSentAt) >= $intervalSeconds) {
-                $this->showMessengerTyping($pageAccessToken, $senderId);
+                $this->showMessengerTyping($pageAccessToken, $senderId, $pageId);
                 $lastTypingSentAt = time();
             }
         };
@@ -1118,15 +1119,30 @@ class HomeController extends Controller
     }
 
     /**
-     * Send Messenger typing_on sender action to show typing dots.
+     * Send Messenger mark_seen and typing_on sender actions.
+     * Note: mark_seen is required first so Messenger marks the incoming message read
+     * and displays the typing bubble to the user.
      */
     private function showMessengerTyping(
         string $pageAccessToken,
         string $recipientId,
+        ?string $pageId = null,
     ): void {
+        $endpoint = $pageId
+            ? self::GRAPH_API_BASE."/{$pageId}/messages"
+            : self::GRAPH_API_BASE.'/me/messages';
+
         try {
+            // 1. Mark incoming message as seen (read receipt)
+            Http::withToken($pageAccessToken)
+                ->post($endpoint, [
+                    'recipient' => ['id' => $recipientId],
+                    'sender_action' => 'mark_seen',
+                ]);
+
+            // 2. Show typing dots
             $response = Http::withToken($pageAccessToken)
-                ->post(self::GRAPH_API_BASE.'/me/messages', [
+                ->post($endpoint, [
                     'recipient' => ['id' => $recipientId],
                     'sender_action' => 'typing_on',
                 ]);
