@@ -334,7 +334,7 @@ class OrderController extends Controller
 
         $validated = $request->validate([
             'ai_context' => 'sometimes|nullable|string',
-            'ai_file' => 'sometimes|nullable',
+            'ai_file' => 'sometimes|nullable||file|mimes:txt,text,md|extensions:md|max:2048',
             'website_url' => 'sometimes|nullable|string|max:500',
         ]);
 

@@ -46,7 +46,7 @@ class WhatsItemController extends Controller
             'auto_request_code' => 'sometimes|boolean',
             'code_method' => 'sometimes|in:SMS,VOICE',
             'ai_context' => 'sometimes|nullable|string',
-            'ai_file' => 'sometimes|nullable',
+            'ai_file' => 'sometimes|nullable||file|mimes:txt,text,md|extensions:md|max:2048',
         ]);
 
         $phoneNumberId = null;

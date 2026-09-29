@@ -114,7 +114,7 @@ class MessengerAccountController extends Controller
             'page_access_token' => 'sometimes|string',
             'status' => 'sometimes|in:active,disabled',
             'ai_context' => 'sometimes|nullable|string',
-            'ai_file' => 'sometimes|nullable',
+            'ai_file' => 'sometimes|nullable||file|mimes:txt,text,md|extensions:md|max:2048',
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',

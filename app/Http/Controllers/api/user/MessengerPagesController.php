@@ -174,7 +174,7 @@ class MessengerPagesController extends Controller
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
             'ai_context' => 'sometimes|nullable|string',
-            'ai_file' => 'sometimes|nullable',
+            'ai_file' => 'sometimes|nullable||file|mimes:txt,text,md|extensions:md|max:2048',
         ], [
             'package_id.exists' => 'The selected package is invalid or not available for Facebook Messenger.',
         ]);
