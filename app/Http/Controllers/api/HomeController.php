@@ -229,6 +229,8 @@ class HomeController extends Controller
 
                 MsgSend::create([
                     'user_id' => $restaurant->id,
+                    'whats_item_id' => $whatsItem->id,
+                    'messenger_account_id' => null,
                     'channel' => 'whatsapp',
                 ]);
             } else {
@@ -550,6 +552,8 @@ class HomeController extends Controller
 
                 MsgSend::create([
                     'user_id' => $restaurant->id,
+                    'messenger_account_id' => $messengerAccount->id,
+                    'whats_item_id' => null,
                     'channel' => 'messenger',
                 ]);
 

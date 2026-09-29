@@ -16,6 +16,7 @@ use App\Http\Controllers\api\user\ChatController;
 use App\Http\Controllers\api\user\HomeController as UserHomeController;
 use App\Http\Controllers\api\user\MessengerPagesController;
 use App\Http\Controllers\api\user\WhatsPagesController;
+use App\Http\Controllers\api\user\UserOrderController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -95,6 +96,9 @@ Route::prefix('user')->group(function () {
         Route::post('chat/whatsapp/send', [ChatController::class, 'sendWhatsMessage']);
 
         Route::post('chat/mark-as-read', [ChatController::class, 'markAsRead']);
+
+        Route::get('pending_orders', [UserOrderController::class, 'pending_orders']);
+        Route::get('history_orders', [UserOrderController::class, 'history_orders']);
     });
 });
 

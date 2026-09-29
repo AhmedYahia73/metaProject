@@ -77,7 +77,29 @@ class WhatsPagesController extends Controller
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
-        $items = $user->whatsItems()->latest()->get();
+        $items = $user->whatsItems()->latest()->get()
+            ->map(function (WhatsItem $item) {
+                $subInfo = $item->getSubscriptionInfo();
+
+                return [
+                    'id' => $item->id,
+                    'user_id' => $item->user_id,
+                    'phone' => $item->phone,
+                    'phone_number_id' => $item->phone_number_id,
+                    'waba_id' => $item->waba_id,
+                    'access_token' => $item->access_token,
+                    'phone_status' => $item->phone_status,
+                    'phone_verified_at' => $item->phone_verified_at,
+                    'android_link' => $item->android_link,
+                    'ios_link' => $item->ios_link,
+                    'website_url' => $item->website_url,
+                    'msg_number' => $item->msg_number,
+                    'ai_context' => $item->ai_context,
+                    'ai_file' => $item->ai_file,
+                    'subscription_status' => $subInfo['subscription_status'],
+                    'available_msgs' => $subInfo['available_msgs'],
+                ];
+            });
 
         return response()->json([
             'status' => true,

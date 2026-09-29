@@ -14,6 +14,8 @@ class MsgSend extends Model
 
     protected $fillable = [
         'user_id',
+        'messenger_account_id',
+        'whats_item_id',
         'channel',
     ];
 
@@ -25,5 +27,25 @@ class MsgSend extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * Get the Messenger account that sent the message.
+     *
+     * @return BelongsTo<MessengerAccount, $this>
+     */
+    public function messengerAccount(): BelongsTo
+    {
+        return $this->belongsTo(MessengerAccount::class);
+    }
+
+    /**
+     * Get the WhatsApp item that sent the message.
+     *
+     * @return BelongsTo<WhatsItem, $this>
+     */
+    public function whatsItem(): BelongsTo
+    {
+        return $this->belongsTo(WhatsItem::class);
     }
 }

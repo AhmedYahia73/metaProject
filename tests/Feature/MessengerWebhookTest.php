@@ -233,9 +233,12 @@ test('messenger webhook processes message, gets AI reply, and sends messenger re
     expect($replyChat)->not->toBeNull();
     expect($replyChat->message)->toContain('أهلاً بك! كيف أقدر أساعدك اليوم؟');
 
-    // Messenger MsgSend recorded with correct channel
+    // Messenger MsgSend recorded with correct channel and messenger_account_id
     expect(
-        MsgSend::where('user_id', $restaurant->id)->where('channel', 'messenger')->count()
+        MsgSend::where('user_id', $restaurant->id)
+            ->where('messenger_account_id', $account->id)
+            ->where('channel', 'messenger')
+            ->count()
     )->toBe(1);
 
     // Messenger API called correctly (actual message, not typing indicator)

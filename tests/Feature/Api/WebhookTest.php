@@ -243,7 +243,12 @@ test('webhook processes incoming message, generates AI reply, and sends whatsapp
     expect($replyChat->message)->toBe('أهلاً بك في مطعمنا! كيف أقدر أساعدك؟');
 
     // Check message counter was recorded
-    expect(MsgSend::where('user_id', $restaurant->id)->count())->toBe(1);
+    expect(
+        MsgSend::where('user_id', $restaurant->id)
+            ->where('whats_item_id', $whatsItem->id)
+            ->where('channel', 'whatsapp')
+            ->count()
+    )->toBe(1);
 
     // Verify WhatsApp Graph API was called with the reply message
     Http::assertSent(function ($request) {

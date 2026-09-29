@@ -3,6 +3,8 @@
 use App\Models\Chat;
 use App\Models\MessengerAccount;
 use App\Models\MsgSend;
+use App\Models\Order;
+use App\Models\Package;
 use App\Models\User;
 use App\Models\WhatsItem;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -17,6 +19,35 @@ uses(RefreshDatabase::class);
 function createChatUser(): User
 {
     return User::factory()->create(['role' => 'user']);
+}
+
+function createActiveOrder(User $user, string $channel, MessengerAccount|WhatsItem $accountOrItem, int $msgs = 500): Order
+{
+    $package = Package::firstOrCreate(
+        ['id' => 1],
+        [
+            'name' => ['ar' => 'باقة تجريبية', 'en' => 'Test Package'],
+            'msg_number' => 1000,
+            'price' => 100,
+            'months' => 1,
+        ]
+    );
+
+    return Order::create([
+        'user_id' => $user->id,
+        'package_id' => $package->id,
+        'channel' => $channel,
+        'messenger_account_id' => $accountOrItem instanceof MessengerAccount ? $accountOrItem->id : null,
+        'whats_item_id' => $accountOrItem instanceof WhatsItem ? $accountOrItem->id : null,
+        'total_discount' => 0,
+        'total_tax' => 0,
+        'price' => 100,
+        'final_price' => 100,
+        'from' => now()->subDay()->toDateString(),
+        'to' => now()->addMonth()->toDateString(),
+        'msgs' => $msgs,
+        'status' => 'approved',
+    ]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -67,6 +98,8 @@ test('user can list their messenger pages with unread count, pagination and sear
         'read_at' => now(),
     ]);
 
+    createActiveOrder($user, 'messenger', $account1, 500);
+
     // 1. List all with pagination
     $response = $this->actingAs($user)
         ->getJson('/api/user/chat/messenger/pages?per_page=10');
@@ -75,7 +108,7 @@ test('user can list their messenger pages with unread count, pagination and sear
         ->assertJsonStructure([
             'status',
             'data' => [
-                '*' => ['id', 'page_id', 'page_name', 'status', 'unread_count', 'total_conversations'],
+                '*' => ['id', 'page_id', 'page_name', 'status', 'unread_count', 'total_conversations', 'subscription_status', 'available_msgs'],
             ],
             'pagination' => ['current_page', 'last_page', 'per_page', 'total'],
         ]);
@@ -84,6 +117,12 @@ test('user can list their messenger pages with unread count, pagination and sear
     $page1Data = $data->firstWhere('page_id', '11111111');
     expect($page1Data['unread_count'])->toBe(1);
     expect($page1Data['total_conversations'])->toBe(1);
+    expect($page1Data['subscription_status'])->toBeTrue();
+    expect($page1Data['available_msgs'])->toBe(500);
+
+    $page2Data = $data->firstWhere('page_id', '22222222');
+    expect($page2Data['subscription_status'])->toBeFalse();
+    expect($page2Data['available_msgs'])->toBe(0);
 
     // 2. Search by page name
     $searchResponse = $this->actingAs($user)
@@ -101,6 +140,7 @@ test('user can list conversations for a messenger page with search and paginatio
         'user_id' => $user->id,
         'page_id' => 'page_test_100',
     ]);
+    createActiveOrder($user, 'messenger', $account);
 
     // Conversation 1: Mahmoud
     Chat::create([
@@ -164,6 +204,7 @@ test('user viewing messenger messages auto-marks unread customer messages as rea
         'user_id' => $user->id,
         'page_id' => 'page_test_200',
     ]);
+    createActiveOrder($user, 'messenger', $account);
 
     $unreadChat = Chat::create([
         'user_id' => $user->id,
@@ -210,6 +251,7 @@ test('user can send manual message to messenger customer and decrements msg_numb
         'status' => 'active',
         'msg_number' => 10,
     ]);
+    createActiveOrder($user, 'messenger', $account);
 
     Http::fake([
         'https://graph.facebook.com/v21.0/me/messages' => Http::response([
@@ -256,6 +298,7 @@ test('user can send manual message to messenger customer and decrements msg_numb
     // MsgSend tracked
     $this->assertDatabaseHas('msg_sends', [
         'user_id' => $user->id,
+        'messenger_account_id' => $account->id,
         'channel' => 'messenger',
     ]);
 });
@@ -294,6 +337,8 @@ test('user can list their whats numbers with unread count, pagination and search
         'is_read' => false,
     ]);
 
+    createActiveOrder($user, 'whatsapp', $item1, 300);
+
     // 1. List with pagination
     $response = $this->actingAs($user)
         ->getJson('/api/user/chat/whatsapp/numbers?per_page=10');
@@ -302,7 +347,7 @@ test('user can list their whats numbers with unread count, pagination and search
         ->assertJsonStructure([
             'status',
             'data' => [
-                '*' => ['id', 'phone', 'phone_number_id', 'phone_status', 'unread_count', 'total_conversations'],
+                '*' => ['id', 'phone', 'phone_number_id', 'phone_status', 'unread_count', 'total_conversations', 'subscription_status', 'available_msgs'],
             ],
             'pagination',
         ]);
@@ -311,6 +356,12 @@ test('user can list their whats numbers with unread count, pagination and search
     $item1Data = $data->firstWhere('id', $item1->id);
     expect($item1Data['unread_count'])->toBe(1);
     expect($item1Data['total_conversations'])->toBe(1);
+    expect($item1Data['subscription_status'])->toBeTrue();
+    expect($item1Data['available_msgs'])->toBe(300);
+
+    $item2Data = $data->firstWhere('id', $item2->id);
+    expect($item2Data['subscription_status'])->toBeFalse();
+    expect($item2Data['available_msgs'])->toBe(0);
 
     // 2. Search by phone
     $searchResponse = $this->actingAs($user)
@@ -329,6 +380,7 @@ test('user can list conversations for a whats number with search and pagination'
         'phone' => '01055556666',
         'phone_status' => 'active',
     ]);
+    createActiveOrder($user, 'whatsapp', $item);
 
     // Conversation 1: Tamer
     Chat::create([
@@ -393,6 +445,7 @@ test('user viewing whats messages auto-marks unread customer messages as read', 
         'phone' => '01077778888',
         'phone_status' => 'active',
     ]);
+    createActiveOrder($user, 'whatsapp', $item);
 
     $unreadChat = Chat::create([
         'user_id' => $user->id,
@@ -439,6 +492,7 @@ test('user can send manual message to whats customer and decrements msg_number',
         'phone_status' => 'active',
         'msg_number' => 20,
     ]);
+    createActiveOrder($user, 'whatsapp', $item);
 
     Http::fake([
         'https://graph.facebook.com/v21.0/10987654321/messages' => Http::response([
@@ -485,6 +539,7 @@ test('user can send manual message to whats customer and decrements msg_number',
     // MsgSend tracked
     $this->assertDatabaseHas('msg_sends', [
         'user_id' => $user->id,
+        'whats_item_id' => $item->id,
         'channel' => 'whatsapp',
     ]);
 });
@@ -500,6 +555,7 @@ test('user can explicitly mark conversation as read via mark-as-read endpoint', 
         'user_id' => $user->id,
         'phone_status' => 'active',
     ]);
+    createActiveOrder($user, 'whatsapp', $item);
 
     Chat::create([
         'user_id' => $user->id,
@@ -542,4 +598,91 @@ test('user can explicitly mark conversation as read via mark-as-read endpoint', 
         ->count();
 
     expect($unreadRemaining)->toBe(0);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Subscription Enforcement Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('messenger chat endpoints return 403 forbidden without active subscription', function () {
+    $user = createChatUser();
+
+    $account = MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'page_id' => 'page_no_sub',
+        'status' => 'active',
+    ]);
+
+    // 1. messengerConversations
+    $this->actingAs($user)
+        ->getJson("/api/user/chat/messenger/conversations?page_id={$account->page_id}")
+        ->assertForbidden()
+        ->assertJson([
+            'status' => false,
+            'message' => 'Subscription required or message quota exceeded for this Messenger page.',
+        ]);
+
+    // 2. messengerMessages
+    $this->actingAs($user)
+        ->getJson("/api/user/chat/messenger/messages?page_id={$account->page_id}&sender_id=psid_999")
+        ->assertForbidden();
+
+    // 3. sendMessengerMessage
+    $this->actingAs($user)
+        ->postJson('/api/user/chat/messenger/send', [
+            'page_id' => $account->page_id,
+            'recipient_id' => 'psid_999',
+            'message' => 'Test message',
+        ])
+        ->assertForbidden();
+
+    // 4. markAsRead
+    $this->actingAs($user)
+        ->postJson('/api/user/chat/mark-as-read', [
+            'channel' => 'messenger',
+            'page_id' => $account->page_id,
+            'sender_id' => 'psid_999',
+        ])
+        ->assertForbidden();
+});
+
+test('whatsapp chat endpoints return 403 forbidden without active subscription', function () {
+    $user = createChatUser();
+
+    $item = WhatsItem::factory()->create([
+        'user_id' => $user->id,
+        'phone_status' => 'active',
+    ]);
+
+    // 1. whatsConversations
+    $this->actingAs($user)
+        ->getJson("/api/user/chat/whatsapp/conversations?whats_item_id={$item->id}")
+        ->assertForbidden()
+        ->assertJson([
+            'status' => false,
+            'message' => 'Subscription required or message quota exceeded for this WhatsApp number.',
+        ]);
+
+    // 2. whatsMessages
+    $this->actingAs($user)
+        ->getJson("/api/user/chat/whatsapp/messages?whats_item_id={$item->id}&phone=201099998888")
+        ->assertForbidden();
+
+    // 3. sendWhatsMessage
+    $this->actingAs($user)
+        ->postJson('/api/user/chat/whatsapp/send', [
+            'whats_item_id' => $item->id,
+            'phone' => '01098765432',
+            'message' => 'Test message',
+        ])
+        ->assertForbidden();
+
+    // 4. markAsRead
+    $this->actingAs($user)
+        ->postJson('/api/user/chat/mark-as-read', [
+            'channel' => 'whatsapp',
+            'whats_item_id' => $item->id,
+            'phone' => '201099998888',
+        ])
+        ->assertForbidden();
 });

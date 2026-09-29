@@ -42,7 +42,8 @@ class OrderController extends Controller
             'channel' => 'sometimes|in:whatsapp,messenger',
         ]);
 
-        $query = Order::with(['package:id,name', 'user:id,name,phone', 'whatsItem:id,phone'])->latest();
+        $query = Order::with(['package:id,name', 'user:id,name,phone', 
+        'whatsItem:id,phone', 'messengerAccount:id,page_name'])->latest();
 
         if ($request->filled('user_id')) {
             $query->where('user_id', $request->user_id);
@@ -105,6 +106,10 @@ class OrderController extends Controller
                     'id' => $order->whatsItem->id,
                     'phone' => $order->whatsItem->phone,
                 ] : null,
+                'messengerAccount' => [
+                    'id' => $order->id,
+                    'page_name' => $order->page_name,
+                ],
                 'created_at' => $order->created_at,
             ];
         };

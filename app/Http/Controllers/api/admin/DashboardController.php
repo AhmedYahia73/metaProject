@@ -75,6 +75,18 @@ class DashboardController extends Controller
             $msgSendQuery->whereDate('created_at', '<=', $periodTo);
         }
 
+        if ($request->filled('messenger_account_id')) {
+            $msgSendQuery->where('messenger_account_id', $request->messenger_account_id);
+        }
+
+        if ($request->filled('whats_item_id')) {
+            $msgSendQuery->where('whats_item_id', $request->whats_item_id);
+        }
+
+        if ($request->filled('channel')) {
+            $msgSendQuery->where('channel', $request->channel);
+        }
+
         $used = $msgSendQuery->count();
         $remaining = max(0, $totalAllocatedMsgs - $used);
 

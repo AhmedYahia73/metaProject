@@ -63,6 +63,8 @@ class ChatController extends Controller
                 ->distinct('messenger_sender_id')
                 ->count('messenger_sender_id');
 
+            $subInfo = $account->getSubscriptionInfo();
+
             return [
                 'id' => $account->id,
                 'page_id' => $account->page_id,
@@ -71,6 +73,8 @@ class ChatController extends Controller
                 'msg_number' => $account->msg_number,
                 'unread_count' => $unreadCount,
                 'total_conversations' => $totalConversations,
+                'subscription_status' => $subInfo['subscription_status'],
+                'available_msgs' => $subInfo['available_msgs'],
                 'created_at' => $account->created_at,
             ];
         };
@@ -113,6 +117,13 @@ class ChatController extends Controller
         $account = $user->messengerAccounts()
             ->where('page_id', $request->page_id)
             ->firstOrFail();
+
+        if (! $account->hasActiveSubscription()) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Subscription required or message quota exceeded for this Messenger page.',
+            ], Response::HTTP_FORBIDDEN);
+        }
 
         // Get distinct sender IDs for this page
         $allChats = Chat::where('user_id', $user->id)
@@ -198,6 +209,13 @@ class ChatController extends Controller
             ->where('page_id', $request->page_id)
             ->firstOrFail();
 
+        if (! $account->hasActiveSubscription()) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Subscription required or message quota exceeded for this Messenger page.',
+            ], Response::HTTP_FORBIDDEN);
+        }
+
         $senderId = $request->sender_id;
 
         // Auto mark unread customer messages as read
@@ -281,6 +299,13 @@ class ChatController extends Controller
             ->where('status', 'active')
             ->firstOrFail();
 
+        if (! $account->hasActiveSubscription()) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Subscription required or message quota exceeded for this Messenger page.',
+            ], Response::HTTP_FORBIDDEN);
+        }
+
         $recipientId = $validated['recipient_id'];
         $messageText = trim($validated['message']);
 
@@ -330,6 +355,7 @@ class ChatController extends Controller
 
         MsgSend::create([
             'user_id' => $user->id,
+            'messenger_account_id' => $account->id,
             'channel' => 'messenger',
         ]);
 
@@ -390,6 +416,8 @@ class ChatController extends Controller
                 ->distinct('phone')
                 ->count('phone');
 
+            $subInfo = $item->getSubscriptionInfo();
+
             return [
                 'id' => $item->id,
                 'phone' => $item->phone,
@@ -398,6 +426,8 @@ class ChatController extends Controller
                 'msg_number' => $item->msg_number,
                 'unread_count' => $unreadCount,
                 'total_conversations' => $totalConversations,
+                'subscription_status' => $subInfo['subscription_status'],
+                'available_msgs' => $subInfo['available_msgs'],
                 'created_at' => $item->created_at,
             ];
         };
@@ -438,6 +468,13 @@ class ChatController extends Controller
         ]);
 
         $item = $user->whatsItems()->findOrFail($request->whats_item_id);
+
+        if (! $item->hasActiveSubscription()) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Subscription required or message quota exceeded for this WhatsApp number.',
+            ], Response::HTTP_FORBIDDEN);
+        }
 
         $allChats = Chat::where('user_id', $user->id)
             ->where('whats_item_id', $item->id)
@@ -518,6 +555,13 @@ class ChatController extends Controller
         ]);
 
         $item = $user->whatsItems()->findOrFail($request->whats_item_id);
+
+        if (! $item->hasActiveSubscription()) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Subscription required or message quota exceeded for this WhatsApp number.',
+            ], Response::HTTP_FORBIDDEN);
+        }
         $customerPhone = $request->phone;
 
         // Auto mark unread customer messages as read
@@ -600,6 +644,13 @@ class ChatController extends Controller
             ->where('phone_status', 'active')
             ->findOrFail($validated['whats_item_id']);
 
+        if (! $item->hasActiveSubscription()) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Subscription required or message quota exceeded for this WhatsApp number.',
+            ], Response::HTTP_FORBIDDEN);
+        }
+
         $to = preg_replace('/[^0-9]/', '', $validated['phone']);
         if (strlen($to) === 11 && str_starts_with($to, '01')) {
             $to = '2'.$to;
@@ -655,6 +706,7 @@ class ChatController extends Controller
 
         MsgSend::create([
             'user_id' => $user->id,
+            'whats_item_id' => $item->id,
             'channel' => 'whatsapp',
         ]);
 
@@ -693,10 +745,26 @@ class ChatController extends Controller
 
         if ($validated['channel'] === 'messenger') {
             $account = $user->messengerAccounts()->where('page_id', $validated['page_id'])->firstOrFail();
+
+            if (! $account->hasActiveSubscription()) {
+                return response()->json([
+                    'status' => false,
+                    'message' => 'Subscription required or message quota exceeded for this Messenger page.',
+                ], Response::HTTP_FORBIDDEN);
+            }
+
             $query->where('messenger_account_id', $account->id)
                 ->where('messenger_sender_id', $validated['sender_id']);
         } else {
             $item = $user->whatsItems()->findOrFail($validated['whats_item_id']);
+
+            if (! $item->hasActiveSubscription()) {
+                return response()->json([
+                    'status' => false,
+                    'message' => 'Subscription required or message quota exceeded for this WhatsApp number.',
+                ], Response::HTTP_FORBIDDEN);
+            }
+
             $query->where('whats_item_id', $item->id)
                 ->where('phone', $validated['phone']);
         }

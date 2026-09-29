@@ -109,19 +109,28 @@ class MessengerPagesController extends Controller
         $rawPages = $response->json('data', []);
 
         // Mark pages that already have an active/pending Messenger account
-        $existingPageIds = MessengerAccount::where('user_id', $user->id)
-            ->pluck('status', 'page_id')
-            ->toArray();
+        $existingAccounts = MessengerAccount::where('user_id', $user->id)
+            ->get()
+            ->keyBy('page_id');
 
-        $pages = collect($rawPages)->map(function (array $page) use ($existingPageIds) {
+        $pages = collect($rawPages)->map(function (array $page) use ($existingAccounts) {
             $pageId = (string) $page['id'];
+            /** @var MessengerAccount|null $account */
+            $account = $existingAccounts->get($pageId);
+
+            $subInfo = $account ? $account->getSubscriptionInfo() : [
+                'subscription_status' => false,
+                'available_msgs' => 0,
+            ];
 
             return [
                 'page_id' => $pageId,
                 'page_name' => $page['name'] ?? null,
                 'page_category' => $page['category'] ?? null,
-                'already_linked' => isset($existingPageIds[$pageId]),
-                'linked_status' => $existingPageIds[$pageId] ?? null,
+                'already_linked' => $account !== null,
+                'linked_status' => $account?->status,
+                'subscription_status' => $subInfo['subscription_status'],
+                'available_msgs' => $subInfo['available_msgs'],
             ];
         })->values();
 
