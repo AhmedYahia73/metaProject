@@ -62,7 +62,7 @@ class SubscriperController extends Controller
             ->count();
             return [
                 'id' => $order->id,
-                'package_name' => $order->package?->name,
+                'package_name' => $order->package?->name['en'],
            
                 // 'user_id' => $order->user_id,
                 'user_name' => $order->user?->name,
