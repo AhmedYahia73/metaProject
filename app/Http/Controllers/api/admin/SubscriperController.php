@@ -63,18 +63,11 @@ class SubscriperController extends Controller
             return [
                 'id' => $order->id,
                 'package_name' => $order->package?->name,
-                'package' => [
-                    'id' => $order->package?->id,
-                    'name' => $order->package?->name,
-                ],
+           
                 'user_id' => $order->user_id,
                 'user_name' => $order->user?->name,
                 'user_phone' => $order->user?->phone,
-                'user' => [
-                    'id' => $order->user?->id,
-                    'name' => $order->user?->name,
-                    'phone' => $order->user?->phone,
-                ],
+         
                 'total_discount' => (float) $order->total_discount,
                 'total_tax' => (float) $order->total_tax,
                 'price' => (float) $order->price,
@@ -82,10 +75,7 @@ class SubscriperController extends Controller
                 'msgs' => (int) $order->msgs,
                 'from' => $order->from ? Carbon::parse($order->from)->toDateString() : null,
                 'to' => $order->to ? Carbon::parse($order->to)->toDateString() : null,
-                'status' => $order->status,
                 'channel' => $order->channel,
-                'messenger_account_id' => $order->messenger_account_id,
-                'whats_item_id' => $order->whats_item_id,
                 'whats_item' => $order->whatsItem ? [
                     'id' => $order->whatsItem->id,
                     'phone' => $order->whatsItem->phone,
@@ -94,7 +84,6 @@ class SubscriperController extends Controller
                     'id' => $order->id,
                     'page_name' => $order->page_name,
                 ],
-                'created_at' => $order->created_at,
                 "send_msgs" => $send_msgs,
                 "available_msgs" => (int) $order->msgs - $send_msgs,
             ];
