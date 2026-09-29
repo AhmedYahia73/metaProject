@@ -107,6 +107,18 @@ class WhatsPagesController extends Controller
         ]);
     }
 
+    public function ai_data($id){
+         
+
+        $data = WhatsItem::
+        findOrFail($id);
+
+        return response()->json([
+            "ai_context" => $data->ai_context,
+            "ai_file" => $data->ai_file,
+        ]);
+    }
+
     /**
      * Alias for index to match route 'whats/pages'.
      */

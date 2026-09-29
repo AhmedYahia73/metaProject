@@ -67,11 +67,13 @@ Route::prefix('user')->group(function () {
         Route::get('dashboard', [UserHomeController::class, 'index']);
 
         // Messenger Self-Service — list pages & request subscription
+        Route::post('messenger/ai_data', [MessengerPagesController::class, 'ai_data']);
         Route::get('messenger/facebook_packages', [MessengerPagesController::class, 'facebook_packages']);
         Route::get('messenger/pages', [MessengerPagesController::class, 'pages']);
         Route::post('messenger/orders', [MessengerPagesController::class, 'requestSubscription']);
 
         // WhatsApp Self-Service — list numbers, add number, OTP activation, and request subscription
+        Route::get('whats/ai_data/{id}', [WhatsPagesController::class, 'whats_ai_data']);
         Route::get('whats/packages', [WhatsPagesController::class, 'whats_packages']);
         Route::get('whats/pages', [WhatsPagesController::class, 'pages']);
         Route::get('whats/items', [WhatsPagesController::class, 'index']);
