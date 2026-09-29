@@ -10,6 +10,7 @@ use App\Http\Controllers\api\admin\SettingController;
 use App\Http\Controllers\api\admin\TaxController;
 use App\Http\Controllers\api\admin\UserController;
 use App\Http\Controllers\api\admin\WhatsItemController as AdminWhatsItemController;
+use App\Http\Controllers\api\admin\SubscriperController;
 use App\Http\Controllers\api\auth\LoginController;
 use App\Http\Controllers\api\HomeController;
 use App\Http\Controllers\api\user\ChatController;
@@ -110,7 +111,9 @@ Route::prefix('user')->group(function () {
 |--------------------------------------------------------------------------
 */
 Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function () {
-    // Dashboard Statistics
+    // Dashboard Statistics 
+    Route::get('subscripers', [SubscriperController::class, 'subscripers']);
+    
     Route::get('user_lists', [DashboardController::class, 'user_lists']);
     Route::get('dashboard', [DashboardController::class, 'index']);
 
