@@ -14,7 +14,7 @@ use App\Models\Order;
 
 class SubscriperController extends Controller
 {
-    public function subscripers(){
+    public function subscripers(Request $request){
 
         $request->validate([
             'page' => 'sometimes|integer|min:1',
