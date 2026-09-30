@@ -110,7 +110,7 @@ return [
     */
 
     'from' => [
-        'address' => env('MAIL_FROM_ADDRESS', env('SMTP_USER', 'keetofoodapp@keeto.org')),
+        'address' => env('MAIL_FROM_ADDRESS', env('EMAIL_FROM', env('SMTP_USER', 'keetofoodapp@keeto.org'))),
         'name' => env('MAIL_FROM_NAME', 'Keeto Food App'),
     ],
 
@@ -119,6 +119,6 @@ return [
     | Admin / Contact Us Notification Recipient Email
     |--------------------------------------------------------------------------
     */
-    'my_email' => env('My_Email', 'ahmedahmadahmid73@gmail.com'),
+    'my_email' => env('My_Email', env('MY_EMAIL', env('MAIL_TO', env('EMAIL_TO', env('MAIL_FROM_ADDRESS', env('SMTP_USER', 'ahmedahmadahmid73@gmail.com')))))),
 
 ];

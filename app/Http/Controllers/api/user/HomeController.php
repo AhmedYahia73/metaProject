@@ -11,6 +11,7 @@ use App\Models\Package;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Mail\SentMessage;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Symfony\Component\HttpFoundation\Response;
@@ -186,17 +187,82 @@ class HomeController extends Controller
      */
     public function contactUs(ContactUsRequest $request): JsonResponse
     {
-        $recipient = config('mail.my_email', env('My_Email', 'ahmedahmadahmid73@gmail.com'));
+        $recipient = config('mail.my_email')
+            ?: env('My_Email')
+            ?: env('MY_EMAIL')
+            ?: env('MAIL_TO')
+            ?: env('EMAIL_TO')
+            ?: config('mail.from.address')
+            ?: 'ahmedahmadahmid73@gmail.com';
+
+        $activeMailer = config('mail.default');
+        $fromAddress = config('mail.from.address');
+        $fromName = config('mail.from.name');
+
+        Log::channel('stack')->info('[CONTACT_US] 🚀 Preparing to send Contact Us email', [
+            'active_mailer' => $activeMailer,
+            'recipient' => $recipient,
+            'from_address' => $fromAddress,
+            'from_name' => $fromName,
+            'smtp_host' => config('mail.mailers.smtp.host'),
+            'smtp_port' => config('mail.mailers.smtp.port'),
+            'smtp_encryption' => config('mail.mailers.smtp.encryption'),
+            'smtp_username' => config('mail.mailers.smtp.username'),
+            'smtp_verify_peer' => config('mail.mailers.smtp.verify_peer'),
+            'form_data' => [
+                'name' => trim(($request->f_name ?? '').' '.($request->l_name ?? '')),
+                'email' => $request->email,
+                'phone' => $request->phone,
+            ],
+        ]);
+
+        if ($activeMailer === 'log') {
+            Log::channel('stack')->warning('[CONTACT_US] ⚠️ MAIL_MAILER is set to "log"! The email was NOT sent to the SMTP server. It was written to storage/logs/laravel.log. Run "php artisan config:clear" on your server if you updated .env to smtp.');
+        } elseif ($activeMailer === 'array') {
+            Log::channel('stack')->warning('[CONTACT_US] ⚠️ MAIL_MAILER is set to "array"! The email was only captured in memory.');
+        }
 
         try {
-            Mail::to($recipient)->send(new ContactUsMail($request->validated()));
+            /** @var SentMessage|null $sentMessage */
+            $sentMessage = Mail::to($recipient)->send(new ContactUsMail($request->validated()));
+
+            $debugOutput = $sentMessage?->getDebug();
+            $messageId = $sentMessage?->getMessageId();
+
+            Log::channel('stack')->info('[CONTACT_US] ✅ Mail::send() executed successfully', [
+                'active_mailer' => $activeMailer,
+                'recipient' => $recipient,
+                'from_address' => $fromAddress,
+                'message_id' => $messageId,
+                'has_sent_message' => $sentMessage !== null,
+                'smtp_debug' => $debugOutput,
+            ]);
 
             return response()->json([
                 'status' => true,
                 'message' => 'Your message has been sent successfully.',
+                'diagnostic' => [
+                    'mailer' => $activeMailer,
+                    'recipient' => $recipient,
+                    'from' => $fromAddress,
+                    'message_id' => $messageId,
+                    'is_smtp' => $activeMailer === 'smtp',
+                    'note' => $activeMailer === 'log'
+                        ? 'MAIL_MAILER is "log". Email was saved to storage/logs/laravel.log rather than sent to SMTP. Run "php artisan config:clear".'
+                        : 'Email was handed off to the configured mailer.',
+                ],
             ]);
         } catch (\Throwable $e) {
-            Log::error('Failed to send Contact Us email: '.$e->getMessage(), [
+            Log::channel('stack')->error('[CONTACT_US] ❌ Mail sending failed with exception: '.$e->getMessage(), [
+                'exception_class' => get_class($e),
+                'code' => $e->getCode(),
+                'file' => $e->getFile().':'.$e->getLine(),
+                'mailer' => $activeMailer,
+                'recipient' => $recipient,
+                'from_address' => $fromAddress,
+                'smtp_host' => config('mail.mailers.smtp.host'),
+                'smtp_port' => config('mail.mailers.smtp.port'),
+                'smtp_username' => config('mail.mailers.smtp.username'),
                 'trace' => $e->getTraceAsString(),
             ]);
 
@@ -204,6 +270,11 @@ class HomeController extends Controller
                 'status' => false,
                 'message' => 'Failed to send message. Please try again later.',
                 'error' => $e->getMessage(),
+                'diagnostic' => [
+                    'mailer' => $activeMailer,
+                    'recipient' => $recipient,
+                    'exception' => get_class($e),
+                ],
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }
