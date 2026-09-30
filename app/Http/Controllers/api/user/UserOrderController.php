@@ -22,11 +22,11 @@ class UserOrderController extends Controller
             'user_id' => 'sometimes|exists:users,id',
             'package_id' => 'sometimes|exists:packages,id',
             'search' => 'sometimes|string|max:255',
-            'channel' => 'sometimes|in:whatsapp,messenger',
+            'channel' => 'sometimes|in:whatsapp,messenger,instagram',
         ]);
 
         $query = Order::with(['package:id,name', 'user:id,name,phone', 
-        'whatsItem:id,phone', 'messengerAccount:id,page_name'])->latest();
+        'whatsItem:id,phone', 'messengerAccount:id,page_name', 'instagramItem:id,username,name'])->latest();
 
         if ($request->filled('user_id')) {
             $query->where('user_id', $request->user_id);
@@ -82,14 +82,20 @@ class UserOrderController extends Controller
                 'channel' => $order->channel,
                 'messenger_account_id' => $order->messenger_account_id,
                 'whats_item_id' => $order->whats_item_id,
+                'instagram_item_id' => $order->instagram_item_id,
                 'whats_item' => $order->whatsItem ? [
                     'id' => $order->whatsItem->id,
                     'phone' => $order->whatsItem->phone,
                 ] : null,
-                'messengerAccount' => [
-                    'id' => $order->id,
-                    'page_name' => $order->page_name,
-                ],
+                'messengerAccount' => $order->messengerAccount ? [
+                    'id' => $order->messengerAccount->id,
+                    'page_name' => $order->messengerAccount->page_name,
+                ] : null,
+                'instagram_item' => $order->instagramItem ? [
+                    'id' => $order->instagramItem->id,
+                    'username' => $order->instagramItem->username,
+                    'name' => $order->instagramItem->name,
+                ] : null,
                 'created_at' => $order->created_at,
             ];
         };
@@ -128,11 +134,11 @@ class UserOrderController extends Controller
             'package_id' => 'sometimes|exists:packages,id',
             'search' => 'sometimes|string|max:255',
             'status' => 'sometimes|in:approved,rejected',
-            'channel' => 'sometimes|in:whatsapp,messenger',
+            'channel' => 'sometimes|in:whatsapp,messenger,instagram',
         ]);
 
         $query = Order::with(['package:id,name', 'user:id,name,phone', 
-        'whatsItem:id,phone', 'messengerAccount:id,page_name'])
+        'whatsItem:id,phone', 'messengerAccount:id,page_name', 'instagramItem:id,username,name'])
         ->where("status", "!=", "pending")->latest();
 
         if ($request->filled('user_id')) {
@@ -191,14 +197,20 @@ class UserOrderController extends Controller
                 'channel' => $order->channel,
                 'messenger_account_id' => $order->messenger_account_id,
                 'whats_item_id' => $order->whats_item_id,
+                'instagram_item_id' => $order->instagram_item_id,
                 'whats_item' => $order->whatsItem ? [
                     'id' => $order->whatsItem->id,
                     'phone' => $order->whatsItem->phone,
                 ] : null,
-                'messengerAccount' => [
-                    'id' => $order->id,
-                    'page_name' => $order->page_name,
-                ],
+                'messengerAccount' => $order->messengerAccount ? [
+                    'id' => $order->messengerAccount->id,
+                    'page_name' => $order->messengerAccount->page_name,
+                ] : null,
+                'instagram_item' => $order->instagramItem ? [
+                    'id' => $order->instagramItem->id,
+                    'username' => $order->instagramItem->username,
+                    'name' => $order->instagramItem->name,
+                ] : null,
                 'created_at' => $order->created_at,
             ];
         };

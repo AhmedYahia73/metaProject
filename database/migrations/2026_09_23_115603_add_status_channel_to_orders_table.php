@@ -13,7 +13,7 @@ return new class extends Migration
             $table->enum('status', ['pending', 'approved', 'rejected'])->default('pending')->after('msgs');
 
             // Which channel this order activates
-            $table->enum('channel', ['whatsapp', 'messenger'])->default('whatsapp')->after('status');
+            $table->enum('channel', ['whatsapp', 'messenger', 'instagram'])->default('whatsapp')->after('status');
 
             // Link to the messenger page this order activates (null for whatsapp orders)
             $table->foreignId('messenger_account_id')

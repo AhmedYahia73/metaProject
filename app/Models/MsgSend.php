@@ -16,6 +16,7 @@ class MsgSend extends Model
         'user_id',
         'messenger_account_id',
         'whats_item_id',
+        'instagram_item_id',
         'channel',
     ];
 
@@ -47,5 +48,15 @@ class MsgSend extends Model
     public function whatsItem(): BelongsTo
     {
         return $this->belongsTo(WhatsItem::class);
+    }
+
+    /**
+     * Get the Instagram item that sent the message.
+     *
+     * @return BelongsTo<InstagramItem, $this>
+     */
+    public function instagramItem(): BelongsTo
+    {
+        return $this->belongsTo(InstagramItem::class);
     }
 }

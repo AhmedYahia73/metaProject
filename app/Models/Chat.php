@@ -15,6 +15,7 @@ class Chat extends Model
         'user_id',
         'messenger_account_id',
         'whats_item_id',
+        'instagram_item_id',
         'name',
         'phone',
         'message',
@@ -24,6 +25,7 @@ class Chat extends Model
         'read_at',
         'channel',
         'messenger_sender_id',
+        'instagram_sender_id',
         'sender_type',
         'meta_message_id',
     ];
@@ -75,6 +77,16 @@ class Chat extends Model
     public function whatsItem(): BelongsTo
     {
         return $this->belongsTo(WhatsItem::class);
+    }
+
+    /**
+     * Get the Instagram item associated with this message.
+     *
+     * @return BelongsTo<InstagramItem, $this>
+     */
+    public function instagramItem(): BelongsTo
+    {
+        return $this->belongsTo(InstagramItem::class);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

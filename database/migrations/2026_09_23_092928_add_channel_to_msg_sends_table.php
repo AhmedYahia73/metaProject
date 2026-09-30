@@ -12,7 +12,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('msg_sends', function (Blueprint $table) {
-            $table->enum('channel', ['whatsapp', 'messenger'])->default('whatsapp')->after('user_id');
+            $table->enum('channel', ['whatsapp', 'messenger', 'instagram'])->default('whatsapp')->after('user_id');
         });
     }
 

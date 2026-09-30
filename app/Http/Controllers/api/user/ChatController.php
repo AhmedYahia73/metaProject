@@ -4,6 +4,7 @@ namespace App\Http\Controllers\api\user;
 
 use App\Http\Controllers\Controller;
 use App\Models\Chat;
+use App\Models\InstagramItem;
 use App\Models\MessengerAccount;
 use App\Models\MsgSend;
 use App\Models\WhatsItem;
@@ -723,6 +724,348 @@ class ChatController extends Controller
         ], Response::HTTP_CREATED);
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Instagram Endpoints
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * List all Instagram accounts for the authenticated user with conversation counts & unread counters.
+     */
+    public function instagramAccounts(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $request->validate([
+            'page' => 'sometimes|integer|min:1',
+            'per_page' => 'sometimes|integer|min:1|max:100',
+            'search' => 'sometimes|string|max:255',
+            'paginate' => 'sometimes|boolean',
+        ]);
+
+        $query = $user->instagramItems()->latest();
+
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                    ->orWhere('username', 'like', "%{$search}%")
+                    ->orWhere('instagram_id', 'like', "%{$search}%");
+            });
+        }
+
+        $isPaginated = $request->boolean('paginate', true);
+        $perPage = $request->integer('per_page', 15);
+
+        $transform = function (InstagramItem $item) use ($user) {
+            $unreadCount = Chat::where('user_id', $user->id)
+                ->where('instagram_item_id', $item->id)
+                ->unread()
+                ->count();
+
+            $totalConversations = Chat::where('user_id', $user->id)
+                ->where('instagram_item_id', $item->id)
+                ->whereNotNull('instagram_sender_id')
+                ->distinct('instagram_sender_id')
+                ->count('instagram_sender_id');
+
+            $subInfo = $item->getSubscriptionInfo();
+
+            return [
+                'id' => $item->id,
+                'instagram_id' => $item->instagram_id,
+                'username' => $item->username,
+                'name' => $item->name,
+                'profile_picture_url' => $item->profile_picture_url,
+                'status' => $item->status,
+                'msg_number' => $item->msg_number,
+                'unread_count' => $unreadCount,
+                'total_conversations' => $totalConversations,
+                'subscription_status' => $subInfo['subscription_status'],
+                'available_msgs' => $subInfo['available_msgs'],
+                'created_at' => $item->created_at,
+            ];
+        };
+
+        if ($isPaginated) {
+            $items = $query->paginate($perPage);
+            $items->through($transform);
+
+            return response()->json([
+                'status' => true,
+                'data' => $items->items(),
+                'pagination' => $this->extractPaginationMeta($items),
+            ]);
+        }
+
+        $items = $query->get()->map($transform);
+
+        return response()->json([
+            'status' => true,
+            'data' => $items,
+        ]);
+    }
+
+    /**
+     * List customer conversations for a specific Instagram account.
+     */
+    public function instagramConversations(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $request->validate([
+            'instagram_item_id' => 'required|integer',
+            'search' => 'sometimes|string|max:255',
+            'page' => 'sometimes|integer|min:1',
+            'per_page' => 'sometimes|integer|min:1|max:100',
+            'paginate' => 'sometimes|boolean',
+        ]);
+
+        $item = $user->instagramItems()
+            ->findOrFail($request->instagram_item_id);
+
+        if (! $item->hasActiveSubscription()) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Subscription required or message quota exceeded for this Instagram account.',
+            ], Response::HTTP_FORBIDDEN);
+        }
+
+        $allChats = Chat::where('user_id', $user->id)
+            ->where('instagram_item_id', $item->id)
+            ->whereNotNull('instagram_sender_id')
+            ->orderBy('id', 'desc')
+            ->get();
+
+        $grouped = $allChats->groupBy('instagram_sender_id');
+
+        $conversations = $grouped->map(function (Collection $chats, string $senderId) {
+            $latest = $chats->first();
+            $customerName = $chats->firstWhere('name', '!==', null)?->name ?? 'Instagram User';
+            $unreadCount = $chats->where('is_admin', false)->where('is_read', false)->count();
+
+            return [
+                'sender_id' => $senderId,
+                'name' => $customerName,
+                'last_message' => $latest->message,
+                'last_message_at' => $latest->created_at?->toDateTimeString(),
+                'last_sender_type' => $latest->sender_type ?: ($latest->is_admin ? 'bot' : 'customer'),
+                'unread_count' => $unreadCount,
+            ];
+        })->values();
+
+        if ($request->filled('search')) {
+            $search = mb_strtolower(trim($request->search));
+            $conversations = $conversations->filter(function ($conv) use ($search) {
+                return str_contains(mb_strtolower((string) $conv['name']), $search)
+                    || str_contains((string) $conv['sender_id'], $search)
+                    || str_contains(mb_strtolower((string) $conv['last_message']), $search);
+            })->values();
+        }
+
+        $conversations = $conversations->sortByDesc('last_message_at')->values();
+
+        $isPaginated = $request->boolean('paginate', true);
+        $perPage = $request->integer('per_page', 15);
+        $page = $request->integer('page', 1);
+
+        if ($isPaginated) {
+            $result = $this->paginateCollection($conversations, $perPage, $page, $request);
+
+            return response()->json([
+                'status' => true,
+                'instagram_item_id' => $item->id,
+                'username' => $item->username,
+                'data' => $result['data'],
+                'pagination' => $result['pagination'],
+            ]);
+        }
+
+        return response()->json([
+            'status' => true,
+            'instagram_item_id' => $item->id,
+            'username' => $item->username,
+            'data' => $conversations,
+        ]);
+    }
+
+    /**
+     * View message history between the restaurant and an Instagram user.
+     */
+    public function instagramMessages(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $request->validate([
+            'instagram_item_id' => 'required|integer',
+            'sender_id' => 'required|string',
+            'search' => 'sometimes|string|max:255',
+            'page' => 'sometimes|integer|min:1',
+            'per_page' => 'sometimes|integer|min:1|max:100',
+            'paginate' => 'sometimes|boolean',
+        ]);
+
+        $item = $user->instagramItems()
+            ->findOrFail($request->instagram_item_id);
+
+        if (! $item->hasActiveSubscription()) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Subscription required or message quota exceeded for this Instagram account.',
+            ], Response::HTTP_FORBIDDEN);
+        }
+
+        $senderId = $request->sender_id;
+
+        // Auto mark unread as read
+        Chat::where('user_id', $user->id)
+            ->where('instagram_item_id', $item->id)
+            ->where('instagram_sender_id', $senderId)
+            ->where('is_admin', false)
+            ->unread()
+            ->update([
+                'is_read' => true,
+                'read_at' => now(),
+            ]);
+
+        $query = Chat::where('user_id', $user->id)
+            ->where('instagram_item_id', $item->id)
+            ->where('instagram_sender_id', $senderId)
+            ->orderBy('id', 'asc');
+
+        if ($request->filled('search')) {
+            $query->where('message', 'like', "%{$request->search}%");
+        }
+
+        $isPaginated = $request->boolean('paginate', true);
+        $perPage = $request->integer('per_page', 50);
+
+        $transform = function (Chat $chat) {
+            return [
+                'id' => $chat->id,
+                'message' => $chat->message,
+                'is_image' => (bool) $chat->is_image,
+                'is_admin' => (bool) $chat->is_admin,
+                'sender_type' => $chat->sender_type ?: ($chat->is_admin ? 'bot' : 'customer'),
+                'is_read' => (bool) $chat->is_read,
+                'read_at' => $chat->read_at?->toDateTimeString(),
+                'created_at' => $chat->created_at?->toDateTimeString(),
+            ];
+        };
+
+        if ($isPaginated) {
+            $messages = $query->paginate($perPage);
+            $messages->through($transform);
+
+            return response()->json([
+                'status' => true,
+                'instagram_item_id' => $item->id,
+                'username' => $item->username,
+                'sender_id' => $senderId,
+                'data' => $messages->items(),
+                'pagination' => $this->extractPaginationMeta($messages),
+            ]);
+        }
+
+        $messages = $query->get()->map($transform);
+
+        return response()->json([
+            'status' => true,
+            'instagram_item_id' => $item->id,
+            'username' => $item->username,
+            'sender_id' => $senderId,
+            'data' => $messages,
+        ]);
+    }
+
+    /**
+     * Send a manual reply to an Instagram customer.
+     */
+    public function sendInstagramMessage(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $validated = $request->validate([
+            'instagram_item_id' => 'required|integer',
+            'recipient_id' => 'required|string',
+            'message' => 'required|string|max:2000',
+        ]);
+
+        $item = $user->instagramItems()
+            ->where('status', 'active')
+            ->findOrFail($validated['instagram_item_id']);
+
+        if (! $item->hasActiveSubscription()) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Subscription required or message quota exceeded for this Instagram account.',
+            ], Response::HTTP_FORBIDDEN);
+        }
+
+        $recipientId = $validated['recipient_id'];
+        $messageText = trim($validated['message']);
+
+        // Send via Meta Send API
+        $response = Http::withToken($item->access_token)
+            ->post(self::GRAPH_API_BASE.'/me/messages', [
+                'recipient' => ['id' => $recipientId],
+                'message' => ['text' => $messageText],
+            ]);
+
+        if (! $response->successful()) {
+            Log::error('Instagram manual send failed', [
+                'instagram_item_id' => $item->id,
+                'recipient_id' => $recipientId,
+                'status' => $response->status(),
+                'body' => $response->json(),
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'message' => 'Failed to send message via Instagram API.',
+                'meta_error' => $response->json('error.message', 'Unknown Meta API error'),
+            ], Response::HTTP_BAD_GATEWAY);
+        }
+
+        // Deduct quota if account has limited msgs
+        if ((int) $item->msg_number > 0) {
+            $item->decrement('msg_number');
+        }
+
+        $chat = Chat::create([
+            'user_id' => $user->id,
+            'instagram_item_id' => $item->id,
+            'name' => 'Instagram User',
+            'phone' => null,
+            'message' => $messageText,
+            'is_image' => false,
+            'is_admin' => true,
+            'sender_type' => 'agent',
+            'is_read' => true,
+            'read_at' => now(),
+            'channel' => 'instagram',
+            'instagram_sender_id' => $recipientId,
+            'meta_message_id' => data_get($response->json(), 'message_id'),
+        ]);
+
+        MsgSend::create([
+            'user_id' => $user->id,
+            'instagram_item_id' => $item->id,
+            'channel' => 'instagram',
+        ]);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Instagram message sent successfully.',
+            'data' => [
+                'id' => $chat->id,
+                'message' => $chat->message,
+                'sender_type' => 'agent',
+                'is_read' => true,
+                'created_at' => $chat->created_at?->toDateTimeString(),
+            ],
+        ], Response::HTTP_CREATED);
+    }
+
     /**
      * Manually mark conversation or specific messages as read.
      */
@@ -731,10 +1074,11 @@ class ChatController extends Controller
         $user = $request->user();
 
         $validated = $request->validate([
-            'channel' => 'required|in:messenger,whatsapp',
+            'channel' => 'required|in:messenger,whatsapp,instagram',
             'page_id' => 'required_if:channel,messenger|string',
-            'sender_id' => 'required_if:channel,messenger|string',
+            'sender_id' => 'required_if:channel,messenger,instagram|string',
             'whats_item_id' => 'required_if:channel,whatsapp|integer',
+            'instagram_item_id' => 'required_if:channel,instagram|integer',
             'phone' => 'required_if:channel,whatsapp|string',
         ]);
 
@@ -755,6 +1099,18 @@ class ChatController extends Controller
 
             $query->where('messenger_account_id', $account->id)
                 ->where('messenger_sender_id', $validated['sender_id']);
+        } elseif ($validated['channel'] === 'instagram') {
+            $item = $user->instagramItems()->findOrFail($validated['instagram_item_id']);
+
+            if (! $item->hasActiveSubscription()) {
+                return response()->json([
+                    'status' => false,
+                    'message' => 'Subscription required or message quota exceeded for this Instagram account.',
+                ], Response::HTTP_FORBIDDEN);
+            }
+
+            $query->where('instagram_item_id', $item->id)
+                ->where('instagram_sender_id', $validated['sender_id']);
         } else {
             $item = $user->whatsItems()->findOrFail($validated['whats_item_id']);
 

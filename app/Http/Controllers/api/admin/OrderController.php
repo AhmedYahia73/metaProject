@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\api\admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\InstagramItem;
 use App\Models\MessengerAccount;
 use App\Models\Order;
 use App\Models\Package;
@@ -39,11 +40,11 @@ class OrderController extends Controller
             'search' => 'sometimes|string|max:255',
             'paginate' => 'sometimes|boolean',
             'status' => 'sometimes|in:pending,approved,rejected',
-            'channel' => 'sometimes|in:whatsapp,messenger',
+            'channel' => 'sometimes|in:whatsapp,messenger,instagram',
         ]);
 
         $query = Order::with(['package:id,name', 'user:id,name,phone', 
-        'whatsItem:id,phone', 'messengerAccount:id,page_name'])->latest();
+        'whatsItem:id,phone', 'messengerAccount:id,page_name', 'instagramItem:id,username,name'])->latest();
 
         if ($request->filled('user_id')) {
             $query->where('user_id', $request->user_id);
@@ -102,14 +103,20 @@ class OrderController extends Controller
                 'channel' => $order->channel,
                 'messenger_account_id' => $order->messenger_account_id,
                 'whats_item_id' => $order->whats_item_id,
+                'instagram_item_id' => $order->instagram_item_id,
                 'whats_item' => $order->whatsItem ? [
                     'id' => $order->whatsItem->id,
                     'phone' => $order->whatsItem->phone,
                 ] : null,
-                'messengerAccount' => [
-                    'id' => $order->id,
-                    'page_name' => $order->page_name,
-                ],
+                'messengerAccount' => $order->messengerAccount ? [
+                    'id' => $order->messengerAccount->id,
+                    'page_name' => $order->messengerAccount->page_name,
+                ] : null,
+                'instagram_item' => $order->instagramItem ? [
+                    'id' => $order->instagramItem->id,
+                    'username' => $order->instagramItem->username,
+                    'name' => $order->instagramItem->name,
+                ] : null,
                 'created_at' => $order->created_at,
             ];
         };
@@ -280,7 +287,7 @@ class OrderController extends Controller
      */
     public function show(Order $order): JsonResponse
     {
-        $order->load(['package:id,name', 'user:id,name,phone', 'whatsItem:id,phone']);
+        $order->load(['package:id,name', 'user:id,name,phone', 'whatsItem:id,phone', 'messengerAccount:id,page_name', 'instagramItem:id,username,name']);
 
         return response()->json([
             'status' => true,
@@ -302,9 +309,19 @@ class OrderController extends Controller
                 'channel' => $order->channel,
                 'messenger_account_id' => $order->messenger_account_id,
                 'whats_item_id' => $order->whats_item_id,
+                'instagram_item_id' => $order->instagram_item_id,
                 'whats_item' => $order->whatsItem ? [
                     'id' => $order->whatsItem->id,
                     'phone' => $order->whatsItem->phone,
+                ] : null,
+                'messenger_account' => $order->messengerAccount ? [
+                    'id' => $order->messengerAccount->id,
+                    'page_name' => $order->messengerAccount->page_name,
+                ] : null,
+                'instagram_item' => $order->instagramItem ? [
+                    'id' => $order->instagramItem->id,
+                    'username' => $order->instagramItem->username,
+                    'name' => $order->instagramItem->name,
                 ] : null,
                 'created_at' => $order->created_at,
             ],
@@ -319,9 +336,9 @@ class OrderController extends Controller
      * Approve a pending order.
      *
      * - Sets from = today, to = today + package.months, status = approved.
-     * - For Messenger orders: activates the MessengerAccount and subscribes the
-     *   page to the Meta App webhook.
-     * - For WhatsApp orders: increments the user's msg_number quota.
+     * - For Messenger orders: activates the MessengerAccount and subscribes the page.
+     * - For Instagram orders: activates the InstagramItem and adds message quota.
+     * - For WhatsApp orders: increments the whatsItem's msg_number quota.
      */
     public function approve(Request $request, Order $order): JsonResponse
     {
@@ -408,6 +425,59 @@ class OrderController extends Controller
                     'verify_token' => $account->verify_token,
                     'msg_number' => $account->msg_number,
                     'website_url' => $account->fresh()->website_url,
+                ];
+            }
+        } elseif ($order->isInstagram()) {
+            /** @var InstagramItem|null $instagramItem */
+            $instagramItem = $order->instagramItem;
+
+            if ($instagramItem) {
+                $itemUpdate = ['status' => 'active'];
+
+                if ($request->has('ai_context')) {
+                    $itemUpdate['ai_context'] = $validated['ai_context'] ?? null;
+                }
+
+                if ($request->has('website_url')) {
+                    $itemUpdate['website_url'] = $validated['website_url'] ?? null;
+                }
+
+                if ($request->hasFile('ai_file')) {
+                    $uploadedPath = $this->upload($request, 'ai_file', 'instagram/ai_files');
+                    if ($uploadedPath) {
+                        $itemUpdate['ai_file'] = $uploadedPath;
+                    }
+                } elseif ($request->has('ai_file') && is_string($request->input('ai_file'))) {
+                    $itemUpdate['ai_file'] = $request->input('ai_file');
+                }
+
+                $msgsToAdd = $order->msgs ?: (int) $package->msg_number;
+                $itemUpdate['msg_number'] = ((int) $instagramItem->msg_number) + $msgsToAdd;
+
+                $instagramItem->update($itemUpdate);
+
+                // If page_id and access token exist, subscribe page to Instagram webhook events
+                if ($instagramItem->page_id && $instagramItem->access_token) {
+                    $graphVersion = config('services.meta.graph_version', 'v21.0');
+                    Http::post(
+                        "https://graph.facebook.com/{$graphVersion}/{$instagramItem->page_id}/subscribed_apps",
+                        [
+                            'subscribed_fields' => 'messages,messaging_postbacks,messaging_seen',
+                            'access_token' => $instagramItem->access_token,
+                        ]
+                    );
+                }
+
+                $activationResult = [
+                    'instagram_item_id' => $instagramItem->id,
+                    'instagram_id' => $instagramItem->instagram_id,
+                    'username' => $instagramItem->username,
+                    'webhook_url' => url('/api/instagram-webhook'),
+                    'verify_token' => $instagramItem->verify_token,
+                    'msg_number' => $instagramItem->fresh()->msg_number,
+                    'ai_context' => $instagramItem->fresh()->ai_context,
+                    'ai_file' => $instagramItem->fresh()->ai_file,
+                    'website_url' => $instagramItem->fresh()->website_url,
                 ];
             }
         } else {

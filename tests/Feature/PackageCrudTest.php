@@ -59,7 +59,7 @@ test('admin can create package with valid enum type', function (string $type) {
         'type' => $type,
         'msg_number' => 2000,
     ]);
-})->with(['whats', 'face', 'all']);
+})->with(['whats', 'face', 'all', 'instagram']);
 
 test('package creation fails with invalid or missing type', function () {
     $basePayload = [

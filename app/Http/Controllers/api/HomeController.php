@@ -2,12 +2,14 @@
 
 namespace App\Http\Controllers\api;
 
+use App\Events\InstagramEvent;
 use App\Events\MessengerEvent;
 use App\Events\TypingEvent;
 use App\Events\WhatsEvent;
 use App\Http\Controllers\Controller;
 use App\Models\Chat;
 use App\Models\Food;
+use App\Models\InstagramItem;
 use App\Models\MessengerAccount;
 use App\Models\MsgSend;
 use App\Models\Order;
@@ -298,24 +300,30 @@ class HomeController extends Controller
     /**
      * Determine whether the restaurant still has messages left in its active subscription.
      *
-     * @param  string  $channel  'whatsapp' | 'messenger'
+     * @param  string  $channel  'whatsapp' | 'messenger' | 'instagram'
      */
     private function hasRemainingMessages(User $restaurant, string $channel = 'whatsapp'): bool
     {
         $today = now()->toDateString();
 
-        $activeOrder = Order::where('user_id', $restaurant->id)
+        $packageType = match ($channel) {
+            'whatsapp' => 'whats',
+            'messenger' => 'face',
+            'instagram' => 'instagram',
+            default => $channel,
+        };
+
+        $orderQuery = Order::where('user_id', $restaurant->id)
             ->where('from', '<=', $today)
             ->where('to', '>=', $today)
-            ->sum('msgs');
-        $from = Order::where('user_id', $restaurant->id)
-            ->where('from', '<=', $today)
-            ->where('to', '>=', $today)
-            ->min('from');
-        $to = Order::where('user_id', $restaurant->id)
-            ->where('from', '<=', $today)
-            ->where('to', '>=', $today)
-            ->max('to');
+            ->where(function ($q) use ($channel, $packageType) {
+                $q->where('channel', $channel)
+                    ->orWhereHas('package', fn ($pq) => $pq->whereIn('type', [$packageType, 'all']));
+            });
+
+        $activeOrder = (clone $orderQuery)->sum('msgs');
+        $from = (clone $orderQuery)->min('from');
+        $to = (clone $orderQuery)->max('to');
 
         if (! $activeOrder) {
             return false;
@@ -659,6 +667,442 @@ class HomeController extends Controller
         ]);
 
         return false;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Instagram Webhook
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Main Instagram webhook entry point.
+     * GET  → verify Meta webhook challenge (per-item verify_token stored in DB or .env)
+     * POST → handle incoming Instagram messages and send AI replies
+     */
+    public function instagram_web_hook(Request $request): Response|JsonResponse
+    {
+        if ($request->isMethod('get')) {
+            return $this->instagramVerify($request);
+        }
+
+        // ── Log every incoming POST immediately
+        Log::channel('stack')->info('[INSTAGRAM] ⬇ Incoming POST', [
+            'ip' => $request->ip(),
+            'payload' => $request->all(),
+        ]);
+
+        try {
+            $data = $request->all();
+
+            $object = data_get($data, 'object');
+
+            // Only handle instagram events
+            if ($object !== 'instagram') {
+                Log::channel('stack')->warning("[INSTAGRAM] ✗ Ignored — object is '{$object}', expected 'instagram'");
+
+                return response()->json(['status' => 'ignored_non_instagram'], Response::HTTP_OK);
+            }
+
+            $entry = data_get($data, 'entry.0');
+            $entryId = (string) data_get($entry, 'id');
+            $messagingEvent = data_get($entry, 'messaging.0');
+
+            if (! $messagingEvent) {
+                Log::channel('stack')->warning('[INSTAGRAM] ✗ No messaging event found in entry.0.messaging.0', [
+                    'raw_entry' => $entry,
+                ]);
+
+                return response()->json(['status' => 'no_messaging_event'], Response::HTTP_OK);
+            }
+
+            // Ignore echoed messages (sent by the account itself)
+            if (data_get($messagingEvent, 'message.is_echo')) {
+                Log::channel('stack')->info('[INSTAGRAM] ✓ Echo ignored (sent by account)');
+
+                return response()->json(['status' => 'echo_ignored'], Response::HTTP_OK);
+            }
+
+            $senderId = (string) data_get($messagingEvent, 'sender.id');
+            $recipientId = (string) data_get($messagingEvent, 'recipient.id');
+            $messageText = trim((string) data_get($messagingEvent, 'message.text', ''));
+
+            $targetInstagramId = $recipientId ?: $entryId;
+
+            Log::channel('stack')->info('[INSTAGRAM] ✓ Message event', [
+                'sender_id' => $senderId,
+                'recipient_id' => $recipientId,
+                'entry_id' => $entryId,
+                'message_text' => $messageText,
+                'mid' => data_get($messagingEvent, 'message.mid'),
+            ]);
+
+            // Resolve InstagramItem via instagram_id or page_id
+            /** @var InstagramItem|null $instagramItem */
+            $instagramItem = InstagramItem::where('instagram_id', $targetInstagramId)
+                ->where('status', 'active')
+                ->first();
+
+            if (! $instagramItem && $entryId) {
+                $instagramItem = InstagramItem::where('instagram_id', $entryId)
+                    ->where('status', 'active')
+                    ->first();
+            }
+
+            if (! $instagramItem) {
+                $instagramItem = InstagramItem::where('page_id', $targetInstagramId)
+                    ->orWhere('page_id', $entryId)
+                    ->where('status', 'active')
+                    ->first();
+            }
+
+            if (! $instagramItem) {
+                $disabledItem = InstagramItem::where('instagram_id', $targetInstagramId)
+                    ->orWhere('instagram_id', $entryId)
+                    ->orWhere('page_id', $targetInstagramId)
+                    ->orWhere('page_id', $entryId)
+                    ->first();
+
+                Log::channel('stack')->warning('[INSTAGRAM] ✗ Instagram account not found or disabled', [
+                    'target_id' => $targetInstagramId,
+                    'entry_id' => $entryId,
+                    'exists_in_db' => (bool) $disabledItem,
+                    'disabled_status' => $disabledItem?->status,
+                ]);
+
+                return response()->json(['status' => 'account_not_found'], Response::HTTP_OK);
+            }
+
+            /** @var User $restaurant */
+            $restaurant = $instagramItem->user;
+
+            // Ignore non-text messages
+            if (empty($messageText)) {
+                Log::channel('stack')->info('[INSTAGRAM] ✗ Ignored — non-text message');
+
+                return response()->json(['status' => 'non_text_ignored'], Response::HTTP_OK);
+            }
+
+            // Check Instagram-specific message limit
+            $hasRemainingQuota = ((int) $instagramItem->msg_number) > 0;
+            $hasActiveOrder = $this->hasRemainingMessages($restaurant, 'instagram');
+            $hasLimit = $hasRemainingQuota || $hasActiveOrder;
+
+            Log::channel('stack')->info('[INSTAGRAM] ⚡ Limit check', [
+                'restaurant_id' => $restaurant->id,
+                'instagram_item_id' => $instagramItem->id,
+                'item_msg_number' => $instagramItem->msg_number,
+                'has_remaining_quota' => $hasRemainingQuota,
+                'has_active_order' => $hasActiveOrder,
+            ]);
+
+            if (! $hasLimit) {
+                Log::channel('stack')->warning("[INSTAGRAM] ✗ Limit exceeded for InstagramItem #{$instagramItem->id} (restaurant #{$restaurant->id})");
+
+                return response()->json(['status' => 'limit_exceeded'], Response::HTTP_OK);
+            }
+
+            // Save incoming customer message
+            $newChat = Chat::create([
+                'user_id' => $restaurant->id,
+                'instagram_item_id' => $instagramItem->id,
+                'name' => 'Instagram User',
+                'phone' => null,
+                'message' => $messageText,
+                'is_image' => false,
+                'is_admin' => false,
+                'sender_type' => 'customer',
+                'is_read' => false,
+                'channel' => 'instagram',
+                'instagram_sender_id' => $senderId,
+                'meta_message_id' => data_get($messagingEvent, 'message.mid'),
+            ]);
+
+            // Broadcast to admin dashboard
+            try {
+                $chatData = $newChat->toArray();
+                $chatData['instagram_id'] = $instagramItem->instagram_id;
+                InstagramEvent::dispatch($chatData);
+            } catch (\Throwable $broadcastException) {
+                Log::warning('[INSTAGRAM] ⚠ InstagramEvent broadcast failed (non-fatal): '.$broadcastException->getMessage());
+            }
+
+            // Broadcast typing indicator to admin dashboard
+            try {
+                TypingEvent::dispatch(
+                    channel: 'instagram',
+                    phone: null,
+                    senderId: $senderId,
+                    pageId: $instagramItem->instagram_id,
+                    isTyping: true,
+                );
+            } catch (\Throwable $broadcastException) {
+                Log::warning('[INSTAGRAM] ⚠ TypingEvent broadcast failed (non-fatal): '.$broadcastException->getMessage());
+            }
+
+            // Mark seen on Instagram
+            $this->showInstagramTyping($instagramItem->access_token, $senderId);
+
+            // Get AI reply
+            Log::channel('stack')->info('[INSTAGRAM] ⏳ Calling OpenAI...');
+            $reply = $this->getInstagramAiReplyWithTyping(
+                instagramItem: $instagramItem,
+                userMessage: $messageText,
+                senderId: $senderId,
+            );
+
+            if (! $reply) {
+                Log::channel('stack')->warning("[INSTAGRAM] ✗ OpenAI returned empty reply for restaurant #{$restaurant->id}");
+
+                return response()->json(['status' => 'ai_failed'], Response::HTTP_OK);
+            }
+
+            Log::channel('stack')->info('[INSTAGRAM] ✓ OpenAI replied', [
+                'reply_preview' => mb_substr($reply, 0, 100),
+            ]);
+
+            // Send reply via Instagram Send API
+            $sent = $this->sendInstagramMessage(
+                accessToken: $instagramItem->access_token,
+                recipientId: $senderId,
+                text: $reply,
+            );
+
+            if ($sent) {
+                if ((int) $instagramItem->msg_number > 0) {
+                    $instagramItem->decrement('msg_number');
+                }
+
+                Chat::create([
+                    'user_id' => $restaurant->id,
+                    'instagram_item_id' => $instagramItem->id,
+                    'name' => 'Instagram User',
+                    'phone' => null,
+                    'message' => $reply,
+                    'is_image' => false,
+                    'is_admin' => true,
+                    'sender_type' => 'bot',
+                    'is_read' => true,
+                    'channel' => 'instagram',
+                    'instagram_sender_id' => $senderId,
+                ]);
+
+                MsgSend::create([
+                    'user_id' => $restaurant->id,
+                    'instagram_item_id' => $instagramItem->id,
+                    'whats_item_id' => null,
+                    'messenger_account_id' => null,
+                    'channel' => 'instagram',
+                ]);
+
+                Log::channel('stack')->info('[INSTAGRAM] ✅ Full flow complete — reply saved & sent');
+            } else {
+                Log::channel('stack')->error("[INSTAGRAM] ✗ Instagram API send FAILED for restaurant #{$restaurant->id} → Sender {$senderId}");
+            }
+
+            return response()->json([
+                'status' => 'success',
+                'reply' => $reply,
+                'instagram_sent' => $sent,
+            ], Response::HTTP_OK);
+
+        } catch (\Throwable $e) {
+            Log::channel('stack')->error('[INSTAGRAM] 💥 EXCEPTION: '.$e->getMessage(), [
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => collect(explode("\n", $e->getTraceAsString()))->take(10)->implode("\n"),
+                'payload' => $request->all(),
+            ]);
+
+            return response()->json([
+                'status' => 'error',
+                'message' => $e->getMessage(),
+                'file' => basename($e->getFile()),
+                'line' => $e->getLine(),
+            ], Response::HTTP_OK);
+        }
+    }
+
+    /**
+     * Verify Instagram webhook challenge from Meta.
+     */
+    private function instagramVerify(Request $request): Response
+    {
+        $mode = $request->input('hub_mode') ?? $request->input('hub.mode');
+        $token = $request->input('hub_verify_token') ?? $request->input('hub.verify_token');
+        $challenge = $request->input('hub_challenge') ?? $request->input('hub.challenge');
+
+        $appVerifyToken = config('services.meta.instagram_verify_token')
+            ?: (config('services.meta.messenger_verify_token') ?: config('services.meta.verify_token'));
+
+        Log::info('Instagram webhook verify attempt', [
+            'hub_mode' => $mode,
+            'token_match_app' => $appVerifyToken && hash_equals((string) $appVerifyToken, (string) $token),
+            'ip' => $request->ip(),
+        ]);
+
+        if ($mode === 'subscribe' && $token) {
+            if ($appVerifyToken && hash_equals((string) $appVerifyToken, (string) $token)) {
+                Log::info('Instagram webhook verified successfully via app verify token.');
+
+                return response((string) $challenge, Response::HTTP_OK)
+                    ->header('Content-Type', 'text/plain');
+            }
+
+            $item = InstagramItem::where('verify_token', $token)->first();
+
+            if ($item) {
+                Log::info('Instagram webhook verified successfully via item verify token.', ['instagram_id' => $item->instagram_id]);
+
+                return response((string) $challenge, Response::HTTP_OK)
+                    ->header('Content-Type', 'text/plain');
+            }
+        }
+
+        Log::warning('Instagram webhook verification failed: token not found or wrong mode.', [
+            'hub_mode' => $mode,
+        ]);
+
+        return response('Forbidden', Response::HTTP_FORBIDDEN);
+    }
+
+    /**
+     * Send a text message via Instagram Send API.
+     */
+    private function sendInstagramMessage(
+        string $accessToken,
+        string $recipientId,
+        string $text,
+    ): bool {
+        $response = Http::withToken($accessToken)
+            ->post(self::GRAPH_API_BASE.'/me/messages', [
+                'recipient' => ['id' => $recipientId],
+                'message' => ['text' => $text],
+            ]);
+
+        if ($response->successful()) {
+            return true;
+        }
+
+        Log::error('Instagram API send error', [
+            'recipient_id' => $recipientId,
+            'status' => $response->status(),
+            'body' => $response->json(),
+        ]);
+
+        return false;
+    }
+
+    /**
+     * Send mark_seen sender action for Instagram.
+     */
+    private function showInstagramTyping(
+        string $accessToken,
+        string $recipientId,
+    ): void {
+        try {
+            Http::withToken($accessToken)
+                ->post(self::GRAPH_API_BASE.'/me/messages', [
+                    'recipient' => ['id' => $recipientId],
+                    'sender_action' => 'mark_seen',
+                ]);
+        } catch (\Throwable $e) {
+            Log::channel('stack')->warning('[INSTAGRAM] ⚠ mark_seen exception: '.$e->getMessage());
+        }
+    }
+
+    /**
+     * Call getInstagramAiReply with typing management.
+     */
+    private function getInstagramAiReplyWithTyping(
+        InstagramItem $instagramItem,
+        string $userMessage,
+        string $senderId,
+    ): ?string {
+        $this->showInstagramTyping($instagramItem->access_token, $senderId);
+
+        return $this->getInstagramAiReply($instagramItem, $userMessage);
+    }
+
+    /**
+     * Get an AI-generated reply for Instagram using the InstagramItem's ai_context and ai_file.
+     */
+    private function getInstagramAiReply(InstagramItem $instagramItem, string $userMessage): ?string
+    {
+        $aiContext = ! empty($instagramItem->ai_context)
+            ? $instagramItem->ai_context
+            : (Setting::firstWhere('name', 'ai_context')?->value ?? 'أنت موظف خدمة عملاء، ردّ بأسلوب ودي وبسيط.');
+
+        $fileContent = $this->resolveAiFileContent($instagramItem->ai_file);
+
+        $fileDataSection = '';
+        if (! empty($fileContent)) {
+            $fileDataSection = "\n\nبيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة:\n".$fileContent;
+        }
+
+        $linksSection = '';
+        if ($instagramItem->android_link || $instagramItem->ios_link || $instagramItem->website_url) {
+            $linksSection = "\n\nروابط وتفاصيل الطلب المتاحة:";
+            if ($instagramItem->website_url) {
+                $linksSection .= "\n- الموقع الإلكتروني: {$instagramItem->website_url}";
+            }
+            if ($instagramItem->android_link) {
+                $linksSection .= "\n- تطبيق أندرويد (Android): {$instagramItem->android_link}";
+            }
+            if ($instagramItem->ios_link) {
+                $linksSection .= "\n- تطبيق آيفون (iOS): {$instagramItem->ios_link}";
+            }
+        }
+
+        $instructions = <<<PROMPT
+        {$aiContext}
+        {$fileDataSection}
+        {$linksSection}
+
+        التعليمات:
+        - الرد باللغة العربية فقط بأسلوب مهذب ومساعد وموجز ومحترم.
+        - اعتمد على البيانات المذكورة أعلاه في الرد على استفسارات العميل ولا تخترع أي معلومات أو أسعار غير موجودة.
+        - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، أخبره بلباقة أنه غير متوفر حالياً.
+        - أول ما يطلب العميل (عندما يريد طلب، يسأل كيف يطلب، يريد عمل أوردر، أو يطلب أي صنف أو وجبة): يجب الرد عليه بأسلوب مهذب ومحترم وإخباره: «تقدر تطلب من هنا» مع إرسال روابط الطلب المتوفرة (الموقع الإلكتروني، تطبيق أندرويد، وتطبيق iOS) المذكورة أعلاه.
+        - في حال عدم توفر روابط طلب أعلاه، أخبر العميل بلباقة أنه يمكنه كتابة طلبه وتفاصيله هنا لمساعدته.
+        PROMPT;
+
+        try {
+            $model = env('OPENAI_MODEL', 'gpt-4o-mini');
+
+            $response = OpenAI::responses()->create([
+                'model' => $model,
+                'instructions' => $instructions,
+                'input' => $userMessage,
+            ]);
+
+            $reply = trim((string) ($response->outputText ?? ''));
+
+            if (! empty($reply) && $this->isOrderIntent($userMessage)) {
+                $hasLink = ($instagramItem->website_url && str_contains($reply, $instagramItem->website_url))
+                    || ($instagramItem->android_link && str_contains($reply, $instagramItem->android_link))
+                    || ($instagramItem->ios_link && str_contains($reply, $instagramItem->ios_link));
+
+                if (! $hasLink) {
+                    $orderLinksMsg = $this->formatOrderingLinksMessage($instagramItem->website_url, $instagramItem->android_link, $instagramItem->ios_link);
+                    if ($orderLinksMsg) {
+                        $reply .= "\n\n{$orderLinksMsg}";
+                    }
+                }
+            }
+
+            return $reply ?: null;
+        } catch (\Throwable $e) {
+            Log::warning('OpenAI getInstagramAiReply fallback triggered: '.$e->getMessage());
+
+            $fallback = 'أهلاً بك! نسعد بخدمتك.';
+            $orderLinksMsg = $this->formatOrderingLinksMessage($instagramItem->website_url, $instagramItem->android_link, $instagramItem->ios_link);
+            if ($orderLinksMsg) {
+                $fallback .= "\n{$orderLinksMsg}";
+            } else {
+                $fallback .= ' يمكنك طرح استفسارك أو طلبك مباشرة، وسنكون سعداء بمساعدتك.';
+            }
+
+            return $fallback;
+        }
     }
 
     /**

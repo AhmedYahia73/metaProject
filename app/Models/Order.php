@@ -25,6 +25,7 @@ class Order extends Model
         'channel',
         'messenger_account_id',
         'whats_item_id',
+        'instagram_item_id',
     ];
 
     /**
@@ -80,13 +81,23 @@ class Order extends Model
     }
 
     /**
-     * Get the WhatsApp item this order activates (null for Messenger orders).
+     * Get the WhatsApp item this order activates (null for Messenger/Instagram orders).
      *
      * @return BelongsTo<WhatsItem, $this>
      */
     public function whatsItem(): BelongsTo
     {
         return $this->belongsTo(WhatsItem::class);
+    }
+
+    /**
+     * Get the Instagram item this order activates.
+     *
+     * @return BelongsTo<InstagramItem, $this>
+     */
+    public function instagramItem(): BelongsTo
+    {
+        return $this->belongsTo(InstagramItem::class);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -120,6 +131,15 @@ class Order extends Model
         return $query->where('status', 'rejected');
     }
 
+    /**
+     * @param  Builder<Order>  $query
+     * @return Builder<Order>
+     */
+    public function scopeInstagram(Builder $query): Builder
+    {
+        return $query->where('channel', 'instagram');
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────
@@ -147,5 +167,10 @@ class Order extends Model
     public function isWhatsApp(): bool
     {
         return $this->channel === 'whatsapp';
+    }
+
+    public function isInstagram(): bool
+    {
+        return $this->channel === 'instagram';
     }
 }

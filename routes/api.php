@@ -3,6 +3,7 @@
 use App\Http\Controllers\api\admin\AdminController;
 use App\Http\Controllers\api\admin\DashboardController;
 use App\Http\Controllers\api\admin\DiscountController;
+use App\Http\Controllers\api\admin\InstagramItemController as AdminInstagramItemController;
 use App\Http\Controllers\api\admin\MessengerAccountController;
 use App\Http\Controllers\api\admin\OrderController;
 use App\Http\Controllers\api\admin\PackageController;
@@ -15,6 +16,7 @@ use App\Http\Controllers\api\auth\LoginController;
 use App\Http\Controllers\api\HomeController;
 use App\Http\Controllers\api\user\ChatController;
 use App\Http\Controllers\api\user\HomeController as UserHomeController;
+use App\Http\Controllers\api\user\InstagramPagesController;
 use App\Http\Controllers\api\user\MessengerPagesController;
 use App\Http\Controllers\api\user\UserOrderController;
 use App\Http\Controllers\api\user\WhatsPagesController;
@@ -36,6 +38,10 @@ Route::post('/web-hook', [HomeController::class, 'web_hook']);
 // Messenger Webhook (public — Meta requires GET for verification + POST for messages)
 Route::get('/messenger-webhook', [HomeController::class, 'messenger_web_hook']);
 Route::post('/messenger-webhook', [HomeController::class, 'messenger_web_hook']);
+
+// Instagram Webhook (public — Meta requires GET for verification + POST for messages)
+Route::get('/instagram-webhook', [HomeController::class, 'instagram_web_hook']);
+Route::post('/instagram-webhook', [HomeController::class, 'instagram_web_hook']);
 
 Route::view('/privacy-policy', 'privacy-policy');
 
@@ -109,6 +115,19 @@ Route::prefix('user')->group(function () {
         Route::get('chat/whatsapp/conversations', [ChatController::class, 'whatsConversations']);
         Route::get('chat/whatsapp/messages', [ChatController::class, 'whatsMessages']);
         Route::post('chat/whatsapp/send', [ChatController::class, 'sendWhatsMessage']);
+
+        // Instagram Self-Service — list accounts & request subscription
+        Route::post('instagram/ai_data', [InstagramPagesController::class, 'ai_data']);
+        Route::get('instagram/packages', [InstagramPagesController::class, 'instagram_packages']);
+        Route::get('instagram/accounts', [InstagramPagesController::class, 'accounts']);
+        Route::post('instagram/orders', [InstagramPagesController::class, 'requestSubscription']);
+        Route::get('instagram/items', [InstagramPagesController::class, 'items']);
+
+        // Live Chat / Inbox (Instagram)
+        Route::get('chat/instagram/accounts', [ChatController::class, 'instagramAccounts']);
+        Route::get('chat/instagram/conversations', [ChatController::class, 'instagramConversations']);
+        Route::get('chat/instagram/messages', [ChatController::class, 'instagramMessages']);
+        Route::post('chat/instagram/send', [ChatController::class, 'sendInstagramMessage']);
 
         Route::post('chat/mark-as-read', [ChatController::class, 'markAsRead']);
 
@@ -184,4 +203,11 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
         [MessengerAccountController::class, 'regenerateVerifyToken']
     );
     Route::apiResource('users/{user}/messenger-accounts', MessengerAccountController::class);
+
+    // Instagram Accounts Management (Admin manual control)
+    Route::post(
+        'users/{user}/instagram-items/{instagramItem}/regenerate-token',
+        [AdminInstagramItemController::class, 'regenerateVerifyToken']
+    );
+    Route::apiResource('users/{user}/instagram-items', AdminInstagramItemController::class);
 });

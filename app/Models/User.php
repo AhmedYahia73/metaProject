@@ -97,4 +97,14 @@ class User extends Authenticatable
     {
         return $this->hasMany(WhatsItem::class);
     }
+
+    /**
+     * Get all Instagram items for this user (restaurant).
+     *
+     * @return HasMany<InstagramItem, $this>
+     */
+    public function instagramItems(): HasMany
+    {
+        return $this->hasMany(InstagramItem::class);
+    }
 }

@@ -12,7 +12,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('chats', function (Blueprint $table) {
-            $table->enum('channel', ['whatsapp', 'messenger'])->default('whatsapp')->after('is_admin');
+            $table->enum('channel', ['whatsapp', 'messenger', 'instagram'])->default('whatsapp')->after('is_admin');
             // PSID (Page-Scoped ID) of the Messenger sender — null for WhatsApp chats
             $table->string('messenger_sender_id')->nullable()->after('channel');
         });
