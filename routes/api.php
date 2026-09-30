@@ -7,21 +7,20 @@ use App\Http\Controllers\api\admin\MessengerAccountController;
 use App\Http\Controllers\api\admin\OrderController;
 use App\Http\Controllers\api\admin\PackageController;
 use App\Http\Controllers\api\admin\SettingController;
+use App\Http\Controllers\api\admin\SubscriperController;
 use App\Http\Controllers\api\admin\TaxController;
 use App\Http\Controllers\api\admin\UserController;
 use App\Http\Controllers\api\admin\WhatsItemController as AdminWhatsItemController;
-use App\Http\Controllers\api\admin\SubscriperController;
 use App\Http\Controllers\api\auth\LoginController;
 use App\Http\Controllers\api\HomeController;
 use App\Http\Controllers\api\user\ChatController;
 use App\Http\Controllers\api\user\HomeController as UserHomeController;
 use App\Http\Controllers\api\user\MessengerPagesController;
-use App\Http\Controllers\api\user\WhatsPagesController;
 use App\Http\Controllers\api\user\UserOrderController;
+use App\Http\Controllers\api\user\WhatsPagesController;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Route;
-
 use Illuminate\Support\Facades\Broadcast;
+use Illuminate\Support\Facades\Route;
 
 Broadcast::routes(['middleware' => ['auth:sanctum']]);
 
@@ -46,6 +45,19 @@ Route::view('/privacy-policy', 'privacy-policy');
 |--------------------------------------------------------------------------
 */
 Route::prefix('auth')->group(function () {
+    Route::middleware('throttle:auth-action')->group(function () {
+        Route::post('signup', [LoginController::class, 'signup']);
+        Route::post('active-account', [LoginController::class, 'active_account']);
+        Route::post('active_account', [LoginController::class, 'active_account']);
+        Route::post('forget-password', [LoginController::class, 'forget_password']);
+        Route::post('forget_password', [LoginController::class, 'forget_password']);
+        Route::post('check-code', [LoginController::class, 'check_code']);
+        Route::post('check_code', [LoginController::class, 'check_code']);
+        Route::post('change-password', [LoginController::class, 'change_password']);
+        Route::post('change_password', [LoginController::class, 'change_password']);
+        Route::post('reset-password', [LoginController::class, 'change_password']);
+    });
+
     Route::post('admin/login', [LoginController::class, 'adminLogin']);
     Route::post('user/login', [LoginController::class, 'userLogin']);
     Route::post('facebook', [LoginController::class, 'facebookLogin']);
@@ -111,9 +123,9 @@ Route::prefix('user')->group(function () {
 |--------------------------------------------------------------------------
 */
 Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function () {
-    // Dashboard Statistics 
+    // Dashboard Statistics
     Route::get('subscripers', [SubscriperController::class, 'subscripers']);
-    
+
     Route::get('user_lists', [DashboardController::class, 'user_lists']);
     Route::get('dashboard', [DashboardController::class, 'index']);
 

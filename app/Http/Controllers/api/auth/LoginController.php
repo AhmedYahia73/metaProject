@@ -3,17 +3,239 @@
 namespace App\Http\Controllers\api\auth;
 
 use App\Http\Controllers\Controller;
+use App\Mail\ActivationCodeMail;
+use App\Mail\ResetPasswordCodeMail;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\Response;
 
 class LoginController extends Controller
 {
+    /**
+     * Handle user signup and send activation code via email.
+     */
+    public function signup(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|string|max:255',
+            'password' => 'required|string|min:6',
+            'phone' => 'required|string|max:20',
+        ]);
+
+        $user = User::where('email', $validated['email'])->first();
+
+        if ($user && ($user->is_active || $user->role === 'admin')) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Email is already registered.',
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $phoneExists = User::where('phone', $validated['phone'])
+            ->when($user, function ($query) use ($user) {
+                $query->where('id', '!=', $user->id);
+            })
+            ->exists();
+
+        if ($phoneExists) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Phone number is already registered.',
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $code = (string) random_int(100000, 999999);
+
+        if ($user) {
+            $user->update([
+                'name' => $validated['name'],
+                'password' => Hash::make($validated['password']),
+                'phone' => $validated['phone'],
+                'code' => $code,
+                'is_active' => false,
+            ]);
+        } else {
+            $user = User::create([
+                'name' => $validated['name'],
+                'email' => $validated['email'],
+                'password' => Hash::make($validated['password']),
+                'phone' => $validated['phone'],
+                'code' => $code,
+                'is_active' => false,
+                'role' => 'user',
+            ]);
+        }
+
+        try {
+            Mail::to($user->email)->send(new ActivationCodeMail($code, $user->name));
+        } catch (\Throwable $e) {
+            Log::error('Failed to send activation email', [
+                'email' => $user->email,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'message' => 'Failed to send activation email. Please try again.',
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Verification code sent to your email successfully.',
+        ]);
+    }
+
+    /**
+     * Activate user account via verification code.
+     */
+    public function active_account(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'email' => 'required|email|string|max:255',
+            'code' => 'required|string|max:20',
+        ]);
+
+        $user = User::where('email', $validated['email'])
+            ->where('code', $validated['code'])
+            ->whereNotNull('code')
+            ->first();
+
+        if (! $user) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Invalid or expired activation code.',
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $user->code = null;
+        $user->is_active = true;
+        $user->save();
+
+        $tokenName = 'user_auth_token';
+        $token = $user->createToken($tokenName)->plainTextToken;
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Your account has been activated successfully.',
+            'user' => $user,
+            'token' => $token,
+        ]);
+    }
+
+    /**
+     * Send password reset code via email.
+     */
+    public function forget_password(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'email' => 'required|email|string|max:255',
+        ]);
+
+        $user = User::where('email', $validated['email'])->first();
+
+        if (! $user) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Email address not found.',
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $code = (string) random_int(100000, 999999);
+        $user->code = $code;
+        $user->save();
+
+        try {
+            Mail::to($user->email)->send(new ResetPasswordCodeMail($code, $user->name ?? 'User'));
+        } catch (\Throwable $e) {
+            Log::error('Failed to send reset password email', [
+                'email' => $user->email,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'message' => 'Failed to send reset code email. Please try again.',
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Password reset code sent to your email successfully.',
+        ]);
+    }
+
+    /**
+     * Check if verification code is valid for given email.
+     */
+    public function check_code(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'email' => 'required|email|string|max:255',
+            'code' => 'required|string|max:20',
+        ]);
+
+        $isValid = User::where('email', $validated['email'])
+            ->where('code', $validated['code'])
+            ->whereNotNull('code')
+            ->exists();
+
+        return response()->json([
+            'status' => $isValid,
+            'is_valid' => $isValid,
+            'message' => $isValid ? 'Code is valid.' : 'Invalid or expired code.',
+        ]);
+    }
+
+    /**
+     * Reset/change password using email and verified code.
+     */
+    public function change_password(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'email' => 'required|email|string|max:255',
+            'code' => 'required|string|max:20',
+            'password' => 'required|string|min:6',
+        ]);
+
+        if ($request->filled('password_confirmation') && $request->password !== $request->password_confirmation) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Password confirmation does not match.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $user = User::where('email', $validated['email'])
+            ->where('code', $validated['code'])
+            ->whereNotNull('code')
+            ->first();
+
+        if (! $user) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Invalid or expired code.',
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $user->update([
+            'password' => Hash::make($validated['password']),
+            'code' => null,
+        ]);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Password changed successfully.',
+        ]);
+    }
+
     /**
      * Handle admin login.
      */
@@ -160,6 +382,20 @@ class LoginController extends Controller
             'password' => 'required|string',
         ]);
 
+        $throttleKey = $this->loginThrottleKey($request, $requiredRole);
+
+        if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
+            $seconds = RateLimiter::availableIn($throttleKey);
+            $minutes = max(1, (int) ceil($seconds / 60));
+
+            return response()->json([
+                'status' => false,
+                'message' => "Too many failed login attempts. Please wait {$minutes} minute(s) before trying again.",
+                'retry_after_seconds' => $seconds,
+                'retry_after_minutes' => $minutes,
+            ], Response::HTTP_TOO_MANY_REQUESTS);
+        }
+
         $user = null;
 
         if ($request->filled('email')) {
@@ -172,6 +408,8 @@ class LoginController extends Controller
         }
 
         if (! $user || ! Hash::check($request->password, $user->password)) {
+            RateLimiter::hit($throttleKey, 300);
+
             return response()->json([
                 'status' => false,
                 'message' => 'Invalid credentials.',
@@ -179,11 +417,15 @@ class LoginController extends Controller
         }
 
         if ($user->role !== $requiredRole) {
+            RateLimiter::hit($throttleKey, 300);
+
             return response()->json([
                 'status' => false,
                 'message' => "Forbidden: You must have the '{$requiredRole}' role to log in here.",
             ], Response::HTTP_FORBIDDEN);
         }
+
+        RateLimiter::clear($throttleKey);
 
         $tokenName = "{$requiredRole}_auth_token";
         $token = $user->createToken($tokenName)->plainTextToken;
@@ -206,6 +448,20 @@ class LoginController extends Controller
             'password' => 'required|string',
         ]);
 
+        $throttleKey = $this->loginThrottleKey($request, $requiredRole);
+
+        if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
+            $seconds = RateLimiter::availableIn($throttleKey);
+            $minutes = max(1, (int) ceil($seconds / 60));
+
+            return response()->json([
+                'status' => false,
+                'message' => "Too many failed login attempts. Please wait {$minutes} minute(s) before trying again.",
+                'retry_after_seconds' => $seconds,
+                'retry_after_minutes' => $minutes,
+            ], Response::HTTP_TOO_MANY_REQUESTS);
+        }
+
         $user = null;
 
         if ($request->filled('email')) {
@@ -218,6 +474,8 @@ class LoginController extends Controller
         }
 
         if (! $user || ! Hash::check($request->password, $user->password)) {
+            RateLimiter::hit($throttleKey, 300);
+
             return response()->json([
                 'status' => false,
                 'message' => 'Invalid credentials.',
@@ -225,11 +483,15 @@ class LoginController extends Controller
         }
 
         if ($user->role !== $requiredRole) {
+            RateLimiter::hit($throttleKey, 300);
+
             return response()->json([
                 'status' => false,
                 'message' => "Forbidden: You must have the '{$requiredRole}' role to log in here.",
             ], Response::HTTP_FORBIDDEN);
         }
+
+        RateLimiter::clear($throttleKey);
 
         $tokenName = "{$requiredRole}_auth_token";
         $token = $user->createToken($tokenName)->plainTextToken;
@@ -243,5 +505,15 @@ class LoginController extends Controller
                 'token_type' => 'Bearer',
             ],
         ]);
+    }
+
+    /**
+     * Get throttle key for failed login attempts.
+     */
+    private function loginThrottleKey(Request $request, string $requiredRole): string
+    {
+        $login = Str::lower((string) ($request->input('email') ?? $request->input('phone') ?? $request->input('login') ?? ''));
+
+        return "login_error:{$requiredRole}:".($login !== '' ? "{$login}|" : '').($request->ip() ?: '127.0.0.1');
     }
 }

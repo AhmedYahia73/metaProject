@@ -29,6 +29,8 @@ class User extends Authenticatable
         'role',
         'facebook_id',
         'facebook_access_token',
+        'code',
+        'is_active',
     ];
 
     /**
@@ -52,6 +54,7 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'is_active' => 'boolean',
         ];
     }
 
