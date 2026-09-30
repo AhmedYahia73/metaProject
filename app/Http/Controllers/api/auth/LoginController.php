@@ -325,9 +325,8 @@ class LoginController extends Controller
 
         // 2. Find or create user
         /** @var User|null $user */
-        $user = User::
-        where('id', auth()->id)
-        ->first();
+        $user = User::where('id', auth()->id)
+            ->first();
 
         if (! $user && $fbEmail) {
             // Link existing account that has the same email

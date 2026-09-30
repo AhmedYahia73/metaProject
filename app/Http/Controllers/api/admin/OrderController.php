@@ -43,8 +43,8 @@ class OrderController extends Controller
             'channel' => 'sometimes|in:whatsapp,messenger,instagram',
         ]);
 
-        $query = Order::with(['package:id,name', 'user:id,name,phone', 
-        'whatsItem:id,phone', 'messengerAccount:id,page_name', 'instagramItem:id,username,name'])->latest();
+        $query = Order::with(['package:id,name', 'user:id,name,phone',
+            'whatsItem:id,phone', 'messengerAccount:id,page_name', 'instagramItem:id,username,name'])->latest();
 
         if ($request->filled('user_id')) {
             $query->where('user_id', $request->user_id);

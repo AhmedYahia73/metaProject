@@ -3,14 +3,10 @@
 namespace App\Http\Controllers\api\user;
 
 use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
-use Carbon\Carbon;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\Http;
-use Symfony\Component\HttpFoundation\Response;
-
 use App\Models\Order;
+use Carbon\Carbon;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 
 class UserOrderController extends Controller
 {
@@ -25,8 +21,8 @@ class UserOrderController extends Controller
             'channel' => 'sometimes|in:whatsapp,messenger,instagram',
         ]);
 
-        $query = Order::with(['package:id,name', 'user:id,name,phone', 
-        'whatsItem:id,phone', 'messengerAccount:id,page_name', 'instagramItem:id,username,name'])->latest();
+        $query = Order::with(['package:id,name', 'user:id,name,phone',
+            'whatsItem:id,phone', 'messengerAccount:id,page_name', 'instagramItem:id,username,name'])->latest();
 
         if ($request->filled('user_id')) {
             $query->where('user_id', $request->user_id);
@@ -35,8 +31,8 @@ class UserOrderController extends Controller
         if ($request->filled('package_id')) {
             $query->where('package_id', $request->package_id);
         }
- 
-        $query->where('status', "pending");
+
+        $query->where('status', 'pending');
 
         if ($request->filled('channel')) {
             $query->where('channel', $request->channel);
@@ -99,7 +95,7 @@ class UserOrderController extends Controller
                 'created_at' => $order->created_at,
             ];
         };
- 
+
         $orders = $query->paginate($perPage);
         $orders->through($transform);
 
@@ -115,7 +111,7 @@ class UserOrderController extends Controller
                 'to' => $orders->lastItem(),
                 'has_more' => $orders->hasMorePages(),
             ],
-        ]); 
+        ]);
 
         $orders = $query->get()->map($transform);
 
@@ -137,9 +133,9 @@ class UserOrderController extends Controller
             'channel' => 'sometimes|in:whatsapp,messenger,instagram',
         ]);
 
-        $query = Order::with(['package:id,name', 'user:id,name,phone', 
-        'whatsItem:id,phone', 'messengerAccount:id,page_name', 'instagramItem:id,username,name'])
-        ->where("status", "!=", "pending")->latest();
+        $query = Order::with(['package:id,name', 'user:id,name,phone',
+            'whatsItem:id,phone', 'messengerAccount:id,page_name', 'instagramItem:id,username,name'])
+            ->where('status', '!=', 'pending')->latest();
 
         if ($request->filled('user_id')) {
             $query->where('user_id', $request->user_id);
@@ -214,7 +210,7 @@ class UserOrderController extends Controller
                 'created_at' => $order->created_at,
             ];
         };
- 
+
         $orders = $query->paginate($perPage);
         $orders->through($transform);
 
@@ -230,7 +226,7 @@ class UserOrderController extends Controller
                 'to' => $orders->lastItem(),
                 'has_more' => $orders->hasMorePages(),
             ],
-        ]); 
+        ]);
 
         $orders = $query->get()->map($transform);
 

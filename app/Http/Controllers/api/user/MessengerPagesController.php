@@ -140,20 +140,20 @@ class MessengerPagesController extends Controller
         ]);
     }
 
-    public function ai_data(Request $request){
-        
+    public function ai_data(Request $request)
+    {
+
         $request->validate([
             'page_id' => 'required',
         ]);
 
-        $data = MessengerAccount::
-        where("page_id", $request->page_id)
-        ->orderByDesc("id")
-        ->first();
+        $data = MessengerAccount::where('page_id', $request->page_id)
+            ->orderByDesc('id')
+            ->first();
 
         return response()->json([
-            "ai_context" => $data->ai_context,
-            "ai_file" => $data->ai_file,
+            'ai_context' => $data->ai_context,
+            'ai_file' => $data->ai_file,
         ]);
     }
 

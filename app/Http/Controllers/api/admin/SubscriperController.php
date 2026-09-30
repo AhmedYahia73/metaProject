@@ -3,18 +3,15 @@
 namespace App\Http\Controllers\api\admin;
 
 use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
-use Carbon\Carbon;
-use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
-
 use App\Models\MsgSend;
 use App\Models\Order;
+use Carbon\Carbon;
+use Illuminate\Http\Request;
 
 class SubscriperController extends Controller
 {
-    public function subscripers(Request $request){
+    public function subscripers(Request $request)
+    {
 
         $request->validate([
             'page' => 'sometimes|integer|min:1',
@@ -25,8 +22,8 @@ class SubscriperController extends Controller
             'channel' => 'sometimes|in:whatsapp,messenger',
         ]);
 
-        $query = Order::with(['package:id,name', 'user:id,name,phone', 
-        'whatsItem:id,phone', 'messengerAccount:id,page_name'])->latest();
+        $query = Order::with(['package:id,name', 'user:id,name,phone',
+            'whatsItem:id,phone', 'messengerAccount:id,page_name'])->latest();
 
         if ($request->filled('user_id')) {
             $query->where('user_id', $request->user_id);
@@ -36,7 +33,7 @@ class SubscriperController extends Controller
             $query->where('package_id', $request->package_id);
         }
 
-        $query->where('status', "approved");
+        $query->where('status', 'approved');
 
         if ($request->filled('channel')) {
             $query->where('channel', $request->channel);
@@ -56,18 +53,18 @@ class SubscriperController extends Controller
         $perPage = $request->integer('per_page', 15);
 
         $transform = function ($order) {
-            $send_msgs = MsgSend::
-            whereDate("created_at", ">=", $order->from)
-            ->whereDate("created_at", "<=", $order->to)
-            ->count();
+            $send_msgs = MsgSend::whereDate('created_at', '>=', $order->from)
+                ->whereDate('created_at', '<=', $order->to)
+                ->count();
+
             return [
                 'id' => $order->id,
                 'package_name' => $order->package?->name['en'],
-           
+
                 // 'user_id' => $order->user_id,
                 'user_name' => $order->user?->name,
                 'user_phone' => $order->user?->phone,
-         
+
                 // 'total_discount' => (float) $order->total_discount,
                 // 'total_tax' => (float) $order->total_tax,
                 // 'price' => (float) $order->price,
@@ -84,11 +81,11 @@ class SubscriperController extends Controller
                     'id' => $order->id,
                     'page_name' => $order->page_name,
                 ],
-                "send_msgs" => $send_msgs,
-                "available_msgs" => (int) $order->msgs - $send_msgs,
+                'send_msgs' => $send_msgs,
+                'available_msgs' => (int) $order->msgs - $send_msgs,
             ];
         };
- 
+
         $orders = $query->paginate($perPage);
         $orders->through($transform);
 
@@ -104,7 +101,7 @@ class SubscriperController extends Controller
                 'to' => $orders->lastItem(),
                 'has_more' => $orders->hasMorePages(),
             ],
-        ]); 
+        ]);
 
         $orders = $query->get()->map($transform);
 
