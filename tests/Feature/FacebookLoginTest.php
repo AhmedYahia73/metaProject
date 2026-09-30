@@ -3,6 +3,7 @@
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Laravel\Sanctum\Sanctum;
 
 uses(RefreshDatabase::class);
 
@@ -119,5 +120,41 @@ test('facebook login returns token for returning user', function () {
     $this->assertDatabaseHas('users', [
         'id' => $user->id,
         'facebook_access_token' => 'refreshed_fb_token',
+    ]);
+});
+
+test('authenticated user can link facebook account and updates access token', function () {
+    $user = User::factory()->create([
+        'email' => 'regular_user@example.com',
+        'facebook_id' => null,
+        'facebook_access_token' => null,
+        'role' => 'user',
+    ]);
+
+    Sanctum::actingAs($user);
+
+    Http::fake([
+        'https://graph.facebook.com/*' => Http::response([
+            'id' => '999888777',
+            'name' => 'FB Linked Name',
+            'email' => 'fb_different_email@example.com',
+        ], 200),
+    ]);
+
+    $response = $this->postJson('/api/auth/facebook', [
+        'access_token' => 'new_linked_fb_token',
+    ]);
+
+    $response->assertOk()
+        ->assertJson([
+            'status' => true,
+            'message' => 'Account linked to Facebook successfully.',
+        ])
+        ->assertJsonPath('data.is_new', false);
+
+    $this->assertDatabaseHas('users', [
+        'id' => $user->id,
+        'facebook_id' => '999888777',
+        'facebook_access_token' => 'new_linked_fb_token',
     ]);
 });

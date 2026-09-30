@@ -87,10 +87,32 @@ class MessengerPagesController extends Controller
 
         $graphVersion = config('services.meta.graph_version', 'v21.0');
 
-        $response = Http::get(self::GRAPH_API_BASE."/{$graphVersion}/me/accounts", [
-            'fields' => 'id,name,category,tasks',
-            'access_token' => $user->facebook_access_token,
-        ]);
+        try {
+            $response = Http::withToken($user->facebook_access_token)
+                ->withOptions([
+                    'curl' => [
+                        CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+                        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                    ],
+                ])
+                ->timeout(30)
+                ->retry(2, 200, throw: false)
+                ->get(self::GRAPH_API_BASE."/{$graphVersion}/me/accounts", [
+                    'fields' => 'id,name,category,tasks',
+                    'access_token' => $user->facebook_access_token,
+                ]);
+        } catch (\Throwable $e) {
+            Log::error('MessengerPagesController::pages — Meta connection error', [
+                'user_id' => $user->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'message' => 'Failed to connect to Meta servers. Please check server network or try again.',
+                'error' => $e->getMessage(),
+            ], Response::HTTP_BAD_GATEWAY);
+        }
 
         if (! $response->successful()) {
             Log::warning('MessengerPagesController::pages — Graph API failed', [
@@ -199,10 +221,32 @@ class MessengerPagesController extends Controller
         $graphVersion = config('services.meta.graph_version', 'v21.0');
 
         // 1. Verify the page belongs to this user & get the page_access_token
-        $accountsResponse = Http::get(self::GRAPH_API_BASE."/{$graphVersion}/me/accounts", [
-            'fields' => 'id,name,category,access_token',
-            'access_token' => $user->facebook_access_token,
-        ]);
+        try {
+            $accountsResponse = Http::withToken($user->facebook_access_token)
+                ->withOptions([
+                    'curl' => [
+                        CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+                        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                    ],
+                ])
+                ->timeout(30)
+                ->retry(2, 200, throw: false)
+                ->get(self::GRAPH_API_BASE."/{$graphVersion}/me/accounts", [
+                    'fields' => 'id,name,category,access_token',
+                    'access_token' => $user->facebook_access_token,
+                ]);
+        } catch (\Throwable $e) {
+            Log::error('MessengerPagesController::requestSubscription — Meta connection error', [
+                'user_id' => $user->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'message' => 'Failed to verify Facebook Page with Meta due to a connection issue. Please try again.',
+                'error' => $e->getMessage(),
+            ], Response::HTTP_BAD_GATEWAY);
+        }
 
         if (! $accountsResponse->successful()) {
             return response()->json([

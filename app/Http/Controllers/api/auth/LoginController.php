@@ -293,10 +293,31 @@ class LoginController extends Controller
         $graphVersion = config('services.meta.graph_version', 'v21.0');
 
         // 1. Verify token & fetch user info from Graph API
-        $meResponse = Http::get("https://graph.facebook.com/{$graphVersion}/me", [
-            'fields' => 'id,name,email',
-            'access_token' => $fbToken,
-        ]);
+        try {
+            $meResponse = Http::withToken($fbToken)
+                ->withOptions([
+                    'curl' => [
+                        CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+                        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                    ],
+                ])
+                ->timeout(30)
+                ->retry(2, 200, throw: false)
+                ->get("https://graph.facebook.com/{$graphVersion}/me", [
+                    'fields' => 'id,name,email',
+                    'access_token' => $fbToken,
+                ]);
+        } catch (\Throwable $e) {
+            Log::error('Facebook login: connection error', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'message' => 'Unable to connect to Facebook for verification. Please try again.',
+                'error' => $e->getMessage(),
+            ], Response::HTTP_BAD_GATEWAY);
+        }
 
         if (! $meResponse->successful()) {
             Log::warning('Facebook login: Graph API /me failed', [
@@ -325,16 +346,21 @@ class LoginController extends Controller
 
         // 2. Find or create user
         /** @var User|null $user */
-        $user = User::where('id', auth()->id)
-            ->first();
+        $user = $request->user() ?: auth('sanctum')->user();
+
+        if (! $user) {
+            $user = User::where('facebook_id', $facebookId)->first();
+        }
 
         if (! $user && $fbEmail) {
             // Link existing account that has the same email
             $user = User::where('email', $fbEmail)->first();
         }
 
+        $isLinkingExistingAccount = (bool) ($request->user() || auth('sanctum')->check());
+
         if ($user) {
-            // Update facebook token on every login (tokens refresh)
+            // Update facebook token on every login/link (tokens refresh)
             $user->update([
                 'facebook_id' => $facebookId,
                 'facebook_access_token' => $fbToken,
@@ -361,9 +387,13 @@ class LoginController extends Controller
 
         $token = $user->createToken('facebook_auth_token')->plainTextToken;
 
+        $message = $user->wasRecentlyCreated
+            ? 'Account created via Facebook.'
+            : ($isLinkingExistingAccount ? 'Account linked to Facebook successfully.' : 'Logged in via Facebook.');
+
         return response()->json([
             'status' => true,
-            'message' => $user->wasRecentlyCreated ? 'Account created via Facebook.' : 'Logged in via Facebook.',
+            'message' => $message,
             'data' => [
                 'user' => $user,
                 'token' => $token,
