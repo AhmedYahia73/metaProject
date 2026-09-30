@@ -53,13 +53,9 @@ Route::view('/privacy-policy', 'privacy-policy');
 Route::prefix('auth')->group(function () {
     Route::middleware('throttle:auth-action')->group(function () {
         Route::post('signup', [LoginController::class, 'signup']);
-        Route::post('active-account', [LoginController::class, 'active_account']);
         Route::post('active_account', [LoginController::class, 'active_account']);
-        Route::post('forget-password', [LoginController::class, 'forget_password']);
         Route::post('forget_password', [LoginController::class, 'forget_password']);
-        Route::post('check-code', [LoginController::class, 'check_code']);
         Route::post('check_code', [LoginController::class, 'check_code']);
-        Route::post('change-password', [LoginController::class, 'change_password']);
         Route::post('change_password', [LoginController::class, 'change_password']);
         Route::post('reset-password', [LoginController::class, 'change_password']);
     });
