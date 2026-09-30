@@ -201,7 +201,7 @@ test('adminLogin can succeed multiple times without being blocked if credentials
 test('each endpoint has an independent rate limiter and does not consume others attempts', function () {
     Mail::fake();
 
-    User::create([
+    $user = User::create([
         'name' => 'Independent User',
         'email' => 'independent@test.com',
         'password' => Hash::make('password123'),
@@ -245,4 +245,3 @@ test('each endpoint has an independent rate limiter and does not consume others 
         'password' => 'newpassword123',
     ])->assertOk();
 });
-

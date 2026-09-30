@@ -60,7 +60,7 @@ Route::prefix('auth')->group(function () {
 
     Route::post('admin/login', [LoginController::class, 'adminLogin']);
     Route::post('user/login', [LoginController::class, 'userLogin']);
-    Route::post('facebook', [LoginController::class, 'facebookLogin']);
+    Route::post('facebook', [LoginController::class, 'facebookLogin'])->middleware('auth:sanctum');
     Route::post('logout', [LoginController::class, 'logout'])->middleware('auth:sanctum');
 });
 
