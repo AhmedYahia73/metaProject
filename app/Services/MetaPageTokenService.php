@@ -19,6 +19,49 @@ class MetaPageTokenService
     }
 
     /**
+     * Exchange a short-lived Facebook User Access Token (1-2 hours) for a long-lived token (60 days).
+     * If app_id or app_secret are not configured, returns the original token.
+     */
+    public function exchangeForLongLivedToken(string $shortLivedToken): string
+    {
+        $appId = config('services.meta.app_id');
+        $appSecret = config('services.meta.app_secret');
+
+        if (empty($appId) || empty($appSecret) || empty($shortLivedToken)) {
+            return $shortLivedToken;
+        }
+
+        try {
+            $response = Http::get("{$this->baseUrl}/oauth/access_token", [
+                'grant_type' => 'fb_exchange_token',
+                'client_id' => $appId,
+                'client_secret' => $appSecret,
+                'fb_exchange_token' => $shortLivedToken,
+            ]);
+
+            if ($response->successful()) {
+                $longLived = (string) $response->json('access_token', '');
+                if (! empty($longLived)) {
+                    Log::info('MetaPageTokenService: successfully exchanged short-lived token for long-lived token (60 days)');
+
+                    return $longLived;
+                }
+            } else {
+                Log::warning('MetaPageTokenService: exchangeForLongLivedToken failed', [
+                    'status' => $response->status(),
+                    'error' => $response->json(),
+                ]);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('MetaPageTokenService: exception during exchangeForLongLivedToken', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return $shortLivedToken;
+    }
+
+    /**
      * Fetch user's Facebook pages from Graph API and update existing MessengerAccounts
      * and InstagramItems in the database with fresh page_access_token / access_token.
      *

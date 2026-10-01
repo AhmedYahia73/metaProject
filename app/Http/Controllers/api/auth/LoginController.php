@@ -364,6 +364,11 @@ class LoginController extends Controller
 
         $isLinkingExistingAccount = (bool) ($request->user() || auth('sanctum')->check());
 
+        // Exchange short-lived token for long-lived token (60 days) if Meta App credentials exist
+        /** @var MetaPageTokenService $tokenService */
+        $tokenService = app(MetaPageTokenService::class);
+        $fbToken = $tokenService->exchangeForLongLivedToken($fbToken);
+
         if ($user) {
             // Update facebook token on every login/link (tokens refresh)
             $user->update([

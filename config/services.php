@@ -36,6 +36,8 @@ return [
     ],
 
     'meta' => [
+        'app_id' => env('META_APP_ID'),
+        'app_secret' => env('META_APP_SECRET', env('META_MESSENGER_APP_SECRET')),
         'waba_id' => env('META_WABA_ID'),
         'phone_number_id' => env('META_PHONE_NUMBER_ID'),
         'system_user_id' => env('META_SYSTEM_USER_ID'),
