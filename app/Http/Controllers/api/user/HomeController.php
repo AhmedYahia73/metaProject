@@ -311,7 +311,7 @@ class HomeController extends Controller
                     ->timeout(30)
                     ->retry(2, 200, throw: false)
                     ->get(self::GRAPH_API_BASE."/{$graphVersion}/me/accounts", [
-                        'fields' => 'id,name,category,tasks,picture{url},instagram_business_account{id,username,name,profile_picture_url}',
+                        'fields' => 'id,name,category,tasks,access_token,picture{url},instagram_business_account{id,username,name,profile_picture_url}',
                         'access_token' => $user->facebook_access_token,
                     ]);
 
@@ -327,11 +327,15 @@ class HomeController extends Controller
                         ->get()
                         ->keyBy('instagram_id');
 
-                    // Map Facebook Pages with profile pictures
+                    // Map Facebook Pages with profile pictures and auto-update tokens
                     $messengerPages = collect($rawPages)->map(function (array $page) use ($existingMessengerAccounts) {
                         $pageId = (string) $page['id'];
                         /** @var MessengerAccount|null $account */
                         $account = $existingMessengerAccounts->get($pageId);
+
+                        if ($account && ! empty($page['access_token']) && $account->page_access_token !== $page['access_token']) {
+                            $account->update(['page_access_token' => $page['access_token']]);
+                        }
 
                         $subInfo = $account ? $account->getSubscriptionInfo() : [
                             'subscription_status' => false,
@@ -351,7 +355,7 @@ class HomeController extends Controller
                         ];
                     })->values();
 
-                    // Map Instagram Business Accounts with profile pictures
+                    // Map Instagram Business Accounts with profile pictures and auto-update tokens
                     $instagramPages = collect($rawPages)
                         ->filter(fn (array $page) => ! empty($page['instagram_business_account']))
                         ->map(function (array $page) use ($existingInstagramAccounts) {
@@ -359,6 +363,11 @@ class HomeController extends Controller
                             $igId = (string) $ig['id'];
                             /** @var InstagramItem|null $account */
                             $account = $existingInstagramAccounts->get($igId);
+
+                            $pageAccessToken = $page['access_token'] ?? null;
+                            if ($account && ! empty($pageAccessToken) && $account->access_token !== $pageAccessToken) {
+                                $account->update(['access_token' => $pageAccessToken, 'page_id' => (string) $page['id']]);
+                            }
 
                             $subInfo = $account ? $account->getSubscriptionInfo() : [
                                 'subscription_status' => false,

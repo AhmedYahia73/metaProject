@@ -8,6 +8,7 @@ use App\Models\InstagramItem;
 use App\Models\MessengerAccount;
 use App\Models\MsgSend;
 use App\Models\WhatsItem;
+use App\Services\MetaPageTokenService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -77,7 +78,7 @@ class ChatController extends Controller
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
                 'created_at' => $account->created_at,
-                'profile_picture' => "https://graph.facebook.com/{$account->page_id}/picture?type=large"
+                'profile_picture' => "https://graph.facebook.com/{$account->page_id}/picture?type=large",
             ];
         };
 
@@ -319,7 +320,27 @@ class ChatController extends Controller
                 'messaging_type' => 'RESPONSE',
             ]);
 
+        // If sending failed due to expired/invalid token, attempt auto-refresh and retry once
         if (! $response->successful()) {
+            /** @var MetaPageTokenService $tokenService */
+            $tokenService = app(MetaPageTokenService::class);
+            if ($tokenService->isTokenExpiredError($response->status(), $response->json() ?? [])) {
+                $refreshedToken = $tokenService->refreshMessengerAccountToken($account);
+                if ($refreshedToken) {
+                    $response = Http::withToken($refreshedToken)
+                        ->post(self::GRAPH_API_BASE.'/me/messages', [
+                            'recipient' => ['id' => $recipientId],
+                            'message' => ['text' => $messageText],
+                            'messaging_type' => 'RESPONSE',
+                        ]);
+                }
+            }
+        }
+
+        $metaMessageId = data_get($response->json(), 'message_id');
+        $isSentSuccessfully = $response->successful() && ! empty($metaMessageId);
+
+        if (! $isSentSuccessfully) {
             Log::error('SendMessengerMessage failed', [
                 'user_id' => $user->id,
                 'page_id' => $account->page_id,
@@ -331,10 +352,11 @@ class ChatController extends Controller
             return response()->json([
                 'status' => false,
                 'message' => 'Failed to send message via Messenger API.',
-                'error' => $response->json('error.message'),
+                'error' => data_get($response->json(), 'error.message', 'Unknown error occurred while sending message.'),
             ], Response::HTTP_BAD_GATEWAY);
         }
 
+        // Only save to DB and decrement quota after Meta confirms successful send
         if ((int) $account->msg_number > 0) {
             $account->decrement('msg_number');
         }
@@ -352,7 +374,7 @@ class ChatController extends Controller
             'read_at' => now(),
             'channel' => 'messenger',
             'messenger_sender_id' => $recipientId,
-            'meta_message_id' => $response->json('message_id'),
+            'meta_message_id' => $metaMessageId,
         ]);
 
         MsgSend::create([
@@ -672,7 +694,10 @@ class ChatController extends Controller
                 'text' => ['body' => $messageText],
             ]);
 
-        if (! $response->successful()) {
+        $metaMessageId = data_get($response->json(), 'messages.0.id');
+        $isSentSuccessfully = $response->successful() && ! empty($metaMessageId);
+
+        if (! $isSentSuccessfully) {
             Log::error('SendWhatsMessage failed', [
                 'user_id' => $user->id,
                 'whats_item_id' => $item->id,
@@ -684,10 +709,11 @@ class ChatController extends Controller
             return response()->json([
                 'status' => false,
                 'message' => 'Failed to send WhatsApp message via Meta Cloud API.',
-                'error' => $response->json('error.message'),
+                'error' => data_get($response->json(), 'error.message', 'Unknown error occurred while sending WhatsApp message.'),
             ], Response::HTTP_BAD_GATEWAY);
         }
 
+        // Only save to DB and decrement quota after Meta confirms successful send
         if ((int) $item->msg_number > 0) {
             $item->decrement('msg_number');
         }
@@ -704,7 +730,7 @@ class ChatController extends Controller
             'is_read' => true,
             'read_at' => now(),
             'channel' => 'whatsapp',
-            'meta_message_id' => data_get($response->json(), 'messages.0.id'),
+            'meta_message_id' => $metaMessageId,
         ]);
 
         MsgSend::create([
@@ -1013,7 +1039,26 @@ class ChatController extends Controller
                 'message' => ['text' => $messageText],
             ]);
 
+        // If sending failed due to expired/invalid token, attempt auto-refresh and retry once
         if (! $response->successful()) {
+            /** @var MetaPageTokenService $tokenService */
+            $tokenService = app(MetaPageTokenService::class);
+            if ($tokenService->isTokenExpiredError($response->status(), $response->json() ?? [])) {
+                $refreshedToken = $tokenService->refreshInstagramItemToken($item);
+                if ($refreshedToken) {
+                    $response = Http::withToken($refreshedToken)
+                        ->post(self::GRAPH_API_BASE.'/me/messages', [
+                            'recipient' => ['id' => $recipientId],
+                            'message' => ['text' => $messageText],
+                        ]);
+                }
+            }
+        }
+
+        $metaMessageId = data_get($response->json(), 'message_id');
+        $isSentSuccessfully = $response->successful() && ! empty($metaMessageId);
+
+        if (! $isSentSuccessfully) {
             Log::error('Instagram manual send failed', [
                 'instagram_item_id' => $item->id,
                 'recipient_id' => $recipientId,
@@ -1024,11 +1069,11 @@ class ChatController extends Controller
             return response()->json([
                 'status' => false,
                 'message' => 'Failed to send message via Instagram API.',
-                'meta_error' => $response->json('error.message', 'Unknown Meta API error'),
+                'meta_error' => data_get($response->json(), 'error.message', 'Unknown Meta API error'),
             ], Response::HTTP_BAD_GATEWAY);
         }
 
-        // Deduct quota if account has limited msgs
+        // Only save to DB and decrement quota after Meta confirms successful send
         if ((int) $item->msg_number > 0) {
             $item->decrement('msg_number');
         }
@@ -1046,7 +1091,7 @@ class ChatController extends Controller
             'read_at' => now(),
             'channel' => 'instagram',
             'instagram_sender_id' => $recipientId,
-            'meta_message_id' => data_get($response->json(), 'message_id'),
+            'meta_message_id' => $metaMessageId,
         ]);
 
         MsgSend::create([

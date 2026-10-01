@@ -337,7 +337,9 @@ class OrderController extends Controller
 
         $validated = $request->validate([
             'ai_context' => 'sometimes|nullable|string',
-            'ai_file' => 'sometimes|nullable||file|mimes:txt,text,md|extensions:md|max:2048',
+            'ai_file' => $request->hasFile('ai_file')
+                ? 'sometimes|nullable|file|mimes:txt,text,md|extensions:md|max:2048'
+                : 'sometimes|nullable|string',
             'website_url' => 'sometimes|nullable|string|max:500',
         ]);
 
@@ -380,6 +382,8 @@ class OrderController extends Controller
 
                 $msgsToAdd = $order->msgs ?: (int) $package->msg_number;
                 $accountUpdate['msg_number'] = ((int) $account->msg_number) + $msgsToAdd;
+                $accountUpdate['start_date'] = $fromDate->toDateString();
+                $accountUpdate['end_date'] = $toDate->toDateString();
 
                 $account->update($accountUpdate);
 
@@ -410,6 +414,8 @@ class OrderController extends Controller
                     'webhook_url' => url('/api/messenger-webhook'),
                     'verify_token' => $account->verify_token,
                     'msg_number' => $account->msg_number,
+                    'start_date' => $account->fresh()->start_date?->toDateString(),
+                    'end_date' => $account->fresh()->end_date?->toDateString(),
                     'website_url' => $account->fresh()->website_url,
                 ];
             }
@@ -439,6 +445,8 @@ class OrderController extends Controller
 
                 $msgsToAdd = $order->msgs ?: (int) $package->msg_number;
                 $itemUpdate['msg_number'] = ((int) $instagramItem->msg_number) + $msgsToAdd;
+                $itemUpdate['start_date'] = $fromDate->toDateString();
+                $itemUpdate['end_date'] = $toDate->toDateString();
 
                 $instagramItem->update($itemUpdate);
 
@@ -461,6 +469,8 @@ class OrderController extends Controller
                     'webhook_url' => url('/api/instagram-webhook'),
                     'verify_token' => $instagramItem->verify_token,
                     'msg_number' => $instagramItem->fresh()->msg_number,
+                    'start_date' => $instagramItem->fresh()->start_date?->toDateString(),
+                    'end_date' => $instagramItem->fresh()->end_date?->toDateString(),
                     'ai_context' => $instagramItem->fresh()->ai_context,
                     'ai_file' => $instagramItem->fresh()->ai_file,
                     'website_url' => $instagramItem->fresh()->website_url,
@@ -472,7 +482,11 @@ class OrderController extends Controller
             $msgsToAdd = $order->msgs ?: (int) $package->msg_number;
 
             if ($whatsItem) {
-                $whatsItemUpdate = [];
+                $whatsItemUpdate = [
+                    'start_date' => $fromDate->toDateString(),
+                    'end_date' => $toDate->toDateString(),
+                    'phone_status' => 'active',
+                ];
 
                 if ($request->has('ai_context')) {
                     $whatsItemUpdate['ai_context'] = $validated['ai_context'] ?? null;
@@ -491,16 +505,16 @@ class OrderController extends Controller
                     $whatsItemUpdate['ai_file'] = $request->input('ai_file');
                 }
 
-                if (! empty($whatsItemUpdate)) {
-                    $whatsItem->update($whatsItemUpdate);
-                }
+                $whatsItemUpdate['msg_number'] = ((int) $whatsItem->msg_number) + $msgsToAdd;
+                $whatsItem->update($whatsItemUpdate);
 
-                $whatsItem->increment('msg_number', $msgsToAdd);
                 $activationResult = [
                     'whats_item_id' => $whatsItem->id,
                     'phone' => $whatsItem->phone,
                     'whatsapp_msgs_added' => $msgsToAdd,
                     'msg_number' => $whatsItem->fresh()->msg_number,
+                    'start_date' => $whatsItem->fresh()->start_date?->toDateString(),
+                    'end_date' => $whatsItem->fresh()->end_date?->toDateString(),
                     'ai_context' => $whatsItem->fresh()->ai_context,
                     'ai_file' => $whatsItem->fresh()->ai_file,
                     'website_url' => $whatsItem->fresh()->website_url,

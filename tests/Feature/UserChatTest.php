@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Chat;
+use App\Models\InstagramItem;
 use App\Models\MessengerAccount;
 use App\Models\MsgSend;
 use App\Models\Order;
@@ -8,6 +9,7 @@ use App\Models\Package;
 use App\Models\User;
 use App\Models\WhatsItem;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 
 uses(RefreshDatabase::class);
@@ -16,9 +18,9 @@ uses(RefreshDatabase::class);
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function createChatUser(): User
+function createChatUser(array $attrs = []): User
 {
-    return User::factory()->create(['role' => 'user']);
+    return User::factory()->create(array_merge(['role' => 'user'], $attrs));
 }
 
 function createActiveOrder(User $user, string $channel, MessengerAccount|WhatsItem $accountOrItem, int $msgs = 500): Order
@@ -685,4 +687,196 @@ test('whatsapp chat endpoints return 403 forbidden without active subscription',
             'phone' => '201099998888',
         ])
         ->assertForbidden();
+});
+
+test('messenger message is not saved to db when meta api fails and msg_number is not decremented', function () {
+    $user = createChatUser();
+
+    $account = MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'page_id' => 'page_test_fail',
+        'page_access_token' => 'EAA_TEST',
+        'status' => 'active',
+        'msg_number' => 10,
+    ]);
+    createActiveOrder($user, 'messenger', $account);
+
+    Http::fake([
+        'https://graph.facebook.com/*' => Http::response([
+            'error' => [
+                'message' => 'Internal Meta server error',
+                'type' => 'OAuthException',
+                'code' => 2,
+            ],
+        ], 500),
+    ]);
+
+    $response = $this->actingAs($user)
+        ->postJson('/api/user/chat/messenger/send', [
+            'page_id' => $account->page_id,
+            'recipient_id' => 'psid_customer_failed',
+            'message' => 'This should not be saved in db',
+        ]);
+
+    $response->assertStatus(502)
+        ->assertJson([
+            'status' => false,
+            'message' => 'Failed to send message via Messenger API.',
+        ]);
+
+    // Verify nothing saved to db
+    expect(Chat::where('message', 'This should not be saved in db')->count())->toBe(0);
+    expect(MsgSend::count())->toBe(0);
+    expect($account->fresh()->msg_number)->toBe(10);
+});
+
+test('messenger message auto-refreshes expired token and succeeds on retry', function () {
+    $user = createChatUser([
+        'facebook_id' => 'user_fb_123',
+        'facebook_access_token' => 'valid_user_fb_token',
+    ]);
+
+    $account = MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'page_id' => 'page_test_refresh',
+        'page_access_token' => 'expired_page_token',
+        'status' => 'active',
+        'msg_number' => 10,
+    ]);
+    createActiveOrder($user, 'messenger', $account);
+
+    $attempt = 0;
+    Http::fake(function (Request $request) use (&$attempt) {
+        if (str_contains($request->url(), '/me/accounts')) {
+            return Http::response([
+                'data' => [
+                    [
+                        'id' => 'page_test_refresh',
+                        'name' => 'Refreshed Page',
+                        'access_token' => 'brand_new_page_token_abc',
+                    ],
+                ],
+            ], 200);
+        }
+
+        if (str_contains($request->url(), '/me/messages')) {
+            $attempt++;
+            if ($attempt === 1) {
+                // First attempt fails with expired token
+                return Http::response([
+                    'error' => [
+                        'message' => 'Error validating access token: Session has expired.',
+                        'type' => 'OAuthException',
+                        'code' => 190,
+                        'error_subcode' => 463,
+                    ],
+                ], 401);
+            }
+
+            // Second attempt (with refreshed token) succeeds
+            return Http::response([
+                'recipient_id' => 'psid_customer_retry',
+                'message_id' => 'mid.retry_success_12345',
+            ], 200);
+        }
+
+        return Http::response([], 200);
+    });
+
+    $response = $this->actingAs($user)
+        ->postJson('/api/user/chat/messenger/send', [
+            'page_id' => $account->page_id,
+            'recipient_id' => 'psid_customer_retry',
+            'message' => 'Hello after refresh!',
+        ]);
+
+    $response->assertCreated()
+        ->assertJson([
+            'status' => true,
+            'message' => 'Message sent successfully.',
+        ]);
+
+    // Token was updated in DB
+    expect($account->fresh()->page_access_token)->toBe('brand_new_page_token_abc');
+
+    // Message saved and quota decremented
+    expect(Chat::where('message', 'Hello after refresh!')->count())->toBe(1);
+    expect($account->fresh()->msg_number)->toBe(9);
+});
+
+test('whats message is not saved to db when api fails and msg_number is not decremented', function () {
+    $user = createChatUser();
+
+    $item = WhatsItem::factory()->create([
+        'user_id' => $user->id,
+        'phone_status' => 'active',
+        'msg_number' => 5,
+        'phone_number_id' => '123456789',
+        'access_token' => 'token_123',
+    ]);
+    createActiveOrder($user, 'whatsapp', $item);
+
+    Http::fake([
+        '*' => Http::response(['error' => 'WhatsApp gateway down'], 500),
+    ]);
+
+    $response = $this->actingAs($user)
+        ->postJson('/api/user/chat/whatsapp/send', [
+            'whats_item_id' => $item->id,
+            'phone' => '01099998888',
+            'message' => 'This whatsapp message should fail and not be saved',
+        ]);
+
+    $response->assertStatus(502)
+        ->assertJson([
+            'status' => false,
+            'message' => 'Failed to send WhatsApp message via Meta Cloud API.',
+        ]);
+
+    // Verify nothing saved to db
+    expect(Chat::where('message', 'This whatsapp message should fail and not be saved')->count())->toBe(0);
+    expect(MsgSend::count())->toBe(0);
+    expect($item->fresh()->msg_number)->toBe(5);
+});
+
+test('instagram message is not saved to db when meta api fails and msg_number is not decremented', function () {
+    $user = createChatUser();
+
+    $item = InstagramItem::factory()->create([
+        'user_id' => $user->id,
+        'instagram_id' => 'ig_fail_test_123',
+        'access_token' => 'ig_token_abc',
+        'status' => 'active',
+        'msg_number' => 8,
+        'start_date' => now()->subDay()->toDateString(),
+        'end_date' => now()->addMonth()->toDateString(),
+    ]);
+
+    Http::fake([
+        'https://graph.facebook.com/*' => Http::response([
+            'error' => [
+                'message' => 'Instagram API rate limit exceeded',
+                'type' => 'OAuthException',
+                'code' => 4,
+            ],
+        ], 400),
+    ]);
+
+    $response = $this->actingAs($user)
+        ->postJson('/api/user/chat/instagram/send', [
+            'instagram_item_id' => $item->id,
+            'recipient_id' => 'ig_user_111',
+            'message' => 'Failed instagram message',
+        ]);
+
+    $response->assertStatus(502)
+        ->assertJson([
+            'status' => false,
+            'message' => 'Failed to send message via Instagram API.',
+        ]);
+
+    // Verify nothing saved to db
+    expect(Chat::where('message', 'Failed instagram message')->count())->toBe(0);
+    expect(MsgSend::count())->toBe(0);
+    expect($item->fresh()->msg_number)->toBe(8);
 });

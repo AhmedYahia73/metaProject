@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Mail\ActivationCodeMail;
 use App\Mail\ResetPasswordCodeMail;
 use App\Models\User;
+use App\Services\MetaPageTokenService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -348,6 +349,10 @@ class LoginController extends Controller
         /** @var User|null $user */
         $user = $request->user() ?: auth('sanctum')->user();
 
+        if (! $user && auth()->check()) {
+            $user = auth()->user();
+        }
+
         if (! $user) {
             $user = User::where('facebook_id', $facebookId)->first();
         }
@@ -384,6 +389,9 @@ class LoginController extends Controller
             'facebook_id' => $facebookId,
             'is_new' => $user->wasRecentlyCreated,
         ]);
+
+        // Automatically update all user's Facebook pages and Instagram items with fresh tokens
+        app(MetaPageTokenService::class)->syncUserPagesAndTokens($user, $fbToken);
 
         $token = $user->createToken('facebook_auth_token')->plainTextToken;
 

@@ -64,6 +64,7 @@ class InstagramPagesController extends Controller
             'status' => true,
             'lang' => $lang,
             'instagram_packages' => $packages,
+            'data' => $packages,
         ]);
     }
 
@@ -95,7 +96,7 @@ class InstagramPagesController extends Controller
                 ->timeout(30)
                 ->retry(2, 200, throw: false)
                 ->get(self::GRAPH_API_BASE."/{$graphVersion}/me/accounts", [
-                    'fields' => 'id,name,category,instagram_business_account{id,username,name,profile_picture_url}',
+                    'fields' => 'id,name,category,access_token,instagram_business_account{id,username,name,profile_picture_url}',
                     'access_token' => $user->facebook_access_token,
                 ]);
         } catch (\Throwable $e) {
@@ -133,11 +134,23 @@ class InstagramPagesController extends Controller
 
         $instagramAccounts = collect($rawPages)
             ->filter(fn (array $page) => ! empty($page['instagram_business_account']))
-            ->map(function (array $page) use ($existingAccounts) {
+            ->map(function (array $page) use ($existingAccounts, $user) {
                 $ig = $page['instagram_business_account'];
                 $igId = (string) $ig['id'];
                 /** @var InstagramItem|null $account */
                 $account = $existingAccounts->get($igId);
+
+                // Automatically update existing InstagramItem token
+                if ($account && ! empty($page['access_token']) && $account->access_token !== $page['access_token']) {
+                    $account->update(['access_token' => $page['access_token'], 'page_id' => (string) $page['id']]);
+                }
+
+                // Also update MessengerAccount token if exists for this page
+                if (! empty($page['access_token'])) {
+                    MessengerAccount::where('user_id', $user->id)
+                        ->where('page_id', (string) $page['id'])
+                        ->update(['page_access_token' => $page['access_token']]);
+                }
 
                 $subInfo = $account ? $account->getSubscriptionInfo() : [
                     'subscription_status' => false,

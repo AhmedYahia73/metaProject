@@ -65,6 +65,8 @@ class WebhookTestSeeder extends Seeder
                 'android_link' => 'https://play.google.com/store/apps/details?id=com.burgerlite',
                 'ios_link' => 'https://apps.apple.com/app/id123456789',
                 'msg_number' => 10000,
+                'start_date' => now()->subDays(10)->toDateString(),
+                'end_date' => now()->addYear()->toDateString(),
             ]
         );
 
@@ -74,6 +76,8 @@ class WebhookTestSeeder extends Seeder
             [
                 'package_id' => $package->id,
                 'whats_item_id' => $whatsItem->id,
+                'channel' => 'whatsapp',
+                'status' => 'approved',
                 'price' => 200.00,
                 'final_price' => 200.00,
                 'total_discount' => 0.00,

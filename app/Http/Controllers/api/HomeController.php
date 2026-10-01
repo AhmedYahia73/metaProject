@@ -136,13 +136,9 @@ class HomeController extends Controller
                 'message' => $messageText,
             ]);
 
-            // 4. Check if the WhatsItem or restaurant has an active subscription with remaining messages
-            $hasRemainingQuota = ((int) $whatsItem->msg_number) > 0;
-            $hasActiveOrder = $this->hasRemainingMessages($restaurant, 'whatsapp');
-            $hasLimit = $hasRemainingQuota || $hasActiveOrder;
-
-            if (! $hasLimit) {
-                Log::info("Webhook: message limit reached for WhatsItem #{$whatsItem->id} (restaurant #{$restaurant->id})");
+            // 4. Check if the WhatsItem has an active subscription with remaining messages
+            if (! $whatsItem->hasActiveSubscription()) {
+                Log::info("Webhook: message limit reached or inactive subscription for WhatsItem #{$whatsItem->id} (restaurant #{$restaurant->id})");
 
                 return response()->json(['status' => 'limit_exceeded'], Response::HTTP_OK);
             }
@@ -446,21 +442,9 @@ class HomeController extends Controller
                 return response()->json(['status' => 'non_text_ignored'], Response::HTTP_OK);
             }
 
-            // Check Messenger-specific message limit on the MessengerAccount and active order
-            $hasRemainingQuota = ((int) $messengerAccount->msg_number) > 0;
-            $hasActiveOrder = $this->hasRemainingMessages($restaurant, 'messenger');
-            $hasLimit = $hasRemainingQuota || $hasActiveOrder;
-
-            Log::channel('stack')->info('[MESSENGER] ⚡ Limit check', [
-                'restaurant_id' => $restaurant->id,
-                'messenger_account_id' => $messengerAccount->id,
-                'account_msg_number' => $messengerAccount->msg_number,
-                'has_remaining_quota' => $hasRemainingQuota,
-                'has_active_order' => $hasActiveOrder,
-            ]);
-
-            if (! $hasLimit) {
-                Log::channel('stack')->warning("[MESSENGER] ✗ Limit exceeded for account #{$messengerAccount->id} (restaurant #{$restaurant->id})");
+            // Check Messenger-specific message limit on the MessengerAccount
+            if (! $messengerAccount->hasActiveSubscription()) {
+                Log::channel('stack')->warning("[MESSENGER] ✗ Limit exceeded or inactive subscription for account #{$messengerAccount->id} (restaurant #{$restaurant->id})");
 
                 return response()->json(['status' => 'limit_exceeded'], Response::HTTP_OK);
             }
@@ -782,20 +766,8 @@ class HomeController extends Controller
             }
 
             // Check Instagram-specific message limit
-            $hasRemainingQuota = ((int) $instagramItem->msg_number) > 0;
-            $hasActiveOrder = $this->hasRemainingMessages($restaurant, 'instagram');
-            $hasLimit = $hasRemainingQuota || $hasActiveOrder;
-
-            Log::channel('stack')->info('[INSTAGRAM] ⚡ Limit check', [
-                'restaurant_id' => $restaurant->id,
-                'instagram_item_id' => $instagramItem->id,
-                'item_msg_number' => $instagramItem->msg_number,
-                'has_remaining_quota' => $hasRemainingQuota,
-                'has_active_order' => $hasActiveOrder,
-            ]);
-
-            if (! $hasLimit) {
-                Log::channel('stack')->warning("[INSTAGRAM] ✗ Limit exceeded for InstagramItem #{$instagramItem->id} (restaurant #{$restaurant->id})");
+            if (! $instagramItem->hasActiveSubscription()) {
+                Log::channel('stack')->warning("[INSTAGRAM] ✗ Limit exceeded or inactive subscription for InstagramItem #{$instagramItem->id} (restaurant #{$restaurant->id})");
 
                 return response()->json(['status' => 'limit_exceeded'], Response::HTTP_OK);
             }

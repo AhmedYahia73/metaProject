@@ -96,7 +96,7 @@ class MessengerPagesController extends Controller
                 ->timeout(30)
                 ->retry(2, 200, throw: false)
                 ->get(self::GRAPH_API_BASE."/{$graphVersion}/me/accounts", [
-                    'fields' => 'id,name,category,tasks',
+                    'fields' => 'id,name,category,tasks,access_token,instagram_business_account{id,username}',
                     'access_token' => $user->facebook_access_token,
                 ]);
         } catch (\Throwable $e) {
@@ -133,10 +133,26 @@ class MessengerPagesController extends Controller
             ->get()
             ->keyBy('page_id');
 
-        $pages = collect($rawPages)->map(function (array $page) use ($existingAccounts) {
+        $pages = collect($rawPages)->map(function (array $page) use ($existingAccounts, $user) {
             $pageId = (string) $page['id'];
             /** @var MessengerAccount|null $account */
             $account = $existingAccounts->get($pageId);
+
+            // Automatically update page_access_token if fresh token is provided
+            if ($account && ! empty($page['access_token']) && $account->page_access_token !== $page['access_token']) {
+                $account->update(['page_access_token' => $page['access_token']]);
+            }
+
+            // Also update InstagramItem token if linked to this page
+            $igId = data_get($page, 'instagram_business_account.id');
+            if ($igId && ! empty($page['access_token'])) {
+                InstagramItem::where('user_id', $user->id)
+                    ->where(function ($q) use ($pageId, $igId) {
+                        $q->where('page_id', $pageId)
+                            ->orWhere('instagram_id', (string) $igId);
+                    })
+                    ->update(['access_token' => $page['access_token'], 'page_id' => $pageId]);
+            }
 
             $subInfo = $account ? $account->getSubscriptionInfo() : [
                 'subscription_status' => false,
@@ -151,7 +167,7 @@ class MessengerPagesController extends Controller
                 'linked_status' => $account?->status,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
-                'profile_picture' => "https://graph.facebook.com/{$pageId}/picture?type=large"
+                'profile_picture' => "https://graph.facebook.com/{$pageId}/picture?type=large",
             ];
         })->values();
 

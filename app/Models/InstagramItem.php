@@ -30,6 +30,8 @@ class InstagramItem extends Model
         'ios_link',
         'website_url',
         'msg_number',
+        'start_date',
+        'end_date',
     ];
 
     /**
@@ -51,6 +53,8 @@ class InstagramItem extends Model
         return [
             'status' => 'string',
             'msg_number' => 'integer',
+            'start_date' => 'date',
+            'end_date' => 'date',
         ];
     }
 
@@ -105,45 +109,60 @@ class InstagramItem extends Model
     /**
      * Get active subscription details and available message count for this Instagram account.
      *
-     * @return array{subscription_status: bool, available_msgs: int, total_msgs: int, used_msgs: int}
+     * @return array{subscription_status: bool, available_msgs: int, start_date: ?string, end_date: ?string, total_msgs: int, used_msgs: int}
      */
     public function getSubscriptionInfo(): array
     {
         $today = Carbon::today()->toDateString();
-        $orders = $this->orders()
-            ->where('status', 'approved')
-            ->where('channel', 'instagram')
-            ->where('from', '<=', $today)
-            ->where('to', '>=', $today);
+        $isSubscribed = $this->hasActiveSubscription();
 
-        $totalMsgs = (int) (clone $orders)->sum('msgs');
-        if ($totalMsgs <= 0) {
-            $hasDirectQuota = (int) $this->msg_number > 0;
-
+        if (! empty($this->start_date) && ! empty($this->end_date)) {
             return [
-                'subscription_status' => $hasDirectQuota && $this->status === 'active',
-                'available_msgs' => (int) $this->msg_number,
-                'total_msgs' => (int) $this->msg_number,
+                'subscription_status' => $isSubscribed,
+                'available_msgs' => max(0, (int) $this->msg_number),
+                'start_date' => $this->start_date?->toDateString(),
+                'end_date' => $this->end_date?->toDateString(),
+                'total_msgs' => max(0, (int) $this->msg_number),
                 'used_msgs' => 0,
             ];
         }
 
-        $minDate = (clone $orders)->min('from');
-        $maxDate = (clone $orders)->max('to');
+        $order = $this->orders()
+            ->where('from', '<=', $today)
+            ->where('to', '>=', $today)
+            ->where(function ($q) {
+                $q->where('status', 'approved')
+                    ->orWhere(fn ($sq) => $sq->whereNotNull('from')->whereNotNull('to'));
+            })
+            ->latest('id')
+            ->first();
 
-        $usedMsgs = $this->msgSends()
-            ->where('channel', 'instagram')
-            ->whereDate('created_at', '>=', $minDate)
-            ->whereDate('created_at', '<=', $maxDate)
-            ->count();
+        if (! $order && $this->user_id) {
+            $hasMultipleAccounts = InstagramItem::where('user_id', $this->user_id)->count() > 1;
+            if (! $hasMultipleAccounts) {
+                $order = Order::where('user_id', $this->user_id)
+                    ->whereNull('instagram_item_id')
+                    ->where('from', '<=', $today)
+                    ->where('to', '>=', $today)
+                    ->where(function ($q) {
+                        $q->where('channel', 'instagram')
+                            ->orWhereNull('channel')
+                            ->orWhereHas('package', fn ($pq) => $pq->whereIn('type', ['instagram', 'all']));
+                    })
+                    ->latest('id')
+                    ->first();
+            }
+        }
 
-        $available = max(0, $totalMsgs - $usedMsgs) + (int) $this->msg_number;
+        $available = $order ? ((int) $this->msg_number > 0 ? (int) $this->msg_number : (int) $order->msgs) : (int) $this->msg_number;
 
         return [
-            'subscription_status' => $available > 0 && $this->status === 'active',
-            'available_msgs' => $available,
-            'total_msgs' => $totalMsgs + (int) $this->msg_number,
-            'used_msgs' => $usedMsgs,
+            'subscription_status' => $isSubscribed,
+            'available_msgs' => max(0, $available),
+            'start_date' => $order?->from ? Carbon::parse($order->from)->toDateString() : null,
+            'end_date' => $order?->to ? Carbon::parse($order->to)->toDateString() : null,
+            'total_msgs' => max(0, $available),
+            'used_msgs' => 0,
         ];
     }
 
@@ -156,10 +175,57 @@ class InstagramItem extends Model
             return false;
         }
 
-        if ((int) $this->msg_number > 0) {
-            return true;
+        $today = Carbon::today()->toDateString();
+
+        if (! empty($this->start_date) && ! empty($this->end_date)) {
+            $isWithinDates = $this->start_date->toDateString() <= $today
+                && $this->end_date->toDateString() >= $today;
+
+            return $isWithinDates && ((int) $this->msg_number > 0);
         }
 
-        return (bool) ($this->getSubscriptionInfo()['subscription_status'] ?? false);
+        $order = $this->orders()
+            ->where('from', '<=', $today)
+            ->where('to', '>=', $today)
+            ->where(function ($q) {
+                $q->where('status', 'approved')
+                    ->orWhere(fn ($sq) => $sq->whereNotNull('from')->whereNotNull('to'));
+            })
+            ->latest('id')
+            ->first();
+
+        if (! $order && $this->user_id) {
+            $hasMultipleAccounts = InstagramItem::where('user_id', $this->user_id)->count() > 1;
+            if (! $hasMultipleAccounts) {
+                $order = Order::where('user_id', $this->user_id)
+                    ->whereNull('instagram_item_id')
+                    ->where('from', '<=', $today)
+                    ->where('to', '>=', $today)
+                    ->where(function ($q) {
+                        $q->where('channel', 'instagram')
+                            ->orWhereNull('channel')
+                            ->orWhereHas('package', fn ($pq) => $pq->whereIn('type', ['instagram', 'all']));
+                    })
+                    ->latest('id')
+                    ->first();
+            }
+        }
+
+        if ($order) {
+            $available = (int) $this->msg_number > 0 ? (int) $this->msg_number : (int) $order->msgs;
+            if ($available > 0) {
+                if ($this->msg_number <= 0 || empty($this->start_date) || empty($this->end_date)) {
+                    $this->update([
+                        'start_date' => $this->start_date ?: $order->from,
+                        'end_date' => $this->end_date ?: $order->to,
+                        'msg_number' => (int) $this->msg_number > 0 ? $this->msg_number : $order->msgs,
+                    ]);
+                }
+
+                return true;
+            }
+        }
+
+        return (int) $this->msg_number > 0;
     }
 }
