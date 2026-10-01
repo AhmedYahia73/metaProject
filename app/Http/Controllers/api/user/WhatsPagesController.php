@@ -98,6 +98,7 @@ class WhatsPagesController extends Controller
                     'ai_file' => $item->ai_file,
                     'subscription_status' => $subInfo['subscription_status'],
                     'available_msgs' => $subInfo['available_msgs'],
+                    'profile_picture' => $item->getProfilePictureUrl(),
                 ];
             });
 

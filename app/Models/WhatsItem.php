@@ -2,12 +2,14 @@
 
 namespace App\Models;
 
+use App\Services\MetaWhatsAppService;
 use Database\Factories\WhatsItemFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 
 class WhatsItem extends Model
 {
@@ -147,5 +149,22 @@ class WhatsItem extends Model
     public function hasActiveSubscription(): bool
     {
         return (bool) ($this->getSubscriptionInfo()['subscription_status'] ?? false);
+    }
+
+    /**
+     * Get profile picture URL from Meta WhatsApp Business Cloud API (cached).
+     */
+    public function getProfilePictureUrl(): ?string
+    {
+        if (empty($this->phone_number_id)) {
+            return null;
+        }
+
+        return Cache::remember("whats_item_avatar_{$this->id}_{$this->phone_number_id}", now()->addHours(6), function () {
+            /** @var MetaWhatsAppService $metaService */
+            $metaService = app(MetaWhatsAppService::class);
+
+            return $metaService->getBusinessProfilePicture($this->phone_number_id, $this->access_token);
+        });
     }
 }

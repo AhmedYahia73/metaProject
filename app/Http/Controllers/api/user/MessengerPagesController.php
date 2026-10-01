@@ -55,8 +55,6 @@ class MessengerPagesController extends Controller
                     'tax_id' => $package->tax_id,
                     'discount' => $package->discount,
                     'tax' => $package->tax,
-                    'created_at' => $package->created_at,
-                    'updated_at' => $package->updated_at,
                 ];
             });
 
@@ -153,6 +151,7 @@ class MessengerPagesController extends Controller
                 'linked_status' => $account?->status,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
+                'profile_picture' => "https://graph.facebook.com/{$pageId}/picture?type=large"
             ];
         })->values();
 
@@ -167,15 +166,50 @@ class MessengerPagesController extends Controller
 
         $request->validate([
             'page_id' => 'required',
+            'ai_file' => 'sometimes|nullable|file|mimes:txt,text,md|extensions:md|max:2048',        'ai_context' => 'sometimes',
+            'ai_context' => 'sometimes',
+            'android_link' => 'sometimes',
+            'ios_link' => 'sometimes',
+            'website_url' => 'sometimes',
         ]);
 
         $data = MessengerAccount::where('page_id', $request->page_id)
             ->orderByDesc('id')
             ->first();
 
+        $updateFields = [];
+        if ($request->has('ai_context')) {
+            $updateFields['ai_context'] = $request->ai_context;
+        }
+        if ($request->hasFile('ai_file')) {
+            $uploadedPath = $this->upload($request, 'ai_file', 'instagram/ai_files');
+            if ($uploadedPath) {
+                $updateFields['ai_file'] = $uploadedPath;
+            }
+        } elseif ($request->filled('ai_file') && is_string($request->ai_file)) {
+            $updateFields['ai_file'] = $request->ai_file;
+        }
+        if ($request->has('android_link')) {
+            $updateFields['android_link'] = $request->android_link;
+        }
+        if ($request->has('ios_link')) {
+            $updateFields['ios_link'] = $request->ios_link;
+        }
+        if ($request->has('website_url')) {
+            $updateFields['website_url'] = $request->website_url;
+        }
+
+        if (! empty($updateFields)) {
+            $data->update($updateFields);
+            $data->refresh();
+        }
+
         return response()->json([
             'ai_context' => $data->ai_context,
             'ai_file' => $data->ai_file,
+            'android_link' => $data->android_link,
+            'ios_link' => $data->ios_link,
+            'website_url' => $data->website_url,
         ]);
     }
 

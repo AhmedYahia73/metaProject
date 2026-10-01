@@ -77,6 +77,7 @@ class ChatController extends Controller
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
                 'created_at' => $account->created_at,
+                'profile_picture' => "https://graph.facebook.com/{$account->page_id}/picture?type=large"
             ];
         };
 
@@ -430,6 +431,7 @@ class ChatController extends Controller
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
                 'created_at' => $item->created_at,
+                'profile_picture' => $item->getProfilePictureUrl(),
             ];
         };
 

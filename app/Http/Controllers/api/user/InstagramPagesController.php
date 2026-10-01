@@ -57,15 +57,12 @@ class InstagramPagesController extends Controller
                     'tax_id' => $package->tax_id,
                     'discount' => $package->discount,
                     'tax' => $package->tax,
-                    'created_at' => $package->created_at,
-                    'updated_at' => $package->updated_at,
                 ];
             });
 
         return response()->json([
             'status' => true,
             'lang' => $lang,
-            'data' => $packages,
             'instagram_packages' => $packages,
         ]);
     }
@@ -354,6 +351,10 @@ class InstagramPagesController extends Controller
             'instagram_id' => 'required_without:instagram_item_id|string',
             'instagram_item_id' => 'required_without:instagram_id|integer',
             'ai_file' => 'sometimes|nullable|file|mimes:txt,text,md|extensions:md|max:2048',
+            'ai_context' => 'sometimes',
+            'android_link' => 'sometimes',
+            'ios_link' => 'sometimes',
+            'website_url' => 'sometimes',
         ]);
 
         $query = InstagramItem::query();

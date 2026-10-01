@@ -80,6 +80,7 @@ Route::prefix('user')->group(function () {
     // Authenticated user routes
     Route::middleware(['auth:sanctum', 'user'])->group(function () {
         Route::get('dashboard', [UserHomeController::class, 'index']);
+        Route::get('all_chats', [UserHomeController::class, 'all_chats']);
 
         // Messenger Self-Service — list pages & request subscription
         Route::post('messenger/ai_data', [MessengerPagesController::class, 'ai_data']);

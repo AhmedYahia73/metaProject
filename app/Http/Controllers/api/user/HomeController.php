@@ -5,19 +5,25 @@ namespace App\Http\Controllers\api\user;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\ContactUsRequest;
 use App\Mail\ContactUsMail;
+use App\Models\InstagramItem;
+use App\Models\MessengerAccount;
 use App\Models\MsgSend;
 use App\Models\Order;
 use App\Models\Package;
 use App\Models\User;
+use App\Models\WhatsItem;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Mail\SentMessage;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Symfony\Component\HttpFoundation\Response;
 
 class HomeController extends Controller
 {
+    private const GRAPH_API_BASE = 'https://graph.facebook.com';
+
     /**
      * User / Restaurant Dashboard summary.
      * Returns total messages, used messages, remaining messages, active package, and monthly stats.
@@ -277,5 +283,175 @@ class HomeController extends Controller
                 ],
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
+    }
+
+    /**
+     * Get all connected communication channels/chats for the authenticated user.
+     * Returns Facebook Pages, Instagram Business Accounts, and WhatsApp Numbers with profile pictures and subscription status.
+     */
+    public function all_chats(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $graphVersion = config('services.meta.graph_version', 'v21.0');
+
+        $messengerPages = collect();
+        $instagramPages = collect();
+        $facebookConnected = ! empty($user->facebook_access_token);
+
+        if ($facebookConnected) {
+            try {
+                // Fetch Facebook Pages and linked Instagram accounts in a single optimized Meta Graph API request
+                $response = Http::withToken($user->facebook_access_token)
+                    ->withOptions([
+                        'curl' => [
+                            CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+                            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                        ],
+                    ])
+                    ->timeout(30)
+                    ->retry(2, 200, throw: false)
+                    ->get(self::GRAPH_API_BASE."/{$graphVersion}/me/accounts", [
+                        'fields' => 'id,name,category,tasks,picture{url},instagram_business_account{id,username,name,profile_picture_url}',
+                        'access_token' => $user->facebook_access_token,
+                    ]);
+
+                if ($response->successful()) {
+                    $rawPages = $response->json('data', []);
+
+                    // Map existing registered accounts in database to retrieve subscription info
+                    $existingMessengerAccounts = MessengerAccount::where('user_id', $user->id)
+                        ->get()
+                        ->keyBy('page_id');
+
+                    $existingInstagramAccounts = InstagramItem::where('user_id', $user->id)
+                        ->get()
+                        ->keyBy('instagram_id');
+
+                    // Map Facebook Pages with profile pictures
+                    $messengerPages = collect($rawPages)->map(function (array $page) use ($existingMessengerAccounts) {
+                        $pageId = (string) $page['id'];
+                        /** @var MessengerAccount|null $account */
+                        $account = $existingMessengerAccounts->get($pageId);
+
+                        $subInfo = $account ? $account->getSubscriptionInfo() : [
+                            'subscription_status' => false,
+                            'available_msgs' => 0,
+                        ];
+
+                        $pagePicture = $page['picture']['data']['url']
+                            ?? "https://graph.facebook.com/{$pageId}/picture?type=large";
+
+                        return [
+                            'page_id' => $pageId,
+                            'page_name' => $page['name'] ?? null,
+                            'page_category' => $page['category'] ?? null,
+                            'profile_picture_url' => $pagePicture,
+                            'subscription_status' => $subInfo['subscription_status'],
+                            'available_msgs' => $subInfo['available_msgs'],
+                        ];
+                    })->values();
+
+                    // Map Instagram Business Accounts with profile pictures
+                    $instagramPages = collect($rawPages)
+                        ->filter(fn (array $page) => ! empty($page['instagram_business_account']))
+                        ->map(function (array $page) use ($existingInstagramAccounts) {
+                            $ig = $page['instagram_business_account'];
+                            $igId = (string) $ig['id'];
+                            /** @var InstagramItem|null $account */
+                            $account = $existingInstagramAccounts->get($igId);
+
+                            $subInfo = $account ? $account->getSubscriptionInfo() : [
+                                'subscription_status' => false,
+                                'available_msgs' => 0,
+                            ];
+
+                            return [
+                                'instagram_id' => $igId,
+                                'username' => $ig['username'] ?? null,
+                                'name' => $ig['name'] ?? null,
+                                'profile_picture_url' => $ig['profile_picture_url'] ?? null,
+                                'connected_page_id' => (string) $page['id'],
+                                'connected_page_name' => $page['name'] ?? null,
+                                'subscription_status' => $subInfo['subscription_status'],
+                                'available_msgs' => $subInfo['available_msgs'],
+                            ];
+                        })->values();
+                } else {
+                    Log::warning('HomeController::all_chats — Meta Graph API call failed', [
+                        'user_id' => $user->id,
+                        'status' => $response->status(),
+                        'body' => $response->json(),
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                Log::error('HomeController::all_chats — Meta connection error', [
+                    'user_id' => $user->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        // If Meta call wasn't made or returned empty (e.g. token expired, Meta down, or not linked),
+        // fallback to accounts saved locally in database so existing chats remain accessible
+        if ($messengerPages->isEmpty()) {
+            $messengerPages = MessengerAccount::where('user_id', $user->id)
+                ->get()
+                ->map(function (MessengerAccount $account) {
+                    $subInfo = $account->getSubscriptionInfo();
+
+                    return [
+                        'page_id' => $account->page_id,
+                        'page_name' => $account->page_name,
+                        'page_category' => null,
+                        'profile_picture_url' => "https://graph.facebook.com/{$account->page_id}/picture?type=large",
+                        'subscription_status' => $subInfo['subscription_status'],
+                        'available_msgs' => $subInfo['available_msgs'],
+                    ];
+                });
+        }
+
+        if ($instagramPages->isEmpty()) {
+            $instagramPages = InstagramItem::where('user_id', $user->id)
+                ->get()
+                ->map(function (InstagramItem $account) {
+                    $subInfo = $account->getSubscriptionInfo();
+
+                    return [
+                        'instagram_id' => $account->instagram_id,
+                        'username' => $account->username,
+                        'name' => $account->name,
+                        'profile_picture_url' => $account->profile_picture_url,
+                        'connected_page_id' => $account->page_id,
+                        'connected_page_name' => null,
+                        'subscription_status' => $subInfo['subscription_status'],
+                        'available_msgs' => $subInfo['available_msgs'],
+                    ];
+                });
+        }
+
+        // Fetch WhatsApp numbers with profile pictures and active subscription information
+        $whatsAccounts = $user->whatsItems()->latest()->get()
+            ->map(function (WhatsItem $item) {
+                $subInfo = $item->getSubscriptionInfo();
+
+                return [
+                    'id' => $item->id,
+                    'phone' => $item->phone,
+                    'phone_number_id' => $item->phone_number_id,
+                    'phone_status' => $item->phone_status,
+                    'msg_number' => $item->msg_number,
+                    'profile_picture_url' => $item->getProfilePictureUrl(),
+                    'subscription_status' => $subInfo['subscription_status'],
+                    'available_msgs' => $subInfo['available_msgs'],
+                ];
+            });
+
+        return response()->json([
+            'status' => true,
+            'facebook_connected' => $facebookConnected,
+            'messenger_pages' => $messengerPages,
+            'instagram_pages' => $instagramPages,
+            'whats_accounts' => $whatsAccounts,
+        ]);
     }
 }

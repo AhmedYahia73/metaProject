@@ -454,4 +454,47 @@ class MetaWhatsAppService
             'raw' => $response->json(),
         ];
     }
+
+    /**
+     * Get WhatsApp Business Profile details from Meta (profile_picture_url, about, description, etc.).
+     *
+     * @return array<string, mixed>|null
+     */
+    public function getBusinessProfile(string $phoneNumberId, ?string $token = null): ?array
+    {
+        $accessToken = $token ?: $this->systemUserToken;
+        if (empty($accessToken) || empty($phoneNumberId)) {
+            return null;
+        }
+
+        try {
+            $response = Http::withToken($accessToken)
+                ->timeout(10)
+                ->retry(2, 200, throw: false)
+                ->get("{$this->baseUrl}/{$phoneNumberId}/whatsapp_business_profile", [
+                    'fields' => 'about,address,description,email,profile_picture_url,websites,vertical',
+                ]);
+
+            if ($response->successful()) {
+                return $response->json('data.0') ?? null;
+            }
+        } catch (\Throwable $e) {
+            Log::warning('MetaWhatsApp: Failed to fetch business profile', [
+                'phone_number_id' => $phoneNumberId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return null;
+    }
+
+    /**
+     * Get the profile picture URL for a WhatsApp business phone number.
+     */
+    public function getBusinessProfilePicture(string $phoneNumberId, ?string $token = null): ?string
+    {
+        $profile = $this->getBusinessProfile($phoneNumberId, $token);
+
+        return $profile['profile_picture_url'] ?? null;
+    }
 }
