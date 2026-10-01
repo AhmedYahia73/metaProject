@@ -668,8 +668,8 @@ class HomeController extends Controller
             return $this->instagramVerify($request);
         }
 
-        // ── Log every incoming POST immediately
-        Log::channel('stack')->info('[INSTAGRAM] ⬇ Incoming POST', [
+        // ── Log every incoming POST immediately to both stack and dedicated log
+        $this->logInstagramEvent('INCOMING_POST', '⬇ Incoming webhook POST', [
             'ip' => $request->ip(),
             'payload' => $request->all(),
         ]);
@@ -681,7 +681,9 @@ class HomeController extends Controller
 
             // Only handle instagram events
             if ($object !== 'instagram') {
-                Log::channel('stack')->warning("[INSTAGRAM] ✗ Ignored — object is '{$object}', expected 'instagram'");
+                $this->logInstagramEvent('IGNORED', "✗ Ignored — object is '{$object}', expected 'instagram'", [
+                    'payload' => $data,
+                ]);
 
                 return response()->json(['status' => 'ignored_non_instagram'], Response::HTTP_OK);
             }
@@ -691,7 +693,7 @@ class HomeController extends Controller
             $messagingEvent = data_get($entry, 'messaging.0');
 
             if (! $messagingEvent) {
-                Log::channel('stack')->warning('[INSTAGRAM] ✗ No messaging event found in entry.0.messaging.0', [
+                $this->logInstagramEvent('NO_MESSAGING_EVENT', '✗ No messaging event found in entry.0.messaging.0', [
                     'raw_entry' => $entry,
                 ]);
 
@@ -700,7 +702,7 @@ class HomeController extends Controller
 
             // Ignore echoed messages (sent by the account itself)
             if (data_get($messagingEvent, 'message.is_echo')) {
-                Log::channel('stack')->info('[INSTAGRAM] ✓ Echo ignored (sent by account)');
+                $this->logInstagramEvent('ECHO_IGNORED', '✓ Echo ignored (sent by account)');
 
                 return response()->json(['status' => 'echo_ignored'], Response::HTTP_OK);
             }
@@ -711,7 +713,7 @@ class HomeController extends Controller
 
             $targetInstagramId = $recipientId ?: $entryId;
 
-            Log::channel('stack')->info('[INSTAGRAM] ✓ Message event', [
+            $this->logInstagramEvent('MESSAGE_EVENT', '✓ Message event received', [
                 'sender_id' => $senderId,
                 'recipient_id' => $recipientId,
                 'entry_id' => $entryId,
@@ -732,10 +734,10 @@ class HomeController extends Controller
             }
 
             if (! $instagramItem) {
-                $instagramItem = InstagramItem::where('page_id', $targetInstagramId)
-                    ->orWhere('page_id', $entryId)
-                    ->where('status', 'active')
-                    ->first();
+                $instagramItem = InstagramItem::where(function ($q) use ($targetInstagramId, $entryId) {
+                    $q->where('page_id', $targetInstagramId)
+                        ->orWhere('page_id', $entryId);
+                })->where('status', 'active')->first();
             }
 
             if (! $instagramItem) {
@@ -745,7 +747,7 @@ class HomeController extends Controller
                     ->orWhere('page_id', $entryId)
                     ->first();
 
-                Log::channel('stack')->warning('[INSTAGRAM] ✗ Instagram account not found or disabled', [
+                $this->logInstagramEvent('ACCOUNT_NOT_FOUND', '✗ Instagram account not found or disabled in DB', [
                     'target_id' => $targetInstagramId,
                     'entry_id' => $entryId,
                     'exists_in_db' => (bool) $disabledItem,
@@ -758,16 +760,23 @@ class HomeController extends Controller
             /** @var User $restaurant */
             $restaurant = $instagramItem->user;
 
+            $this->logInstagramEvent('ACCOUNT_RESOLVED', "✓ Resolved InstagramItem #{$instagramItem->id} (@{$instagramItem->username}) for restaurant #{$restaurant->id}", [
+                'msg_number' => $instagramItem->msg_number,
+                'has_active_subscription' => $instagramItem->hasActiveSubscription(),
+            ]);
+
             // Ignore non-text messages
             if (empty($messageText)) {
-                Log::channel('stack')->info('[INSTAGRAM] ✗ Ignored — non-text message');
+                $this->logInstagramEvent('NON_TEXT_IGNORED', '✗ Ignored — non-text message (reaction, image, read receipt, etc.)');
 
                 return response()->json(['status' => 'non_text_ignored'], Response::HTTP_OK);
             }
 
             // Check Instagram-specific message limit
             if (! $instagramItem->hasActiveSubscription()) {
-                Log::channel('stack')->warning("[INSTAGRAM] ✗ Limit exceeded or inactive subscription for InstagramItem #{$instagramItem->id} (restaurant #{$restaurant->id})");
+                $this->logInstagramEvent('QUOTA_EXCEEDED', "✗ Limit exceeded or inactive subscription for InstagramItem #{$instagramItem->id} (restaurant #{$restaurant->id})", [
+                    'available_msgs' => $instagramItem->msg_number,
+                ]);
 
                 return response()->json(['status' => 'limit_exceeded'], Response::HTTP_OK);
             }
@@ -814,7 +823,7 @@ class HomeController extends Controller
             $this->showInstagramTyping($instagramItem->access_token, $senderId);
 
             // Get AI reply
-            Log::channel('stack')->info('[INSTAGRAM] ⏳ Calling OpenAI...');
+            $this->logInstagramEvent('CALLING_AI', '⏳ Calling OpenAI for reply...');
             $reply = $this->getInstagramAiReplyWithTyping(
                 instagramItem: $instagramItem,
                 userMessage: $messageText,
@@ -822,12 +831,12 @@ class HomeController extends Controller
             );
 
             if (! $reply) {
-                Log::channel('stack')->warning("[INSTAGRAM] ✗ OpenAI returned empty reply for restaurant #{$restaurant->id}");
+                $this->logInstagramEvent('AI_FAILED', "✗ OpenAI returned empty reply for restaurant #{$restaurant->id}");
 
                 return response()->json(['status' => 'ai_failed'], Response::HTTP_OK);
             }
 
-            Log::channel('stack')->info('[INSTAGRAM] ✓ OpenAI replied', [
+            $this->logInstagramEvent('AI_REPLIED', '✓ OpenAI replied', [
                 'reply_preview' => mb_substr($reply, 0, 100),
             ]);
 
@@ -865,9 +874,11 @@ class HomeController extends Controller
                     'channel' => 'instagram',
                 ]);
 
-                Log::channel('stack')->info('[INSTAGRAM] ✅ Full flow complete — reply saved & sent');
+                $this->logInstagramEvent('SEND_SUCCESS', '✅ Full flow complete — reply saved & sent', [
+                    'recipient_id' => $senderId,
+                ]);
             } else {
-                Log::channel('stack')->error("[INSTAGRAM] ✗ Instagram API send FAILED for restaurant #{$restaurant->id} → Sender {$senderId}");
+                $this->logInstagramEvent('SEND_FAILED', "✗ Instagram API send FAILED for restaurant #{$restaurant->id} → Sender {$senderId}");
             }
 
             return response()->json([
@@ -877,7 +888,7 @@ class HomeController extends Controller
             ], Response::HTTP_OK);
 
         } catch (\Throwable $e) {
-            Log::channel('stack')->error('[INSTAGRAM] 💥 EXCEPTION: '.$e->getMessage(), [
+            $this->logInstagramEvent('EXCEPTION', '💥 EXCEPTION: '.$e->getMessage(), [
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
                 'trace' => collect(explode("\n", $e->getTraceAsString()))->take(10)->implode("\n"),
@@ -894,6 +905,112 @@ class HomeController extends Controller
     }
 
     /**
+     * Dedicated logger for Instagram Webhook events.
+     * Writes to storage/logs/instagram_webhook.log AND Log::channel('stack').
+     */
+    private function logInstagramEvent(string $type, string $message, array $context = []): void
+    {
+        $logPath = storage_path('logs/instagram_webhook.log');
+        $contextString = ! empty($context) ? ' | '.json_encode($context, JSON_UNESCAPED_UNICODE) : '';
+        $line = sprintf("[%s] [%s] %s%s\n", now()->format('Y-m-d H:i:s'), strtoupper($type), $message, $contextString);
+
+        try {
+            if (! is_dir(dirname($logPath))) {
+                mkdir(dirname($logPath), 0755, true);
+            }
+            file_put_contents($logPath, $line, FILE_APPEND | LOCK_EX);
+        } catch (\Throwable $e) {
+            // Ignore file system errors
+        }
+
+        match (strtoupper($type)) {
+            'ERROR', 'EXCEPTION', 'SEND_FAILED', 'SEND_ERROR' => Log::channel('stack')->error("[INSTAGRAM] {$message}", $context),
+            'WARNING', 'QUOTA_EXCEEDED', 'ACCOUNT_NOT_FOUND', 'IGNORED', 'AI_FAILED' => Log::channel('stack')->warning("[INSTAGRAM] {$message}", $context),
+            default => Log::channel('stack')->info("[INSTAGRAM] {$message}", $context),
+        };
+    }
+
+    /**
+     * View recent Instagram webhook logs & connected accounts.
+     */
+    public function instagram_webhook_logs(Request $request): JsonResponse
+    {
+        $limit = min((int) $request->input('lines', 100), 500);
+        $logPath = storage_path('logs/instagram_webhook.log');
+        $laravelLogPath = storage_path('logs/laravel.log');
+
+        $dedicatedLogs = [];
+        if (file_exists($logPath)) {
+            $lines = file($logPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+            $dedicatedLogs = array_values(array_slice($lines, -$limit));
+        }
+
+        $laravelLogs = [];
+        if (file_exists($laravelLogPath)) {
+            $allLines = file($laravelLogPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+            $igLines = array_filter($allLines, fn ($l) => str_contains($l, '[INSTAGRAM]') || str_contains($l, 'Instagram'));
+            $laravelLogs = array_values(array_slice($igLines, -$limit));
+        }
+
+        $accounts = InstagramItem::all([
+            'id', 'user_id', 'username', 'name', 'instagram_id', 'page_id', 'status', 'msg_number', 'updated_at',
+        ]);
+
+        return response()->json([
+            'status' => true,
+            'server_time' => now()->toIso8601String(),
+            'dedicated_log_path' => $logPath,
+            'dedicated_logs_count' => count($dedicatedLogs),
+            'dedicated_logs' => array_reverse($dedicatedLogs),
+            'laravel_logs_count' => count($laravelLogs),
+            'laravel_logs' => array_reverse($laravelLogs),
+            'instagram_accounts' => $accounts,
+        ]);
+    }
+
+    /**
+     * Test sending an Instagram message using Graph API directly.
+     */
+    public function instagram_test_send(Request $request): JsonResponse
+    {
+        $recipientId = (string) $request->input('recipient_id');
+        $message = (string) $request->input('message', 'Test message from Smartego Backend');
+        $itemId = $request->input('instagram_item_id');
+
+        $item = $itemId ? InstagramItem::find($itemId) : InstagramItem::where('status', 'active')->first();
+
+        if (! $item) {
+            return response()->json(['status' => false, 'message' => 'No active InstagramItem found in database.'], Response::HTTP_NOT_FOUND);
+        }
+
+        if (empty($recipientId)) {
+            return response()->json(['status' => false, 'message' => 'recipient_id is required (must be a numeric Instagram-Scoped User ID).'], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $response = Http::withToken($item->access_token)
+            ->post(self::GRAPH_API_BASE.'/me/messages', [
+                'recipient' => ['id' => $recipientId],
+                'message' => ['text' => $message],
+            ]);
+
+        $this->logInstagramEvent('TEST_SEND', "Manual test send to {$recipientId}", [
+            'status' => $response->status(),
+            'body' => $response->json(),
+        ]);
+
+        return response()->json([
+            'status' => $response->successful(),
+            'http_code' => $response->status(),
+            'meta_response' => $response->json(),
+            'used_account' => [
+                'id' => $item->id,
+                'username' => $item->username,
+                'instagram_id' => $item->instagram_id,
+            ],
+        ], $response->successful() ? Response::HTTP_OK : Response::HTTP_BAD_REQUEST);
+    }
+
+    /**
      * Verify Instagram webhook challenge from Meta.
      */
     private function instagramVerify(Request $request): Response
@@ -905,7 +1022,7 @@ class HomeController extends Controller
         $appVerifyToken = config('services.meta.instagram_verify_token')
             ?: (config('services.meta.messenger_verify_token') ?: config('services.meta.verify_token'));
 
-        Log::info('Instagram webhook verify attempt', [
+        $this->logInstagramEvent('VERIFY_ATTEMPT', 'Instagram webhook verify attempt', [
             'hub_mode' => $mode,
             'token_match_app' => $appVerifyToken && hash_equals((string) $appVerifyToken, (string) $token),
             'ip' => $request->ip(),
@@ -913,7 +1030,7 @@ class HomeController extends Controller
 
         if ($mode === 'subscribe' && $token) {
             if ($appVerifyToken && hash_equals((string) $appVerifyToken, (string) $token)) {
-                Log::info('Instagram webhook verified successfully via app verify token.');
+                $this->logInstagramEvent('VERIFY_SUCCESS', 'Verified successfully via app verify token.');
 
                 return response((string) $challenge, Response::HTTP_OK)
                     ->header('Content-Type', 'text/plain');
@@ -922,14 +1039,14 @@ class HomeController extends Controller
             $item = InstagramItem::where('verify_token', $token)->first();
 
             if ($item) {
-                Log::info('Instagram webhook verified successfully via item verify token.', ['instagram_id' => $item->instagram_id]);
+                $this->logInstagramEvent('VERIFY_SUCCESS', 'Verified successfully via item verify token.', ['instagram_id' => $item->instagram_id]);
 
                 return response((string) $challenge, Response::HTTP_OK)
                     ->header('Content-Type', 'text/plain');
             }
         }
 
-        Log::warning('Instagram webhook verification failed: token not found or wrong mode.', [
+        $this->logInstagramEvent('VERIFY_FAIL', 'Instagram webhook verification failed: token not found or wrong mode.', [
             'hub_mode' => $mode,
         ]);
 
@@ -951,11 +1068,14 @@ class HomeController extends Controller
             ]);
 
         if ($response->successful()) {
+            $this->logInstagramEvent('SEND_SUCCESS', "Message sent via Graph API to {$recipientId}", [
+                'meta_response' => $response->json(),
+            ]);
+
             return true;
         }
 
-        Log::error('Instagram API send error', [
-            'recipient_id' => $recipientId,
+        $this->logInstagramEvent('SEND_ERROR', "Instagram API send error to {$recipientId}", [
             'status' => $response->status(),
             'body' => $response->json(),
         ]);
