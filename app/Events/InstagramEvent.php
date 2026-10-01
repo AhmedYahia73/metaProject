@@ -30,9 +30,9 @@ class InstagramEvent implements ShouldBroadcastNow
         $instagramId = $this->chat['instagram_id'] ?? '';
 
         return [
-            new Channel('userChat_'.$senderId.'_'.$instagramId),
-            new Channel('userChat_'.$senderId),
-            new Channel('userChat_'),
+            new Channel('userInsta_'.$senderId.'_'.$instagramId),
+            new Channel('userInsta_'.$senderId),
+            new Channel('userInsta_'),
         ];
     }
 
