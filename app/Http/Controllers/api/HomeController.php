@@ -721,11 +721,16 @@ class HomeController extends Controller
                 'mid' => data_get($messagingEvent, 'message.mid'),
             ]);
 
-            // Resolve InstagramItem via instagram_id or page_id
-            /** @var InstagramItem|null $instagramItem */
-            $instagramItem = InstagramItem::where('instagram_id', $targetInstagramId)
-                ->where('status', 'active')
-                ->first();
+            // Handle Meta test button from Developer Dashboard (sends dummy ID 0)
+            if ($targetInstagramId === '0' || $entryId === '0') {
+                $instagramItem = InstagramItem::where('status', 'active')->first();
+            } else {
+                // Resolve InstagramItem via instagram_id or page_id
+                /** @var InstagramItem|null $instagramItem */
+                $instagramItem = InstagramItem::where('instagram_id', $targetInstagramId)
+                    ->where('status', 'active')
+                    ->first();
+            }
 
             if (! $instagramItem && $entryId) {
                 $instagramItem = InstagramItem::where('instagram_id', $entryId)
