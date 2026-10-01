@@ -80,18 +80,8 @@ class OrderController extends Controller
             return [
                 'id' => $order->id,
                 'package_name' => $order->package?->name,
-                'package' => [
-                    'id' => $order->package?->id,
-                    'name' => $order->package?->name,
-                ],
-                'user_id' => $order->user_id,
                 'user_name' => $order->user?->name,
                 'user_phone' => $order->user?->phone,
-                'user' => [
-                    'id' => $order->user?->id,
-                    'name' => $order->user?->name,
-                    'phone' => $order->user?->phone,
-                ],
                 'total_discount' => (float) $order->total_discount,
                 'total_tax' => (float) $order->total_tax,
                 'price' => (float) $order->price,
@@ -101,9 +91,6 @@ class OrderController extends Controller
                 'to' => $order->to ? Carbon::parse($order->to)->toDateString() : null,
                 'status' => $order->status,
                 'channel' => $order->channel,
-                'messenger_account_id' => $order->messenger_account_id,
-                'whats_item_id' => $order->whats_item_id,
-                'instagram_item_id' => $order->instagram_item_id,
                 'whats_item' => $order->whatsItem ? [
                     'id' => $order->whatsItem->id,
                     'phone' => $order->whatsItem->phone,
@@ -117,7 +104,6 @@ class OrderController extends Controller
                     'username' => $order->instagramItem->username,
                     'name' => $order->instagramItem->name,
                 ] : null,
-                'created_at' => $order->created_at,
             ];
         };
 
