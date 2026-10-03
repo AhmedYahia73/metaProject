@@ -35,9 +35,13 @@ Route::get('/test_webhook', [HomeController::class, 'test_webhook']);
 Route::get('/web-hook', [HomeController::class, 'web_hook']);
 Route::post('/web-hook', [HomeController::class, 'web_hook']);
 
-// Messenger Webhook (public — Meta requires GET for verification + POST for messages)
+// Messenger Webhook (public — Meta requires GET for verification + POST for messages & feed comments)
 Route::get('/messenger-webhook', [HomeController::class, 'messenger_web_hook']);
 Route::post('/messenger-webhook', [HomeController::class, 'messenger_web_hook']);
+
+// Facebook Comments Webhook (dedicated endpoint alias)
+Route::get('/facebook-comments-webhook', [HomeController::class, 'facebook_comments_webhook']);
+Route::post('/facebook-comments-webhook', [HomeController::class, 'facebook_comments_webhook']);
 
 // Instagram Webhook (public — Meta requires GET for verification + POST for messages)
 Route::get('/instagram-webhook', [HomeController::class, 'instagram_web_hook']);

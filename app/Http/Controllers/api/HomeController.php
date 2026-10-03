@@ -19,6 +19,8 @@ use App\Models\WhatsItem;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
@@ -377,6 +379,11 @@ class HomeController extends Controller
                 return response()->json(['status' => 'no_page_id'], Response::HTTP_OK);
             }
 
+            // Check if this is a Feed Change event (comments / post interactions)
+            if (data_get($data, 'entry.0.changes.0')) {
+                return $this->handleFacebookFeedChange($data, $pageId);
+            }
+
             // Resolve restaurant via the Facebook Page ID
             /** @var MessengerAccount|null $messengerAccount */
             $messengerAccount = MessengerAccount::where('page_id', $pageId)
@@ -445,6 +452,19 @@ class HomeController extends Controller
             // Check Messenger-specific message limit on the MessengerAccount
             if (! $messengerAccount->hasActiveSubscription()) {
                 Log::channel('stack')->warning("[MESSENGER] ✗ Limit exceeded or inactive subscription for account #{$messengerAccount->id} (restaurant #{$restaurant->id})");
+
+                try {
+                    if (! empty($messengerAccount->page_access_token)) {
+                        $fallbackReply = 'أهلاً بك! شكراً لتواصلك معنا. فريق خدمة العملاء سيتواصل معك في أقرب وقت للرد على استفسارك بالتفصيل. يسعدنا دائماً خدمتك!';
+                        $this->sendMessengerMessage(
+                            pageAccessToken: $messengerAccount->page_access_token,
+                            recipientId: $senderId,
+                            text: $fallbackReply,
+                        );
+                    }
+                } catch (\Throwable $fallbackException) {
+                    Log::warning('[MESSENGER] Fallback send failed: '.$fallbackException->getMessage());
+                }
 
                 return response()->json(['status' => 'limit_exceeded'], Response::HTTP_OK);
             }
@@ -575,6 +595,501 @@ class HomeController extends Controller
                 'file' => basename($e->getFile()),
                 'line' => $e->getLine(),
             ], Response::HTTP_OK);
+        }
+    }
+
+    /**
+     * Dedicated Facebook Comments Webhook entry point.
+     * GET  → verify Meta challenge
+     * POST → handle feed comments
+     */
+    public function facebook_comments_webhook(Request $request): Response|JsonResponse
+    {
+        if ($request->isMethod('get')) {
+            return $this->messengerVerify($request);
+        }
+
+        return $this->messenger_web_hook($request);
+    }
+
+    /**
+     * Handle incoming Facebook Feed Webhook events (comments on posts).
+     *
+     * @param  array<string, mixed>  $data
+     */
+    public function handleFacebookFeedChange(array $data, string $pageId): JsonResponse
+    {
+        Log::channel('stack')->info('[FB_COMMENTS] ⬇ Feed change received', [
+            'page_id' => $pageId,
+            'entry' => data_get($data, 'entry.0'),
+        ]);
+
+        $change = data_get($data, 'entry.0.changes.0');
+        $item = (string) data_get($change, 'value.item');
+        $verb = (string) data_get($change, 'value.verb');
+
+        // Only process new comments being added
+        if ($item !== 'comment' || $verb !== 'add') {
+            Log::channel('stack')->info("[FB_COMMENTS] Ignored change — item='{$item}', verb='{$verb}'");
+
+            return response()->json(['status' => 'ignored_non_comment_add'], Response::HTTP_OK);
+        }
+
+        $changeValue = data_get($change, 'value', []);
+        $commentId = (string) data_get($changeValue, 'comment_id');
+        $postId = (string) data_get($changeValue, 'post_id');
+        $senderId = (string) data_get($changeValue, 'from.id');
+        $senderName = trim((string) data_get($changeValue, 'from.name', 'عميل فيسبوك'));
+        $commentText = trim((string) data_get($changeValue, 'message', ''));
+
+        if (empty($commentId) || empty($commentText)) {
+            Log::channel('stack')->warning('[FB_COMMENTS] ✗ Empty comment_id or message');
+
+            return response()->json(['status' => 'empty_comment_or_id'], Response::HTTP_OK);
+        }
+
+        // Prevent infinite loops: ignore comments made by the page itself
+        if ($senderId === $pageId) {
+            Log::channel('stack')->info("[FB_COMMENTS] Ignored comment from page itself ({$pageId})");
+
+            return response()->json(['status' => 'self_comment_ignored'], Response::HTTP_OK);
+        }
+
+        // Prevent duplicate processing if Meta retries
+        $cacheKey = "fb_comment_replied_{$commentId}";
+        if (Cache::has($cacheKey)) {
+            Log::channel('stack')->info("[FB_COMMENTS] Comment {$commentId} already processed (idempotency check)");
+
+            return response()->json(['status' => 'already_processed'], Response::HTTP_OK);
+        }
+
+        /** @var MessengerAccount|null $messengerAccount */
+        $messengerAccount = MessengerAccount::where('page_id', $pageId)
+            ->where('status', 'active')
+            ->first();
+
+        if (! $messengerAccount) {
+            Log::channel('stack')->warning("[FB_COMMENTS] Page {$pageId} not found or inactive in MessengerAccount");
+
+            return response()->json(['status' => 'page_not_found'], Response::HTTP_OK);
+        }
+
+        /** @var User $restaurant */
+        $restaurant = $messengerAccount->user;
+
+        // Verify active subscription and quota
+        $today = now()->toDateString();
+        $isWithinDates = false;
+        if (! empty($messengerAccount->start_date) && ! empty($messengerAccount->end_date)) {
+            $startDate = $messengerAccount->start_date instanceof Carbon
+                ? $messengerAccount->start_date->toDateString()
+                : (string) $messengerAccount->start_date;
+            $endDate = $messengerAccount->end_date instanceof Carbon
+                ? $messengerAccount->end_date->toDateString()
+                : (string) $messengerAccount->end_date;
+
+            $isWithinDates = ($startDate <= $today && $endDate >= $today);
+        } else {
+            $isWithinDates = $messengerAccount->hasActiveSubscription();
+        }
+
+        $hasRemainingQuota = ((int) $messengerAccount->msg_number >= 1);
+        $isAiAvailable = ($isWithinDates && $hasRemainingQuota);
+
+        // ── Branch A: AI/Quota is exhausted or expired ("لو ai خلصان")
+        if (! $isAiAvailable) {
+            Log::channel('stack')->warning("[FB_COMMENTS] AI / Quota exhausted for account #{$messengerAccount->id}. Sending universal fallback.");
+
+            $fallbackCommentReply = "أهلاً بك يا {$senderName}! شكراً لتواصلك معنا، تم إرسال رسالة لحضرتك على الخاص ويسعدنا دائماً خدمتك.";
+            $fallbackMessengerReply = "أهلاً بك يا {$senderName}! شكراً لاهتمامك وتواصلك معنا بخصوص المنشور. فريق خدمة العملاء سيتواصل معك في أقرب وقت للرد على استفسارك بالتفصيل ومساعدتك. نسعد دائماً بخدمتك!";
+
+            $commentSent = $this->replyToFacebookComment(
+                pageAccessToken: $messengerAccount->page_access_token,
+                commentId: $commentId,
+                message: $fallbackCommentReply,
+            );
+
+            $messengerSent = $this->sendPrivateReplyToComment(
+                pageAccessToken: $messengerAccount->page_access_token,
+                commentId: $commentId,
+                message: $fallbackMessengerReply,
+            );
+
+            Cache::put($cacheKey, true, now()->addDays(7));
+
+            return response()->json([
+                'status' => 'fallback_sent',
+                'reason' => 'quota_exhausted_or_expired',
+                'comment_sent' => $commentSent,
+                'messenger_sent' => (bool) $messengerSent,
+            ], Response::HTTP_OK);
+        }
+
+        // ── Branch B: AI is available — process with OpenAI
+        $postText = $this->getFacebookPostContent(
+            pageAccessToken: $messengerAccount->page_access_token,
+            postId: $postId,
+        );
+
+        $aiDecision = $this->getFacebookCommentAiDecision(
+            messengerAccount: $messengerAccount,
+            senderName: $senderName,
+            commentText: $commentText,
+            postText: $postText,
+        );
+
+        // If AI call failed, fallback gracefully to universal messages
+        if (! $aiDecision) {
+            Log::channel('stack')->warning("[FB_COMMENTS] AI call failed for account #{$messengerAccount->id}. Sending universal fallback.");
+
+            $fallbackCommentReply = "أهلاً بك يا {$senderName}! شكراً لتواصلك معنا، تم إرسال رسالة لحضرتك على الخاص ويسعدنا دائماً خدمتك.";
+            $fallbackMessengerReply = "أهلاً بك يا {$senderName}! شكراً لاهتمامك وتواصلك معنا بخصوص المنشور. فريق خدمة العملاء سيتواصل معك في أقرب وقت للرد على استفسارك بالتفصيل ومساعدتك. نسعد دائماً بخدمتك!";
+
+            $commentSent = $this->replyToFacebookComment(
+                pageAccessToken: $messengerAccount->page_access_token,
+                commentId: $commentId,
+                message: $fallbackCommentReply,
+            );
+
+            $messengerSent = $this->sendPrivateReplyToComment(
+                pageAccessToken: $messengerAccount->page_access_token,
+                commentId: $commentId,
+                message: $fallbackMessengerReply,
+            );
+
+            Cache::put($cacheKey, true, now()->addDays(7));
+
+            return response()->json([
+                'status' => 'fallback_sent',
+                'reason' => 'ai_service_failed',
+                'comment_sent' => $commentSent,
+                'messenger_sent' => (bool) $messengerSent,
+            ], Response::HTTP_OK);
+        }
+
+        $isInquiry = (bool) ($aiDecision['is_inquiry'] ?? false);
+        $publicCommentReply = trim((string) ($aiDecision['public_comment_reply'] ?? ''));
+        $privateMessengerReply = trim((string) ($aiDecision['private_messenger_reply'] ?? ''));
+
+        $commentSent = false;
+        $messengerSent = null;
+
+        if ($isInquiry) {
+            if (empty($publicCommentReply)) {
+                $publicCommentReply = "أهلاً بك يا {$senderName}! تم الرد على الخاص بالتفاصيل كاملة، يسعدنا تواصلك دائماً 😊";
+            }
+
+            // 1. Reply publicly on the post comment
+            $commentSent = $this->replyToFacebookComment(
+                pageAccessToken: $messengerAccount->page_access_token,
+                commentId: $commentId,
+                message: $publicCommentReply,
+            );
+
+            // 2. Send private reply on Messenger
+            if (! empty($privateMessengerReply)) {
+                $messengerSent = $this->sendPrivateReplyToComment(
+                    pageAccessToken: $messengerAccount->page_access_token,
+                    commentId: $commentId,
+                    message: $privateMessengerReply,
+                );
+            }
+        } else {
+            // Not an inquiry: polite appreciation comment reply
+            if (empty($publicCommentReply)) {
+                $publicCommentReply = "شكراً جزيلاً لك يا {$senderName}! يسعدنا تواصلك ونتشرف بك دائماً ❤️";
+            }
+
+            $commentSent = $this->replyToFacebookComment(
+                pageAccessToken: $messengerAccount->page_access_token,
+                commentId: $commentId,
+                message: $publicCommentReply,
+            );
+        }
+
+        // Deduct 1 message from quota upon successful processing
+        if ($commentSent || $messengerSent) {
+            if ((int) $messengerAccount->msg_number > 0) {
+                $messengerAccount->decrement('msg_number');
+            }
+
+            MsgSend::create([
+                'user_id' => $restaurant->id,
+                'messenger_account_id' => $messengerAccount->id,
+                'whats_item_id' => null,
+                'channel' => 'messenger',
+            ]);
+
+            // Save chat record if private message was sent
+            if ($messengerSent && ! empty($privateMessengerReply)) {
+                $recipientPsid = (string) ($messengerSent['recipient_id'] ?? $senderId);
+                $metaMid = (string) ($messengerSent['message_id'] ?? $commentId);
+
+                $newChat = Chat::create([
+                    'user_id' => $restaurant->id,
+                    'messenger_account_id' => $messengerAccount->id,
+                    'name' => $senderName,
+                    'phone' => null,
+                    'message' => $privateMessengerReply,
+                    'is_image' => false,
+                    'is_admin' => true,
+                    'sender_type' => 'bot',
+                    'is_read' => true,
+                    'channel' => 'messenger',
+                    'messenger_sender_id' => $recipientPsid,
+                    'meta_message_id' => $metaMid,
+                ]);
+
+                try {
+                    $chatData = $newChat->toArray();
+                    $chatData['page_id'] = $messengerAccount->page_id;
+                    MessengerEvent::dispatch($chatData);
+                } catch (\Throwable $e) {
+                    Log::warning('[FB_COMMENTS] MessengerEvent broadcast failed: '.$e->getMessage());
+                }
+            }
+        }
+
+        Cache::put($cacheKey, true, now()->addDays(7));
+
+        return response()->json([
+            'status' => 'success',
+            'is_inquiry' => $isInquiry,
+            'comment_sent' => $commentSent,
+            'messenger_sent' => (bool) $messengerSent,
+            'public_comment_reply' => $publicCommentReply,
+            'private_messenger_reply' => $privateMessengerReply,
+        ], Response::HTTP_OK);
+    }
+
+    /**
+     * Reply to a Facebook post comment publicly via Graph API.
+     */
+    private function replyToFacebookComment(string $pageAccessToken, string $commentId, string $message): bool
+    {
+        try {
+            $response = Http::withToken($pageAccessToken)
+                ->post(self::GRAPH_API_BASE."/{$commentId}/comments", [
+                    'message' => $message,
+                ]);
+
+            if ($response->successful()) {
+                Log::channel('stack')->info("[FB_COMMENTS] ✓ Comment reply sent to {$commentId}");
+
+                return true;
+            }
+
+            Log::channel('stack')->error("[FB_COMMENTS] ✗ Comment reply failed for {$commentId}", [
+                'status' => $response->status(),
+                'body' => $response->json(),
+            ]);
+
+            return false;
+        } catch (\Throwable $e) {
+            Log::channel('stack')->error('[FB_COMMENTS] Exception sending comment reply: '.$e->getMessage());
+
+            return false;
+        }
+    }
+
+    /**
+     * Send a private reply to a Facebook comment via Messenger Send API.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function sendPrivateReplyToComment(string $pageAccessToken, string $commentId, string $message): ?array
+    {
+        try {
+            $response = Http::withToken($pageAccessToken)
+                ->post(self::GRAPH_API_BASE.'/me/messages', [
+                    'recipient' => [
+                        'comment_id' => $commentId,
+                    ],
+                    'message' => [
+                        'text' => $message,
+                    ],
+                ]);
+
+            if ($response->successful()) {
+                Log::channel('stack')->info("[FB_COMMENTS] ✓ Private reply sent via Messenger for comment {$commentId}", [
+                    'response' => $response->json(),
+                ]);
+
+                return $response->json();
+            }
+
+            Log::channel('stack')->error("[FB_COMMENTS] ✗ Private reply failed for comment {$commentId}", [
+                'status' => $response->status(),
+                'body' => $response->json(),
+            ]);
+
+            return null;
+        } catch (\Throwable $e) {
+            Log::channel('stack')->error('[FB_COMMENTS] Exception sending private reply: '.$e->getMessage());
+
+            return null;
+        }
+    }
+
+    /**
+     * Fetch Facebook Post text/story context via Graph API.
+     */
+    private function getFacebookPostContent(string $pageAccessToken, string $postId): ?string
+    {
+        if (empty($postId)) {
+            return null;
+        }
+
+        return Cache::remember("fb_post_content_{$postId}", 3600, function () use ($pageAccessToken, $postId) {
+            try {
+                $response = Http::withToken($pageAccessToken)
+                    ->get(self::GRAPH_API_BASE."/{$postId}", [
+                        'fields' => 'message,story',
+                    ]);
+
+                if ($response->successful()) {
+                    return $response->json('message') ?: $response->json('story');
+                }
+            } catch (\Throwable $e) {
+                Log::warning("[FB_COMMENTS] Could not fetch post {$postId}: ".$e->getMessage());
+            }
+
+            return null;
+        });
+    }
+
+    /**
+     * Get an AI-powered classification and reply decision for a Facebook comment.
+     *
+     * @return array{is_inquiry: bool, public_comment_reply: string, private_messenger_reply: ?string}|null
+     */
+    private function getFacebookCommentAiDecision(
+        MessengerAccount $messengerAccount,
+        string $senderName,
+        string $commentText,
+        ?string $postText = null,
+    ): ?array {
+        $aiContext = ! empty($messengerAccount->ai_context)
+            ? $messengerAccount->ai_context
+            : (Setting::firstWhere('name', 'ai_context')?->value ?? 'أنت موظف خدمة عملاء محترف، ردّ بأسلوب ودي ومهذب ومساعد.');
+
+        $fileContent = $this->resolveAiFileContent($messengerAccount->ai_file);
+        $fileDataSection = '';
+        if (! empty($fileContent)) {
+            $fileDataSection = "\n\nبيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة:\n".$fileContent;
+        }
+
+        $linksSection = '';
+        if ($messengerAccount->android_link || $messengerAccount->ios_link || $messengerAccount->website_url) {
+            $linksSection = "\n\nروابط وتفاصيل الطلب المتاحة:";
+            if ($messengerAccount->website_url) {
+                $linksSection .= "\n- الموقع الإلكتروني: {$messengerAccount->website_url}";
+            }
+            if ($messengerAccount->android_link) {
+                $linksSection .= "\n- تطبيق أندرويد (Android): {$messengerAccount->android_link}";
+            }
+            if ($messengerAccount->ios_link) {
+                $linksSection .= "\n- تطبيق آيفون (iOS): {$messengerAccount->ios_link}";
+            }
+        }
+
+        $instructions = <<<PROMPT
+        {$aiContext}
+        {$fileDataSection}
+        {$linksSection}
+
+        التعليمات الصارمة للرد:
+        - أنت ممثل خدمة عملاء محترف ومؤدب جداً. استخدم لغة عربية ودودة، راقية، ومحترمة ومهذبة للغاية.
+        - رحب بالعميل باسمه دائماً في بداية الرد (مثال: أهلاً وسهلاً بك يا {$senderName} 🌸).
+        - العميل قام بكتابة تعليق على منشور لنا، لذا يجب أن يكون الرد الخاص على ماسنجر متصلاً بسياق البوست وسؤاله في التعليق.
+        - أجب بدقة على استفساره بالاعتماد الحصري على "بيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة" المذكورة أعلاه، ولا تخترع أي معلومات أو أسعار غير موجودة.
+        - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، اعتذر له بلباقة وأخبره أنه غير متوفر حالياً.
+        - إذا طلب العميل أو سأل عن كيفية الطلب، وضح له بلباقة روابط الطلب المتوفرة أعلاه.
+        - اختم الرسالة الخاصة دائماً بعبارة ترحيبية راقية مثل: «نسعد دائماً بخدمتك، ولو عندك أي استفسار آخر لا تتردد في مراسلتنا في أي وقت! 😊».
+
+        يجب أن تعيد الناتج بتنسيق JSON فقط بدون أي علامات markdown:
+        {
+          "is_inquiry": true,
+          "public_comment_reply": "نص الرد العام على التعليق في البوست",
+          "private_messenger_reply": "نص الرسالة الخاصة الترحيبية المفصلة والمهذبة التي ستُرسل له على ماسنجر (إذا كان استفساراً)، أو null إذا لم يكن استفساراً"
+        }
+        PROMPT;
+
+        $postSummary = ! empty($postText) ? $postText : '(منشور عام للصفحة)';
+        $userInput = <<<INPUT
+        بيانات تفاعل العميل:
+        - اسم العميل: {$senderName}
+        - محتوى المنشور (البوست) الذي علّق عليه:
+        "{$postSummary}"
+
+        - تعليق العميل على المنشور:
+        "{$commentText}"
+        INPUT;
+
+        try {
+            $model = env('OPENAI_MODEL', 'gpt-4o-mini');
+
+            $rawOutput = '';
+            try {
+                $response = OpenAI::responses()->create([
+                    'model' => $model,
+                    'instructions' => $instructions,
+                    'input' => $userInput,
+                ]);
+                $rawOutput = trim((string) ($response->outputText ?? ''));
+            } catch (\Throwable $respException) {
+                // Fallback to chat completion if responses API fails
+                $response = OpenAI::chat()->create([
+                    'model' => $model,
+                    'messages' => [
+                        ['role' => 'system', 'content' => $instructions],
+                        ['role' => 'user', 'content' => $userInput],
+                    ],
+                ]);
+                $rawOutput = trim((string) ($response->choices[0]->message->content ?? ''));
+            }
+
+            if (empty($rawOutput)) {
+                return null;
+            }
+
+            // Clean markdown code blocks if present
+            $cleanJson = preg_replace('/^```(?:json)?\s*/i', '', $rawOutput);
+            $cleanJson = preg_replace('/\s*```$/', '', (string) $cleanJson);
+
+            $parsed = json_decode((string) $cleanJson, true);
+
+            if (is_array($parsed) && isset($parsed['is_inquiry'])) {
+                return [
+                    'is_inquiry' => (bool) $parsed['is_inquiry'],
+                    'public_comment_reply' => (string) ($parsed['public_comment_reply'] ?? ''),
+                    'private_messenger_reply' => ! empty($parsed['private_messenger_reply'])
+                        ? (string) $parsed['private_messenger_reply']
+                        : null,
+                ];
+            }
+
+            // Heuristic fallback if JSON decoding failed
+            $isInquiry = $this->isOrderIntent($commentText)
+                || str_contains($commentText, '؟')
+                || str_contains($commentText, '?')
+                || str_contains($commentText, 'كام')
+                || str_contains($commentText, 'بكام')
+                || str_contains($commentText, 'سعر')
+                || str_contains($commentText, 'توصيل')
+                || str_contains($commentText, 'عنوان');
+
+            return [
+                'is_inquiry' => $isInquiry,
+                'public_comment_reply' => $isInquiry
+                    ? "أهلاً بك يا {$senderName}! تم الرد على الخاص بالتفاصيل، تفقد رسائلك 😊"
+                    : "شكراً جزيلاً لك يا {$senderName}! يسعدنا تواصلك دائماً ❤️",
+                'private_messenger_reply' => $isInquiry ? (string) $cleanJson : null,
+            ];
+        } catch (\Throwable $e) {
+            Log::warning('[FB_COMMENTS] OpenAI getFacebookCommentAiDecision exception: '.$e->getMessage());
+
+            return null;
         }
     }
 
