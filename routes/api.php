@@ -50,6 +50,8 @@ Route::get('/instagram-webhook/logs', [HomeController::class, 'instagram_webhook
 Route::post('/instagram-webhook/test-send', [HomeController::class, 'instagram_test_send']);
 Route::get('/instagram-webhook/subscribe-page', [HomeController::class, 'instagram_subscribe_page']);
 Route::post('/instagram-webhook/subscribe-page', [HomeController::class, 'instagram_subscribe_page']);
+Route::get('/instagram-webhook/set-active-id', [HomeController::class, 'instagram_set_active_id']);
+Route::post('/instagram-webhook/set-active-id', [HomeController::class, 'instagram_set_active_id']);
 
 Route::view('/privacy-policy', 'privacy-policy');
 

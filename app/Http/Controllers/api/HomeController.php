@@ -1312,6 +1312,13 @@ class HomeController extends Controller
                 })->where('status', 'active')->first();
             }
 
+            // Fallback: if only one active Instagram account exists in the database, use it as fallback
+            if (! $instagramItem && InstagramItem::where('status', 'active')->count() === 1) {
+                $fallbackItem = InstagramItem::where('status', 'active')->first();
+                $this->logInstagramEvent('FALLBACK_ACCOUNT', "Using single active InstagramItem #{$fallbackItem->id} (@{$fallbackItem->username}) as fallback for target {$targetInstagramId}");
+                $instagramItem = $fallbackItem;
+            }
+
             if (! $instagramItem) {
                 $disabledItem = InstagramItem::where('instagram_id', $targetInstagramId)
                     ->orWhere('instagram_id', $entryId)
@@ -1670,6 +1677,43 @@ class HomeController extends Controller
                 'page_id' => $item->page_id,
             ],
         ], $subscribeResponse->successful() ? Response::HTTP_OK : Response::HTTP_BAD_REQUEST);
+    }
+
+    /**
+     * Update the instagram_id of an active InstagramItem in the database.
+     * GET /api/instagram-webhook/set-active-id?instagram_id=17841401051588301&id=1
+     */
+    public function instagram_set_active_id(Request $request): JsonResponse
+    {
+        $newIgId = (string) $request->input('instagram_id');
+        $itemId = $request->input('id');
+
+        if (empty($newIgId)) {
+            return response()->json(['status' => false, 'message' => 'instagram_id is required.'], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $item = $itemId ? InstagramItem::find($itemId) : InstagramItem::where('status', 'active')->first();
+
+        if (! $item) {
+            return response()->json(['status' => false, 'message' => 'No active InstagramItem found in database.'], Response::HTTP_NOT_FOUND);
+        }
+
+        $oldId = $item->instagram_id;
+        $item->update(['instagram_id' => $newIgId]);
+
+        $this->logInstagramEvent('ID_UPDATED', "Updated InstagramItem #{$item->id} (@{$item->username}) instagram_id from {$oldId} to {$newIgId}");
+
+        return response()->json([
+            'status' => true,
+            'message' => "Successfully updated InstagramItem #{$item->id} (@{$item->username}) instagram_id from {$oldId} to {$newIgId}.",
+            'account' => [
+                'id' => $item->id,
+                'username' => $item->username,
+                'instagram_id' => $item->fresh()->instagram_id,
+                'page_id' => $item->page_id,
+                'status' => $item->status,
+            ],
+        ]);
     }
 
     /**
