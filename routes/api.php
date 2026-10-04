@@ -48,6 +48,8 @@ Route::get('/instagram-webhook', [HomeController::class, 'instagram_web_hook']);
 Route::post('/instagram-webhook', [HomeController::class, 'instagram_web_hook']);
 Route::get('/instagram-webhook/logs', [HomeController::class, 'instagram_webhook_logs']);
 Route::post('/instagram-webhook/test-send', [HomeController::class, 'instagram_test_send']);
+Route::get('/instagram-webhook/subscribe-page', [HomeController::class, 'instagram_subscribe_page']);
+Route::post('/instagram-webhook/subscribe-page', [HomeController::class, 'instagram_subscribe_page']);
 
 Route::view('/privacy-policy', 'privacy-policy');
 

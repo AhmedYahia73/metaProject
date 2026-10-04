@@ -1583,6 +1583,85 @@ class HomeController extends Controller
     }
 
     /**
+     * Subscribe an Instagram Item's connected Facebook Page to the Meta App's webhooks.
+     * GET /api/instagram-webhook/subscribe-page?id=1
+     */
+    public function instagram_subscribe_page(Request $request): JsonResponse
+    {
+        $itemId = $request->input('id');
+        $item = $itemId ? InstagramItem::find($itemId) : InstagramItem::where('status', 'active')->first();
+
+        if (! $item) {
+            return response()->json([
+                'status' => false,
+                'message' => 'No active InstagramItem found in database.',
+            ], Response::HTTP_NOT_FOUND);
+        }
+
+        if (empty($item->page_id)) {
+            return response()->json([
+                'status' => false,
+                'message' => 'InstagramItem does not have a page_id connected.',
+                'item' => [
+                    'id' => $item->id,
+                    'username' => $item->username,
+                    'instagram_id' => $item->instagram_id,
+                ],
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        if (empty($item->access_token)) {
+            return response()->json([
+                'status' => false,
+                'message' => 'InstagramItem does not have an access_token.',
+                'item' => [
+                    'id' => $item->id,
+                    'username' => $item->username,
+                ],
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $graphVersion = config('services.meta.graph_version', 'v21.0');
+
+        // 1. Post to subscribed_apps
+        $subscribeResponse = Http::post(
+            "https://graph.facebook.com/{$graphVersion}/{$item->page_id}/subscribed_apps",
+            [
+                'subscribed_fields' => 'messages,messaging_postbacks,messaging_seen',
+                'access_token' => $item->access_token,
+            ]
+        );
+
+        // 2. Query subscribed_apps to verify status
+        $verifyResponse = Http::get(
+            "https://graph.facebook.com/{$graphVersion}/{$item->page_id}/subscribed_apps",
+            [
+                'access_token' => $item->access_token,
+            ]
+        );
+
+        $this->logInstagramEvent('PAGE_SUBSCRIBED', "Subscribed page {$item->page_id} to Instagram webhooks", [
+            'item_id' => $item->id,
+            'username' => $item->username,
+            'page_id' => $item->page_id,
+            'subscribe_response' => $subscribeResponse->json(),
+            'verify_response' => $verifyResponse->json(),
+        ]);
+
+        return response()->json([
+            'status' => $subscribeResponse->successful(),
+            'subscribe_result' => $subscribeResponse->json(),
+            'current_subscriptions' => $verifyResponse->json(),
+            'account' => [
+                'id' => $item->id,
+                'username' => $item->username,
+                'instagram_id' => $item->instagram_id,
+                'page_id' => $item->page_id,
+            ],
+        ], $subscribeResponse->successful() ? Response::HTTP_OK : Response::HTTP_BAD_REQUEST);
+    }
+
+    /**
      * Verify Instagram webhook challenge from Meta.
      */
     private function instagramVerify(Request $request): Response
