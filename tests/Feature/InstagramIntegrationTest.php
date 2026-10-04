@@ -596,3 +596,69 @@ test('instagram webhook resolves and replies to customer message from tester ech
         'sender_type' => 'bot',
     ]);
 });
+
+test('instagram conversations cleans up ghost sender ids and lazily resolves real profile name from Meta', function () {
+    $restaurant = User::factory()->create(['role' => 'user']);
+    $item = InstagramItem::factory()->withQuota(50)->create([
+        'user_id' => $restaurant->id,
+        'instagram_id' => '17841449192689340',
+        'page_id' => '1050529558136350',
+        'access_token' => 'EAA_test_access_token_123',
+    ]);
+
+    // 1. Create a ghost chat that had been saved with the business page ID
+    Chat::create([
+        'user_id' => $restaurant->id,
+        'instagram_item_id' => $item->id,
+        'name' => 'Instagram User',
+        'message' => 'Ghost echo message',
+        'is_image' => false,
+        'is_admin' => false,
+        'sender_type' => 'customer',
+        'is_read' => false,
+        'channel' => 'instagram',
+        'instagram_sender_id' => '1121098273691944',
+    ]);
+
+    // 2. Create a real customer chat with generic 'Instagram User' name
+    Chat::create([
+        'user_id' => $restaurant->id,
+        'instagram_item_id' => $item->id,
+        'name' => 'Instagram User',
+        'message' => 'Hello from Ola!',
+        'is_image' => false,
+        'is_admin' => false,
+        'sender_type' => 'customer',
+        'is_read' => false,
+        'channel' => 'instagram',
+        'instagram_sender_id' => '28479796635013446',
+    ]);
+
+    // Mock Graph API call to fetch profile for 28479796635013446
+    Http::fake([
+        'https://graph.facebook.com/*/28479796635013446*' => Http::response([
+            'id' => '28479796635013446',
+            'name' => 'Ola Allaamm',
+            'username' => 'olaallaamm',
+        ], 200),
+    ]);
+
+    $response = $this->actingAs($restaurant)
+        ->getJson("/api/user/chat/instagram/conversations?instagram_item_id={$item->id}");
+
+    $response->assertOk()
+        ->assertJsonCount(1, 'data')
+        ->assertJsonPath('data.0.sender_id', '28479796635013446')
+        ->assertJsonPath('data.0.name', 'Ola Allaamm');
+
+    // Verify ghost chat was cleaned up from DB
+    $this->assertDatabaseMissing('chats', [
+        'instagram_sender_id' => '1121098273691944',
+    ]);
+
+    // Verify DB chat row name was updated to real name
+    $this->assertDatabaseHas('chats', [
+        'instagram_sender_id' => '28479796635013446',
+        'name' => 'Ola Allaamm',
+    ]);
+});

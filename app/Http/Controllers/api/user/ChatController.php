@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\api\user;
 
+use App\Events\InstagramEvent;
 use App\Http\Controllers\Controller;
 use App\Models\Chat;
 use App\Models\InstagramItem;
@@ -858,22 +859,60 @@ class ChatController extends Controller
             ], Response::HTTP_FORBIDDEN);
         }
 
+        // Clean up known ghost records where page or bot echo recipient was stored as a sender
+        $ghostSenderIds = array_values(array_filter([
+            (string) $item->instagram_id,
+            (string) $item->page_id,
+            '1121098273691944',
+            '1108645398315379',
+        ]));
+
+        if (! empty($ghostSenderIds)) {
+            Chat::where('user_id', $user->id)
+                ->where('instagram_item_id', $item->id)
+                ->whereIn('instagram_sender_id', $ghostSenderIds)
+                ->delete();
+        }
+
         $allChats = Chat::where('user_id', $user->id)
             ->where('instagram_item_id', $item->id)
             ->whereNotNull('instagram_sender_id')
+            ->whereNotIn('instagram_sender_id', $ghostSenderIds)
             ->orderBy('id', 'desc')
             ->get();
 
         $grouped = $allChats->groupBy('instagram_sender_id');
 
-        $conversations = $grouped->map(function (Collection $chats, string $senderId) {
+        $conversations = $grouped->map(function (Collection $chats, string $senderId) use ($item) {
             $latest = $chats->first();
-            $customerName = $chats->firstWhere('name', '!==', null)?->name ?? 'Instagram User';
+
+            // Find customer name if exists and is not generic
+            $customerChat = $chats->first(fn ($c) => ! empty($c->name) && $c->name !== 'Instagram User');
+            $customerName = $customerChat?->name;
+
+            // If still generic or missing, attempt to resolve from Instagram Graph API
+            if (empty($customerName) && ! empty($item->access_token)) {
+                $profile = $this->getInstagramUserProfile($item->access_token, $senderId);
+                $resolvedName = ! empty($profile['name']) && $profile['name'] !== 'Instagram User'
+                    ? $profile['name']
+                    : ($profile['username'] ?? null);
+
+                if (! empty($resolvedName)) {
+                    $customerName = $resolvedName;
+                    Chat::where('instagram_item_id', $item->id)
+                        ->where('instagram_sender_id', $senderId)
+                        ->where(function ($q) {
+                            $q->whereNull('name')->orWhere('name', 'Instagram User');
+                        })
+                        ->update(['name' => $customerName]);
+                }
+            }
+
             $unreadCount = $chats->where('is_admin', false)->where('is_read', false)->count();
 
             return [
                 'sender_id' => $senderId,
-                'name' => $customerName,
+                'name' => $customerName ?: 'Instagram User',
                 'last_message' => $latest->message,
                 'last_message_at' => $latest->created_at?->toDateTimeString(),
                 'last_sender_type' => $latest->sender_type ?: ($latest->is_admin ? 'bot' : 'customer'),
@@ -1078,10 +1117,16 @@ class ChatController extends Controller
             $item->decrement('msg_number');
         }
 
+        $existingName = Chat::where('instagram_item_id', $item->id)
+            ->where('instagram_sender_id', $recipientId)
+            ->whereNotNull('name')
+            ->where('name', '!=', 'Instagram User')
+            ->value('name');
+
         $chat = Chat::create([
             'user_id' => $user->id,
             'instagram_item_id' => $item->id,
-            'name' => 'Instagram User',
+            'name' => $existingName ?: 'Instagram User',
             'phone' => null,
             'message' => $messageText,
             'is_image' => false,
@@ -1099,6 +1144,15 @@ class ChatController extends Controller
             'instagram_item_id' => $item->id,
             'channel' => 'instagram',
         ]);
+
+        // Realtime broadcast to admin dashboard
+        try {
+            $chatData = $chat->toArray();
+            $chatData['instagram_id'] = $item->instagram_id;
+            InstagramEvent::dispatch($chatData);
+        } catch (\Throwable $e) {
+            Log::warning('Failed to dispatch InstagramEvent on manual send: '.$e->getMessage());
+        }
 
         return response()->json([
             'status' => true,
@@ -1218,5 +1272,35 @@ class ChatController extends Controller
             'data' => $paginator->items(),
             'pagination' => $this->extractPaginationMeta($paginator),
         ];
+    }
+
+    /**
+     * Fetch user profile from Instagram Graph API (name, username, profile_pic).
+     *
+     * @return array{name?: string, username?: string, profile_pic?: string}
+     */
+    private function getInstagramUserProfile(string $accessToken, string $senderId): array
+    {
+        if (empty($accessToken) || empty($senderId)) {
+            return [];
+        }
+
+        try {
+            $graphVersion = config('services.meta.graph_version', 'v21.0');
+            $response = Http::timeout(5)->get("https://graph.facebook.com/{$graphVersion}/{$senderId}", [
+                'fields' => 'name,username,profile_pic',
+                'access_token' => $accessToken,
+            ]);
+
+            if ($response->successful()) {
+                $data = $response->json();
+
+                return is_array($data) ? $data : [];
+            }
+        } catch (\Throwable $e) {
+            // Ignore error
+        }
+
+        return [];
     }
 }

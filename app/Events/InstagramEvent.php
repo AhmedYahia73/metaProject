@@ -50,6 +50,7 @@ class InstagramEvent implements ShouldBroadcastNow
 
         return [
             'id' => $this->chat['id'] ?? null,
+            'name' => $this->chat['name'] ?? null,
             'instagram_sender_id' => $this->chat['instagram_sender_id'] ?? null,
             'instagram_id' => $this->chat['instagram_id'] ?? null,
             'message' => $this->chat['message'] ?? '',

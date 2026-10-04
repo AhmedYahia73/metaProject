@@ -1427,13 +1427,6 @@ class HomeController extends Controller
                             ->orWhere('page_id', $entryId);
                     })->where('status', 'active')->first();
                 }
-
-                // Fallback: if only one active Instagram account exists in the database, use it as fallback
-                if (! $instagramItem && InstagramItem::where('status', 'active')->count() === 1) {
-                    $fallbackItem = InstagramItem::where('status', 'active')->first();
-                    $this->logInstagramEvent('FALLBACK_ACCOUNT', "Using single active InstagramItem #{$fallbackItem->id} (@{$fallbackItem->username}) as fallback for target {$targetInstagramId}");
-                    $instagramItem = $fallbackItem;
-                }
             }
 
             if (! $instagramItem) {
@@ -1488,11 +1481,21 @@ class HomeController extends Controller
                 return response()->json(['status' => 'limit_exceeded'], Response::HTTP_OK);
             }
 
+            // Fetch real customer name from Instagram Graph API if not already resolved
+            if ($senderName === 'Instagram User' && ! empty($senderId) && ! empty($instagramItem->access_token)) {
+                $profile = $this->getInstagramUserProfile($instagramItem->access_token, $senderId);
+                if (! empty($profile['name']) && $profile['name'] !== 'Instagram User') {
+                    $senderName = $profile['name'];
+                } elseif (! empty($profile['username'])) {
+                    $senderName = $profile['username'];
+                }
+            }
+
             // Save incoming customer message
             $newChat = Chat::create([
                 'user_id' => $restaurant->id,
                 'instagram_item_id' => $instagramItem->id,
-                'name' => $senderName ?? 'Instagram User',
+                'name' => $senderName,
                 'phone' => null,
                 'message' => $messageText,
                 'is_image' => false,
@@ -1558,10 +1561,10 @@ class HomeController extends Controller
                     $instagramItem->decrement('msg_number');
                 }
 
-                Chat::create([
+                $botChat = Chat::create([
                     'user_id' => $restaurant->id,
                     'instagram_item_id' => $instagramItem->id,
-                    'name' => 'Instagram User',
+                    'name' => $senderName,
                     'phone' => null,
                     'message' => $reply,
                     'is_image' => false,
@@ -1571,6 +1574,28 @@ class HomeController extends Controller
                     'channel' => 'instagram',
                     'instagram_sender_id' => $senderId,
                 ]);
+
+                // Realtime broadcast of bot reply to admin dashboard
+                try {
+                    $botChatData = $botChat->toArray();
+                    $botChatData['instagram_id'] = $instagramItem->instagram_id;
+                    InstagramEvent::dispatch($botChatData);
+                } catch (\Throwable $broadcastException) {
+                    Log::warning('[INSTAGRAM] ⚠ Bot InstagramEvent broadcast failed (non-fatal): '.$broadcastException->getMessage());
+                }
+
+                // Stop typing indicator on admin dashboard
+                try {
+                    TypingEvent::dispatch(
+                        channel: 'instagram',
+                        phone: null,
+                        senderId: $senderId,
+                        pageId: $instagramItem->instagram_id,
+                        isTyping: false,
+                    );
+                } catch (\Throwable $broadcastException) {
+                    Log::warning('[INSTAGRAM] ⚠ TypingEvent stop broadcast failed (non-fatal): '.$broadcastException->getMessage());
+                }
 
                 MsgSend::create([
                     'user_id' => $restaurant->id,
@@ -1971,6 +1996,42 @@ class HomeController extends Controller
         } catch (\Throwable $e) {
             Log::channel('stack')->warning('[INSTAGRAM] ⚠ showInstagramTyping exception: '.$e->getMessage());
         }
+    }
+
+    /**
+     * Fetch user profile from Instagram Graph API (name, username, profile_pic).
+     *
+     * @return array{name?: string, username?: string, profile_pic?: string}
+     */
+    protected function getInstagramUserProfile(string $accessToken, string $senderId): array
+    {
+        if (empty($accessToken) || empty($senderId)) {
+            return [];
+        }
+
+        try {
+            $graphVersion = config('services.meta.graph_version', 'v21.0');
+            $response = Http::timeout(5)->get("https://graph.facebook.com/{$graphVersion}/{$senderId}", [
+                'fields' => 'name,username,profile_pic',
+                'access_token' => $accessToken,
+            ]);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                $this->logInstagramEvent('PROFILE_FETCHED', "Profile fetched for sender {$senderId}", is_array($data) ? $data : []);
+
+                return is_array($data) ? $data : [];
+            }
+
+            $this->logInstagramEvent('PROFILE_FETCH_FAILED', "Profile fetch failed for sender {$senderId}", [
+                'status' => $response->status(),
+                'body' => $response->json(),
+            ]);
+        } catch (\Throwable $e) {
+            $this->logInstagramEvent('PROFILE_FETCH_EXCEPTION', "Profile fetch exception for sender {$senderId}: ".$e->getMessage());
+        }
+
+        return [];
     }
 
     /**
