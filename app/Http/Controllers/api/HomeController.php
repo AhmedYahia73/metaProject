@@ -1623,16 +1623,25 @@ class HomeController extends Controller
 
         $graphVersion = config('services.meta.graph_version', 'v21.0');
 
-        // 1. Post to subscribed_apps
-        $subscribeResponse = Http::post(
-            "https://graph.facebook.com/{$graphVersion}/{$item->page_id}/subscribed_apps",
+        // 1. Check linked Instagram Business Account from Meta Graph API
+        $pageDetailsResponse = Http::get(
+            "https://graph.facebook.com/{$graphVersion}/{$item->page_id}",
             [
-                'subscribed_fields' => 'messages,messaging_postbacks,messaging_seen',
+                'fields' => 'id,name,instagram_business_account{id,username,name}',
                 'access_token' => $item->access_token,
             ]
         );
 
-        // 2. Query subscribed_apps to verify status
+        // 2. Post to subscribed_apps (using valid Meta Page fields: messages, messaging_postbacks, message_reads)
+        $subscribeResponse = Http::post(
+            "https://graph.facebook.com/{$graphVersion}/{$item->page_id}/subscribed_apps",
+            [
+                'subscribed_fields' => 'messages,messaging_postbacks,message_reads',
+                'access_token' => $item->access_token,
+            ]
+        );
+
+        // 3. Query subscribed_apps to verify status
         $verifyResponse = Http::get(
             "https://graph.facebook.com/{$graphVersion}/{$item->page_id}/subscribed_apps",
             [
@@ -1644,15 +1653,17 @@ class HomeController extends Controller
             'item_id' => $item->id,
             'username' => $item->username,
             'page_id' => $item->page_id,
+            'page_details' => $pageDetailsResponse->json(),
             'subscribe_response' => $subscribeResponse->json(),
             'verify_response' => $verifyResponse->json(),
         ]);
 
         return response()->json([
             'status' => $subscribeResponse->successful(),
+            'meta_page_details' => $pageDetailsResponse->json(),
             'subscribe_result' => $subscribeResponse->json(),
             'current_subscriptions' => $verifyResponse->json(),
-            'account' => [
+            'database_account' => [
                 'id' => $item->id,
                 'username' => $item->username,
                 'instagram_id' => $item->instagram_id,

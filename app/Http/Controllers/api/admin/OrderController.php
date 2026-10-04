@@ -456,7 +456,7 @@ class OrderController extends Controller
                     Http::post(
                         "https://graph.facebook.com/{$graphVersion}/{$instagramItem->page_id}/subscribed_apps",
                         [
-                            'subscribed_fields' => 'messages,messaging_postbacks,messaging_seen',
+                            'subscribed_fields' => 'messages,messaging_postbacks,message_reads',
                             'access_token' => $instagramItem->access_token,
                         ]
                     );

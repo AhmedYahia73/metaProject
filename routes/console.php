@@ -34,7 +34,7 @@ Artisan::command('instagram:subscribe {id?}', function (?string $id = null) {
     $response = Http::post(
         "https://graph.facebook.com/{$graphVersion}/{$item->page_id}/subscribed_apps",
         [
-            'subscribed_fields' => 'messages,messaging_postbacks,messaging_seen',
+            'subscribed_fields' => 'messages,messaging_postbacks,message_reads',
             'access_token' => $item->access_token,
         ]
     );
