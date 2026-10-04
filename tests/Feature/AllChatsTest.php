@@ -28,6 +28,19 @@ test('authenticated user with facebook token gets messenger and instagram pages 
         'access_token' => 'mock_whats_token_123',
     ]);
 
+    // Create local messenger account and instagram item
+    MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'page_id' => 'page_111',
+        'page_name' => 'Burger House Page',
+    ]);
+
+    InstagramItem::factory()->create([
+        'user_id' => $user->id,
+        'instagram_id' => 'ig_222',
+        'username' => 'burgerhouse_official',
+    ]);
+
     // Fake Meta Graph API calls:
     // 1) /me/accounts for Facebook Pages & Instagram
     // 2) /{phone_number_id}/whatsapp_business_profile for WhatsApp profile picture
@@ -242,4 +255,46 @@ test('all_chats returns accurate unread_count for each page and total_unread_cou
     expect($data['instagram_pages'][0]['unread_count'])->toBe(3);
     expect($data['whats_accounts'][0]['unread_count'])->toBe(1);
     expect($data['total_unread_count'])->toBe(6);
+});
+
+test('all_chats returns messenger_pages as sequential JSON array when filtering unregistered pages', function () {
+    $user = User::factory()->create([
+        'role' => 'user',
+        'facebook_access_token' => 'mock_token_with_many_pages',
+    ]);
+
+    // Only pages 0 and 2 are registered in DB; page 1 is not registered
+    MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'page_id' => 'page_0',
+        'page_name' => 'Registered Page 0',
+    ]);
+    MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'page_id' => 'page_2',
+        'page_name' => 'Registered Page 2',
+    ]);
+
+    Http::fake([
+        'https://graph.facebook.com/*/me/accounts*' => Http::response([
+            'data' => [
+                ['id' => 'page_0', 'name' => 'Registered Page 0', 'picture' => ['data' => ['url' => 'https://example.com/0.jpg']]],
+                ['id' => 'page_1', 'name' => 'Unregistered Page 1', 'picture' => ['data' => ['url' => 'https://example.com/1.jpg']]],
+                ['id' => 'page_2', 'name' => 'Registered Page 2', 'picture' => ['data' => ['url' => 'https://example.com/2.jpg']]],
+            ],
+        ], 200),
+    ]);
+
+    $response = $this->actingAs($user)->getJson('/api/user/all_chats');
+    $response->assertOk();
+
+    $content = $response->getContent();
+    $decoded = json_decode($content, true);
+
+    expect(array_is_list($decoded['messenger_pages']))->toBeTrue();
+    expect($decoded['messenger_pages'])->toHaveCount(2);
+    expect($decoded['messenger_pages'][0]['page_id'])->toBe('page_0');
+    expect($decoded['messenger_pages'][1]['page_id'])->toBe('page_2');
+    expect(array_is_list($decoded['instagram_pages']))->toBeTrue();
+    expect(array_is_list($decoded['whats_accounts']))->toBeTrue();
 });

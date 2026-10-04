@@ -356,21 +356,20 @@ class HomeController extends Controller
                         /** @var MessengerAccount|null $account */
                         $account = $existingMessengerAccounts->get($pageId);
 
-                        if ($account && ! empty($page['access_token']) && $account->page_access_token !== $page['access_token']) {
+                        if (! $account) {
+                            return null;
+                        }
+
+                        if (! empty($page['access_token']) && $account->page_access_token !== $page['access_token']) {
                             $account->update(['page_access_token' => $page['access_token']]);
                         }
 
-                        if($account){
-                            $subInfo = $account->getSubscriptionInfo();
-                        }
-                        else{
-                            return null;
-                        }
+                        $subInfo = $account->getSubscriptionInfo();
 
                         $pagePicture = $page['picture']['data']['url']
                             ?? "https://graph.facebook.com/{$pageId}/picture?type=large";
 
-                        $unreadCount = $account ? (int) ($messengerUnreadCounts[$account->id] ?? 0) : 0;
+                        $unreadCount = (int) ($messengerUnreadCounts[$account->id] ?? 0);
 
                         return [
                             'page_id' => $pageId,
@@ -381,7 +380,7 @@ class HomeController extends Controller
                             'available_msgs' => $subInfo['available_msgs'],
                             'unread_count' => $unreadCount,
                         ];
-                    })->values();
+                    })->filter()->values();
 
                     // Map Instagram Business Accounts with profile pictures and auto-update tokens
                     $instagramPages = collect($rawPages)
@@ -392,20 +391,17 @@ class HomeController extends Controller
                             /** @var InstagramItem|null $account */
                             $account = $existingInstagramAccounts->get($igId);
 
-                            $pageAccessToken = $page['access_token'] ?? null;
-                            if ($account && ! empty($pageAccessToken) && $account->access_token !== $pageAccessToken) {
-                                $account->update(['access_token' => $pageAccessToken, 'page_id' => (string) $page['id']]);
-                            }
-
-
-                            if($account){
-                                $subInfo = $account->getSubscriptionInfo();
-                            }
-                            else{
+                            if (! $account) {
                                 return null;
                             }
 
-                            $unreadCount = $account ? (int) ($instagramUnreadCounts[$account->id] ?? 0) : 0;
+                            $pageAccessToken = $page['access_token'] ?? null;
+                            if (! empty($pageAccessToken) && $account->access_token !== $pageAccessToken) {
+                                $account->update(['access_token' => $pageAccessToken, 'page_id' => (string) $page['id']]);
+                            }
+
+                            $subInfo = $account->getSubscriptionInfo();
+                            $unreadCount = (int) ($instagramUnreadCounts[$account->id] ?? 0);
 
                             return [
                                 'instagram_id' => $igId,
@@ -418,7 +414,7 @@ class HomeController extends Controller
                                 'available_msgs' => $subInfo['available_msgs'],
                                 'unread_count' => $unreadCount,
                             ];
-                        })->values();
+                        })->filter()->values();
                 } else {
                     Log::warning('HomeController::all_chats — Meta Graph API call failed', [
                         'user_id' => $user->id,
@@ -451,7 +447,7 @@ class HomeController extends Controller
                         'available_msgs' => $subInfo['available_msgs'],
                         'unread_count' => (int) ($messengerUnreadCounts[$account->id] ?? 0),
                     ];
-                });
+                })->values();
         }
 
         if ($instagramPages->isEmpty()) {
@@ -479,12 +475,7 @@ class HomeController extends Controller
         $whatsAccounts = $user->whatsItems()->latest()->get()
             ->map(function (WhatsItem $item) use ($whatsUnreadCounts) {
                 $subInfo = $item->getSubscriptionInfo();
-                if($account){
-                    $subInfo = $account->getSubscriptionInfo();
-                }
-                else{
-                    return null;
-                }
+
                 return [
                     'id' => $item->id,
                     'phone' => $item->phone,
@@ -507,9 +498,9 @@ class HomeController extends Controller
             'status' => true,
             'facebook_connected' => $facebookConnected,
             'total_unread_count' => $totalUnreadCount,
-            'messenger_pages' => $messengerPages->filter()->values(),
-            'instagram_pages' => $instagramPages->filter()->values(),
-            'whats_accounts' => $whatsAccounts->filter()->values(),
+            'messenger_pages' => $messengerPages->values(),
+            'instagram_pages' => $instagramPages->values(),
+            'whats_accounts' => $whatsAccounts->values(),
         ]);
     }
 }
