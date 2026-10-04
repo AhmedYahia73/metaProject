@@ -50,6 +50,7 @@ class MessengerEvent implements ShouldBroadcastNow
 
         return [
             'id' => $this->chat['id'] ?? null,
+            'name' => $this->chat['name'] ?? null,
             'messenger_sender_id' => $this->chat['messenger_sender_id'] ?? null,
             'page_id' => $this->chat['page_id'] ?? null,
             'message' => $this->chat['message'] ?? '',

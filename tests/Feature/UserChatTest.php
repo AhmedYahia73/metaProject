@@ -199,6 +199,97 @@ test('user can list conversations for a messenger page with search and paginatio
     expect($searchResponse->json('data.0.unread_count'))->toBe(1);
 });
 
+test('messenger conversations resolves generic name from graph api and updates database records', function () {
+    $user = createChatUser();
+
+    $account = MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'page_id' => 'page_test_300',
+        'page_access_token' => 'test_token_123',
+    ]);
+    createActiveOrder($user, 'messenger', $account);
+
+    Chat::create([
+        'user_id' => $user->id,
+        'messenger_account_id' => $account->id,
+        'channel' => 'messenger',
+        'messenger_sender_id' => 'psid_kareem',
+        'name' => 'Messenger User',
+        'message' => 'Hello there!',
+        'is_admin' => false,
+        'sender_type' => 'customer',
+        'is_read' => false,
+        'created_at' => now(),
+    ]);
+
+    Http::fake([
+        'https://graph.facebook.com/*/psid_kareem*' => Http::response([
+            'id' => 'psid_kareem',
+            'name' => 'Kareem Ahmed',
+        ], 200),
+    ]);
+
+    $response = $this->actingAs($user)
+        ->getJson("/api/user/chat/messenger/conversations?page_id={$account->page_id}");
+
+    $response->assertOk()
+        ->assertJsonCount(1, 'data')
+        ->assertJsonPath('data.0.sender_id', 'psid_kareem')
+        ->assertJsonPath('data.0.name', 'Kareem Ahmed');
+
+    $this->assertDatabaseHas('chats', [
+        'messenger_account_id' => $account->id,
+        'messenger_sender_id' => 'psid_kareem',
+        'name' => 'Kareem Ahmed',
+    ]);
+});
+
+test('messenger conversations resolves name from first_name and last_name when name field is omitted', function () {
+    $user = createChatUser();
+
+    $account = MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'page_id' => 'page_test_400',
+        'page_access_token' => 'test_token_456',
+    ]);
+    createActiveOrder($user, 'messenger', $account);
+
+    Chat::create([
+        'user_id' => $user->id,
+        'messenger_account_id' => $account->id,
+        'channel' => 'messenger',
+        'messenger_sender_id' => 'psid_samir',
+        'name' => 'Messenger User',
+        'message' => 'Good morning!',
+        'is_admin' => false,
+        'sender_type' => 'customer',
+        'is_read' => false,
+        'created_at' => now(),
+    ]);
+
+    Http::fake([
+        'https://graph.facebook.com/*/psid_samir*' => Http::response([
+            'id' => 'psid_samir',
+            'first_name' => 'Samir',
+            'last_name' => 'Ghanem',
+        ], 200),
+    ]);
+
+    $response = $this->actingAs($user)
+        ->getJson("/api/user/chat/messenger/conversations?page_id={$account->page_id}");
+
+    $response->assertOk()
+        ->assertJsonCount(1, 'data')
+        ->assertJsonPath('data.0.sender_id', 'psid_samir')
+        ->assertJsonPath('data.0.name', 'Samir Ghanem');
+
+    $this->assertDatabaseHas('chats', [
+        'messenger_account_id' => $account->id,
+        'messenger_sender_id' => 'psid_samir',
+        'name' => 'Samir Ghanem',
+    ]);
+});
+
 test('user viewing messenger messages auto-marks unread customer messages as read', function () {
     $user = createChatUser();
 

@@ -297,3 +297,96 @@ test('messenger and whatsapp limits are counted independently', function () {
     $response->assertOk();
     expect($response->json('status'))->not->toBe('limit_exceeded');
 });
+
+test('messenger webhook resolves customer name from graph api and saves it in chat records', function () {
+    Http::fake([
+        'https://graph.facebook.com/*/PSID_RESOLVE*' => Http::response([
+            'id' => 'PSID_RESOLVE',
+            'name' => 'Tamer Hosny',
+        ], 200),
+        'https://graph.facebook.com/*/me/messages' => Http::response([
+            'recipient_id' => 'PSID_RESOLVE',
+            'message_id' => 'mid.reply_test_resolve',
+        ], 200),
+    ]);
+
+    OpenAI::fake([
+        CreateResponse::fake([
+            'output' => [
+                0 => [
+                    'type' => 'message',
+                    'id' => 'msg_messenger_resolve',
+                    'status' => 'completed',
+                    'role' => 'assistant',
+                    'content' => [
+                        [
+                            'type' => 'output_text',
+                            'text' => 'أهلاً يا تامر!',
+                            'annotations' => [],
+                        ],
+                    ],
+                ],
+            ],
+        ]),
+    ]);
+
+    $restaurant = User::factory()->create(['role' => 'user']);
+    $account = MessengerAccount::factory()->create([
+        'user_id' => $restaurant->id,
+        'page_access_token' => 'token_resolve_test',
+    ]);
+
+    $package = Package::create([
+        'name' => ['ar' => 'باقة', 'en' => 'Package'],
+        'msg_number' => 100,
+        'price' => 50,
+        'months' => 1,
+    ]);
+
+    Order::create([
+        'package_id' => $package->id,
+        'user_id' => $restaurant->id,
+        'total_discount' => 0,
+        'total_tax' => 0,
+        'price' => 50,
+        'final_price' => 50,
+        'from' => now()->subDay()->toDateString(),
+        'to' => now()->addMonth()->toDateString(),
+        'msgs' => 100,
+    ]);
+
+    $response = $this->postJson('/api/messenger-webhook', [
+        'object' => 'page',
+        'entry' => [
+            [
+                'id' => $account->page_id,
+                'messaging' => [
+                    [
+                        'sender' => ['id' => 'PSID_RESOLVE'],
+                        'recipient' => ['id' => $account->page_id],
+                        'timestamp' => now()->timestamp,
+                        'message' => ['mid' => 'mid.resolve_1', 'text' => 'مساء الخير'],
+                    ],
+                ],
+            ],
+        ],
+    ]);
+
+    $response->assertOk()->assertJson(['status' => 'success', 'messenger_sent' => true]);
+
+    $customerChat = Chat::where('user_id', $restaurant->id)
+        ->where('messenger_sender_id', 'PSID_RESOLVE')
+        ->where('is_admin', false)
+        ->first();
+
+    expect($customerChat)->not->toBeNull();
+    expect($customerChat->name)->toBe('Tamer Hosny');
+
+    $botChat = Chat::where('user_id', $restaurant->id)
+        ->where('messenger_sender_id', 'PSID_RESOLVE')
+        ->where('is_admin', true)
+        ->first();
+
+    expect($botChat)->not->toBeNull();
+    expect($botChat->name)->toBe('Tamer Hosny');
+});

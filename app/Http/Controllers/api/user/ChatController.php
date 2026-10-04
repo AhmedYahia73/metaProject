@@ -139,14 +139,34 @@ class ChatController extends Controller
         // Group by sender_id (customer PSID)
         $grouped = $allChats->groupBy('messenger_sender_id');
 
-        $conversations = $grouped->map(function (Collection $chats, string $senderId) {
+        $conversations = $grouped->map(function (Collection $chats, string $senderId) use ($account) {
             $latest = $chats->first();
-            $customerName = $chats->firstWhere('name', '!==', null)?->name ?? 'Messenger User';
+
+            // Find customer name if exists and is not generic
+            $customerChat = $chats->first(fn ($c) => ! empty($c->name) && $c->name !== 'Messenger User');
+            $customerName = $customerChat?->name;
+
+            // If still generic or missing, attempt to resolve from Facebook Messenger Graph API
+            if (empty($customerName) && ! empty($account->page_access_token)) {
+                $profile = $this->getMessengerUserProfile($account->page_access_token, $senderId, $account);
+                $resolvedName = $this->resolveMessengerName($profile);
+
+                if (! empty($resolvedName)) {
+                    $customerName = $resolvedName;
+                    Chat::where('messenger_account_id', $account->id)
+                        ->where('messenger_sender_id', $senderId)
+                        ->where(function ($q) {
+                            $q->whereNull('name')->orWhere('name', 'Messenger User');
+                        })
+                        ->update(['name' => $customerName]);
+                }
+            }
+
             $unreadCount = $chats->where('is_admin', false)->where('is_read', false)->count();
 
             return [
                 'sender_id' => $senderId,
-                'name' => $customerName,
+                'name' => $customerName ?: 'Messenger User',
                 'last_message' => $latest->message,
                 'last_message_at' => $latest->created_at?->toDateTimeString(),
                 'last_sender_type' => $latest->sender_type ?: ($latest->is_admin ? 'bot' : 'customer'),
@@ -232,6 +252,27 @@ class ChatController extends Controller
                 'is_read' => true,
                 'read_at' => now(),
             ]);
+
+        // Attempt to resolve customer name from Graph API if still generic or missing
+        $existingName = Chat::where('messenger_account_id', $account->id)
+            ->where('messenger_sender_id', $senderId)
+            ->whereNotNull('name')
+            ->where('name', '!=', 'Messenger User')
+            ->value('name');
+
+        if (! $existingName && ! empty($account->page_access_token)) {
+            $profile = $this->getMessengerUserProfile($account->page_access_token, $senderId, $account);
+            $resolvedName = $this->resolveMessengerName($profile);
+
+            if (! empty($resolvedName)) {
+                Chat::where('messenger_account_id', $account->id)
+                    ->where('messenger_sender_id', $senderId)
+                    ->where(function ($q) {
+                        $q->whereNull('name')->orWhere('name', 'Messenger User');
+                    })
+                    ->update(['name' => $resolvedName]);
+            }
+        }
 
         $query = Chat::where('user_id', $user->id)
             ->where('messenger_account_id', $account->id)
@@ -362,10 +403,30 @@ class ChatController extends Controller
             $account->decrement('msg_number');
         }
 
+        // Resolve customer name if known, to keep chat records consistent
+        $customerName = Chat::where('messenger_account_id', $account->id)
+            ->where('messenger_sender_id', $recipientId)
+            ->whereNotNull('name')
+            ->where('name', '!=', 'Messenger User')
+            ->value('name');
+
+        if (! $customerName && ! empty($account->page_access_token)) {
+            $profile = $this->getMessengerUserProfile($account->page_access_token, $recipientId, $account);
+            $customerName = $this->resolveMessengerName($profile);
+            if (! empty($customerName)) {
+                Chat::where('messenger_account_id', $account->id)
+                    ->where('messenger_sender_id', $recipientId)
+                    ->where(function ($q) {
+                        $q->whereNull('name')->orWhere('name', 'Messenger User');
+                    })
+                    ->update(['name' => $customerName]);
+            }
+        }
+
         $chat = Chat::create([
             'user_id' => $user->id,
             'messenger_account_id' => $account->id,
-            'name' => 'Messenger User',
+            'name' => $customerName ?: 'Messenger User',
             'phone' => null,
             'message' => $messageText,
             'is_image' => false,
@@ -1302,5 +1363,78 @@ class ChatController extends Controller
         }
 
         return [];
+    }
+
+    /**
+     * Fetch user profile from Facebook Messenger Graph API (first_name, last_name, name, profile_pic).
+     *
+     * @return array{name?: string, first_name?: string, last_name?: string, profile_pic?: string}
+     */
+    private function getMessengerUserProfile(string $accessToken, string $senderId, ?MessengerAccount $account = null): array
+    {
+        if (empty($accessToken) || empty($senderId)) {
+            return [];
+        }
+
+        try {
+            $graphVersion = config('services.meta.graph_version', 'v21.0');
+            $response = Http::timeout(5)->get("https://graph.facebook.com/{$graphVersion}/{$senderId}", [
+                'fields' => 'first_name,last_name,name,profile_pic',
+                'access_token' => $accessToken,
+            ]);
+
+            if (! $response->successful() && $account) {
+                /** @var MetaPageTokenService $tokenService */
+                $tokenService = app(MetaPageTokenService::class);
+                if ($tokenService->isTokenExpiredError($response->status(), $response->json() ?? [])) {
+                    $refreshedToken = $tokenService->refreshMessengerAccountToken($account);
+                    if ($refreshedToken) {
+                        $accessToken = $refreshedToken;
+                        $response = Http::timeout(5)->get("https://graph.facebook.com/{$graphVersion}/{$senderId}", [
+                            'fields' => 'first_name,last_name,name,profile_pic',
+                            'access_token' => $accessToken,
+                        ]);
+                    }
+                }
+            }
+
+            if ($response->successful()) {
+                $data = $response->json();
+
+                return is_array($data) ? $data : [];
+            }
+
+            // Fallback: request only first_name,last_name,profile_pic in case 'name' is not supported on this node
+            $fallbackResponse = Http::timeout(5)->get("https://graph.facebook.com/{$graphVersion}/{$senderId}", [
+                'fields' => 'first_name,last_name,profile_pic',
+                'access_token' => $accessToken,
+            ]);
+
+            if ($fallbackResponse->successful()) {
+                $data = $fallbackResponse->json();
+
+                return is_array($data) ? $data : [];
+            }
+        } catch (\Throwable $e) {
+            // Ignore error
+        }
+
+        return [];
+    }
+
+    /**
+     * Resolve a readable customer name from a Messenger profile payload.
+     *
+     * @param  array{name?: string, first_name?: string, last_name?: string}  $profile
+     */
+    private function resolveMessengerName(array $profile): ?string
+    {
+        if (! empty($profile['name']) && $profile['name'] !== 'Messenger User') {
+            return trim((string) $profile['name']);
+        }
+
+        $fullName = trim(($profile['first_name'] ?? '').' '.($profile['last_name'] ?? ''));
+
+        return ! empty($fullName) ? $fullName : null;
     }
 }

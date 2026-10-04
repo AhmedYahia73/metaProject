@@ -16,6 +16,7 @@ use App\Models\Order;
 use App\Models\Setting;
 use App\Models\User;
 use App\Models\WhatsItem;
+use App\Services\MetaPageTokenService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -469,11 +470,38 @@ class HomeController extends Controller
                 return response()->json(['status' => 'limit_exceeded'], Response::HTTP_OK);
             }
 
+            // Fetch real customer name from Messenger Graph API if not already resolved
+            $senderName = 'Messenger User';
+
+            $existingCustomerChat = Chat::where('messenger_account_id', $messengerAccount->id)
+                ->where('messenger_sender_id', $senderId)
+                ->whereNotNull('name')
+                ->where('name', '!=', 'Messenger User')
+                ->where('name', '!=', '')
+                ->first();
+
+            if ($existingCustomerChat) {
+                $senderName = $existingCustomerChat->name;
+            } elseif (! empty($senderId) && ! empty($messengerAccount->page_access_token)) {
+                $profile = $this->getMessengerUserProfile($messengerAccount->page_access_token, $senderId, $messengerAccount);
+                $resolvedName = $this->resolveMessengerName($profile);
+
+                if (! empty($resolvedName)) {
+                    $senderName = $resolvedName;
+                    Chat::where('messenger_account_id', $messengerAccount->id)
+                        ->where('messenger_sender_id', $senderId)
+                        ->where(function ($q) {
+                            $q->whereNull('name')->orWhere('name', 'Messenger User');
+                        })
+                        ->update(['name' => $senderName]);
+                }
+            }
+
             // Save incoming customer message
             $new_chat = Chat::create([
                 'user_id' => $restaurant->id,
                 'messenger_account_id' => $messengerAccount->id,
-                'name' => 'Messenger User',
+                'name' => $senderName,
                 'phone' => null,
                 'message' => $messageText,
                 'is_image' => false,
@@ -548,10 +576,10 @@ class HomeController extends Controller
                     $messengerAccount->decrement('msg_number');
                 }
 
-                Chat::create([
+                $botChat = Chat::create([
                     'user_id' => $restaurant->id,
                     'messenger_account_id' => $messengerAccount->id,
-                    'name' => 'Messenger User',
+                    'name' => $senderName,
                     'phone' => null,
                     'message' => $reply,
                     'is_image' => false,
@@ -561,6 +589,28 @@ class HomeController extends Controller
                     'channel' => 'messenger',
                     'messenger_sender_id' => $senderId,
                 ]);
+
+                // Realtime broadcast of bot reply to admin dashboard
+                try {
+                    $botChatData = $botChat->toArray();
+                    $botChatData['page_id'] = $messengerAccount->page_id;
+                    MessengerEvent::dispatch($botChatData);
+                } catch (\Throwable $broadcastException) {
+                    Log::warning('[MESSENGER] ⚠ Bot MessengerEvent broadcast failed (non-fatal): '.$broadcastException->getMessage());
+                }
+
+                // Stop typing indicator on admin dashboard
+                try {
+                    TypingEvent::dispatch(
+                        channel: 'messenger',
+                        phone: null,
+                        senderId: $senderId,
+                        pageId: $messengerAccount->page_id,
+                        isTyping: false,
+                    );
+                } catch (\Throwable $broadcastException) {
+                    Log::warning('[MESSENGER] ⚠ TypingEvent stop broadcast failed (non-fatal): '.$broadcastException->getMessage());
+                }
 
                 MsgSend::create([
                     'user_id' => $restaurant->id,
@@ -2032,6 +2082,86 @@ class HomeController extends Controller
         }
 
         return [];
+    }
+
+    /**
+     * Fetch user profile from Messenger Graph API (first_name, last_name, name, profile_pic).
+     *
+     * @return array{name?: string, first_name?: string, last_name?: string, profile_pic?: string}
+     */
+    protected function getMessengerUserProfile(string $pageAccessToken, string $senderId, ?MessengerAccount $account = null): array
+    {
+        if (empty($pageAccessToken) || empty($senderId)) {
+            return [];
+        }
+
+        try {
+            $graphVersion = config('services.meta.graph_version', 'v21.0');
+            $response = Http::timeout(5)->get("https://graph.facebook.com/{$graphVersion}/{$senderId}", [
+                'fields' => 'first_name,last_name,name,profile_pic',
+                'access_token' => $pageAccessToken,
+            ]);
+
+            if (! $response->successful() && $account) {
+                /** @var MetaPageTokenService $tokenService */
+                $tokenService = app(MetaPageTokenService::class);
+                if ($tokenService->isTokenExpiredError($response->status(), $response->json() ?? [])) {
+                    $refreshedToken = $tokenService->refreshMessengerAccountToken($account);
+                    if ($refreshedToken) {
+                        $pageAccessToken = $refreshedToken;
+                        $response = Http::timeout(5)->get("https://graph.facebook.com/{$graphVersion}/{$senderId}", [
+                            'fields' => 'first_name,last_name,name,profile_pic',
+                            'access_token' => $pageAccessToken,
+                        ]);
+                    }
+                }
+            }
+
+            if ($response->successful()) {
+                $data = $response->json();
+                Log::channel('stack')->info("[MESSENGER] Profile fetched for sender {$senderId}", is_array($data) ? $data : []);
+
+                return is_array($data) ? $data : [];
+            }
+
+            // Fallback: request only first_name,last_name,profile_pic in case 'name' is not supported on this node
+            $fallback = Http::timeout(5)->get("https://graph.facebook.com/{$graphVersion}/{$senderId}", [
+                'fields' => 'first_name,last_name,profile_pic',
+                'access_token' => $pageAccessToken,
+            ]);
+
+            if ($fallback->successful()) {
+                $data = $fallback->json();
+                Log::channel('stack')->info("[MESSENGER] Fallback profile fetched for sender {$senderId}", is_array($data) ? $data : []);
+
+                return is_array($data) ? $data : [];
+            }
+
+            Log::channel('stack')->warning("[MESSENGER] Profile fetch failed for sender {$senderId}", [
+                'status' => $response->status(),
+                'body' => $response->json(),
+            ]);
+        } catch (\Throwable $e) {
+            Log::channel('stack')->warning("[MESSENGER] Profile fetch exception for sender {$senderId}: ".$e->getMessage());
+        }
+
+        return [];
+    }
+
+    /**
+     * Resolve a readable customer name from a Messenger profile payload.
+     *
+     * @param  array{name?: string, first_name?: string, last_name?: string}  $profile
+     */
+    protected function resolveMessengerName(array $profile): ?string
+    {
+        if (! empty($profile['name']) && $profile['name'] !== 'Messenger User') {
+            return trim((string) $profile['name']);
+        }
+
+        $fullName = trim(($profile['first_name'] ?? '').' '.($profile['last_name'] ?? ''));
+
+        return ! empty($fullName) ? $fullName : null;
     }
 
     /**
