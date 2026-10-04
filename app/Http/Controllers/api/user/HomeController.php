@@ -507,9 +507,9 @@ class HomeController extends Controller
             'status' => true,
             'facebook_connected' => $facebookConnected,
             'total_unread_count' => $totalUnreadCount,
-            'messenger_pages' => $messengerPages,
-            'instagram_pages' => $instagramPages,
-            'whats_accounts' => $whatsAccounts,
+            'messenger_pages' => $messengerPages->filter(),
+            'instagram_pages' => $instagramPages->filter(),
+            'whats_accounts' => $whatsAccounts->filter(),
         ]);
     }
 }
