@@ -448,3 +448,151 @@ test('user can view instagram accounts, conversations, messages, send manual rep
     $markRes->assertOk()
         ->assertJsonPath('status', true);
 });
+
+test('instagram webhook ignores echo when sent by bot account itself', function () {
+    $item = InstagramItem::factory()->withQuota(100)->create([
+        'instagram_id' => '17841400088888888',
+        'status' => 'active',
+    ]);
+
+    $payload = [
+        'object' => 'instagram',
+        'entry' => [
+            [
+                'id' => '17841400088888888',
+                'messaging' => [
+                    [
+                        'sender' => ['id' => '17841400088888888'],
+                        'recipient' => ['id' => 'CUST_IG_999'],
+                        'message' => [
+                            'mid' => 'mid.bot_outbound_echo',
+                            'text' => 'Bot outbound reply',
+                            'is_echo' => true,
+                        ],
+                    ],
+                ],
+            ],
+        ],
+    ];
+
+    $response = $this->postJson('/api/instagram-webhook', $payload);
+    $response->assertOk()
+        ->assertJson(['status' => 'echo_ignored']);
+
+    $item->refresh();
+    expect($item->msg_number)->toBe(100);
+});
+
+test('instagram webhook resolves and replies to customer message from tester echo event', function () {
+    Event::fake([InstagramEvent::class, TypingEvent::class]);
+
+    $restaurant = User::factory()->create(['role' => 'user']);
+    $item = InstagramItem::factory()->withQuota(50)->create([
+        'user_id' => $restaurant->id,
+        'instagram_id' => '17841449192689340',
+        'username' => 'keeto_app',
+        'access_token' => 'VALID_PAGE_ACCESS_TOKEN',
+        'status' => 'active',
+    ]);
+
+    // Construct mid containing the bot's instagram_id in base64
+    $rawMidContent = 'ig_dm_item:1:IGMessageID:17841449192689340:thread_123:msg_456';
+    $encodedMid = base64_encode($rawMidContent);
+
+    OpenAI::fake([
+        CreateResponse::fake([
+            'output' => [
+                0 => [
+                    'type' => 'message',
+                    'id' => 'msg_ig_echo_1',
+                    'status' => 'completed',
+                    'role' => 'assistant',
+                    'content' => [
+                        [
+                            'type' => 'output_text',
+                            'text' => 'مرحباً بك في كيتو! نحن في خدمتك.',
+                            'annotations' => [],
+                        ],
+                    ],
+                ],
+            ],
+        ]),
+    ]);
+
+    Http::fake([
+        // 1. Meta Graph API query for message details by mid
+        "https://graph.facebook.com/*/{$encodedMid}*" => Http::response([
+            'id' => $encodedMid,
+            'from' => [
+                'id' => '28479796635013446',
+                'username' => 'olaallaamm',
+            ],
+            'to' => [
+                'data' => [
+                    ['id' => '17841449192689340', 'username' => 'keeto_app'],
+                ],
+            ],
+            'message' => 'Hello Keeto from tester!',
+        ], 200),
+
+        // 2. Meta Graph API mark seen and send message
+        'https://graph.facebook.com/*/me/messages' => Http::response([
+            'recipient_id' => '28479796635013446',
+            'message_id' => 'mid.reply_success_123',
+        ], 200),
+    ]);
+
+    // Webhook event sent by Meta when tester olaallaamm (17841428359357619) writes to keeto_app
+    $payload = [
+        'object' => 'instagram',
+        'entry' => [
+            [
+                'id' => '17841428359357619',
+                'messaging' => [
+                    [
+                        'sender' => ['id' => '17841428359357619'],
+                        'recipient' => ['id' => '1121098273691944'],
+                        'message' => [
+                            'mid' => $encodedMid,
+                            'text' => 'Hello Keeto from tester!',
+                            'is_echo' => true,
+                        ],
+                    ],
+                ],
+            ],
+        ],
+    ];
+
+    $response = $this->postJson('/api/instagram-webhook', $payload);
+
+    $response->assertOk()
+        ->assertJson([
+            'status' => 'success',
+            'instagram_sent' => true,
+        ]);
+
+    // Check quota decrement
+    $item->refresh();
+    expect($item->msg_number)->toBe(49);
+
+    // Verify chats saved with resolved sender ID and name
+    $this->assertDatabaseHas('chats', [
+        'user_id' => $restaurant->id,
+        'instagram_item_id' => $item->id,
+        'channel' => 'instagram',
+        'instagram_sender_id' => '28479796635013446',
+        'name' => 'olaallaamm',
+        'message' => 'Hello Keeto from tester!',
+        'is_admin' => false,
+        'sender_type' => 'customer',
+    ]);
+
+    $this->assertDatabaseHas('chats', [
+        'user_id' => $restaurant->id,
+        'instagram_item_id' => $item->id,
+        'channel' => 'instagram',
+        'instagram_sender_id' => '28479796635013446',
+        'is_admin' => true,
+        'sender_type' => 'bot',
+    ]);
+});

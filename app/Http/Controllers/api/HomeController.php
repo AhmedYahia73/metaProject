@@ -1259,22 +1259,94 @@ class HomeController extends Controller
 
             $this->logInstagramEvent('INSPECT', '🔍 Webhook event inspection & account matching', $diagnostic);
 
-            // Ignore echoed messages (sent by the account itself)
+            $senderName = 'Instagram User';
+
+            // Check echoed messages
             if ($isEcho) {
-                $echoSenderDesc = $senderAccount
-                    ? "Account #{$senderAccount->id} (@{$senderAccount->username})"
-                    : "Account {$senderId} (matches entry ID {$entryId})";
+                // If the message was sent OUTBOUND by our own bot account in the DB, ignore it to prevent loops
+                if ($senderAccount && $senderAccount->status === 'active') {
+                    $this->logInstagramEvent('ECHO_IGNORED', "✓ Echo ignored — message was sent OUTBOUND by the bot account #{$senderAccount->id} (@{$senderAccount->username}) to recipient {$recipientId}", [
+                        'sender_id' => $senderId,
+                        'recipient_id' => $recipientId,
+                        'entry_id' => $entryId,
+                        'is_echo' => true,
+                        'text' => $messageText,
+                    ]);
 
-                $this->logInstagramEvent('ECHO_IGNORED', "✓ Echo ignored — message was sent OUTBOUND by the business account ({$echoSenderDesc}) to recipient {$recipientId}", [
-                    'sender_id' => $senderId,
-                    'recipient_id' => $recipientId,
-                    'entry_id' => $entryId,
-                    'is_echo' => true,
-                    'text' => $messageText,
-                    'diagnostic_advice' => 'Meta sends is_echo=true when the message originates from the business account. The bot only replies to incoming customer messages (is_echo=false/null). If you are testing, ensure the message is sent FROM a separate customer/tester account TO the business account, and verify that "Allow access to messages" is enabled in the Instagram app settings.',
-                ]);
+                    return response()->json(['status' => 'echo_ignored', 'diagnostic' => $diagnostic], Response::HTTP_OK);
+                }
 
-                return response()->json(['status' => 'echo_ignored', 'diagnostic' => $diagnostic], Response::HTTP_OK);
+                // If is_echo is true BUT the sender is NOT one of our bot accounts:
+                // Meta sends echo events for tester/admin accounts when they send a DM to our business page.
+                // We resolve the target InstagramItem and fetch the real customer IGSID from Meta Graph API.
+                $targetItem = null;
+                $decodedMid = (string) base64_decode($mid);
+
+                $activeItems = InstagramItem::where('status', 'active')->whereNotNull('access_token')->get();
+                foreach ($activeItems as $item) {
+                    if (! empty($item->instagram_id) && str_contains($decodedMid, (string) $item->instagram_id)) {
+                        $targetItem = $item;
+                        break;
+                    }
+                }
+
+                if (! $targetItem && $recipientAccount && $recipientAccount->status === 'active') {
+                    $targetItem = $recipientAccount;
+                }
+
+                if (! $targetItem && $activeItems->count() === 1) {
+                    $targetItem = $activeItems->first();
+                }
+
+                $resolvedFromGraph = false;
+                if ($targetItem && ! empty($mid)) {
+                    try {
+                        $msgResponse = Http::timeout(10)->get(self::GRAPH_API_BASE."/{$mid}", [
+                            'fields' => 'id,from,to,message',
+                            'access_token' => $targetItem->access_token,
+                        ]);
+
+                        if ($msgResponse->successful()) {
+                            $fromId = (string) $msgResponse->json('from.id');
+                            $fromUsername = (string) ($msgResponse->json('from.username') ?? '');
+                            $fetchedText = (string) ($msgResponse->json('message') ?? $messageText);
+
+                            // Verify that this message was NOT sent by the bot account itself
+                            if (! empty($fromId) && $fromId !== (string) $targetItem->instagram_id) {
+                                $senderId = $fromId;
+                                if (! empty($fromUsername)) {
+                                    $senderName = $fromUsername;
+                                }
+                                if (! empty($fetchedText)) {
+                                    $messageText = $fetchedText;
+                                }
+                                $instagramItem = $targetItem;
+                                $targetInstagramId = (string) $targetItem->instagram_id;
+                                $resolvedFromGraph = true;
+
+                                $this->logInstagramEvent('INBOUND_RESOLVED', "✓ Resolved customer message from tester echo event for @{$targetItem->username} from @{$senderName} ({$fromId})", [
+                                    'sender_id' => $senderId,
+                                    'target_account' => $targetItem->username,
+                                    'message_text' => $messageText,
+                                    'mid' => $mid,
+                                ]);
+                            }
+                        }
+                    } catch (\Throwable $ex) {
+                        Log::warning('[INSTAGRAM] Failed to query message details from Graph API: '.$ex->getMessage());
+                    }
+                }
+
+                if (! $resolvedFromGraph) {
+                    $this->logInstagramEvent('ECHO_IGNORED', "✓ Echo ignored — message originated from external account {$senderId}", [
+                        'sender_id' => $senderId,
+                        'recipient_id' => $recipientId,
+                        'entry_id' => $entryId,
+                        'text' => $messageText,
+                    ]);
+
+                    return response()->json(['status' => 'echo_ignored', 'diagnostic' => $diagnostic], Response::HTTP_OK);
+                }
             }
 
             $targetInstagramId = $recipientId ?: $entryId;
@@ -1288,35 +1360,37 @@ class HomeController extends Controller
                 'mid' => $mid,
             ]);
 
-            // Handle Meta test button from Developer Dashboard (sends dummy ID 0)
-            if ($targetInstagramId === '0' || $entryId === '0') {
-                $instagramItem = InstagramItem::where('status', 'active')->first();
-            } else {
-                // Resolve InstagramItem via instagram_id or page_id
-                /** @var InstagramItem|null $instagramItem */
-                $instagramItem = InstagramItem::where('instagram_id', $targetInstagramId)
-                    ->where('status', 'active')
-                    ->first();
-            }
+            if (! isset($instagramItem) || ! $instagramItem) {
+                // Handle Meta test button from Developer Dashboard (sends dummy ID 0)
+                if ($targetInstagramId === '0' || $entryId === '0') {
+                    $instagramItem = InstagramItem::where('status', 'active')->first();
+                } else {
+                    // Resolve InstagramItem via instagram_id or page_id
+                    /** @var InstagramItem|null $instagramItem */
+                    $instagramItem = InstagramItem::where('instagram_id', $targetInstagramId)
+                        ->where('status', 'active')
+                        ->first();
+                }
 
-            if (! $instagramItem && $entryId) {
-                $instagramItem = InstagramItem::where('instagram_id', $entryId)
-                    ->where('status', 'active')
-                    ->first();
-            }
+                if (! $instagramItem && $entryId) {
+                    $instagramItem = InstagramItem::where('instagram_id', $entryId)
+                        ->where('status', 'active')
+                        ->first();
+                }
 
-            if (! $instagramItem) {
-                $instagramItem = InstagramItem::where(function ($q) use ($targetInstagramId, $entryId) {
-                    $q->where('page_id', $targetInstagramId)
-                        ->orWhere('page_id', $entryId);
-                })->where('status', 'active')->first();
-            }
+                if (! $instagramItem) {
+                    $instagramItem = InstagramItem::where(function ($q) use ($targetInstagramId, $entryId) {
+                        $q->where('page_id', $targetInstagramId)
+                            ->orWhere('page_id', $entryId);
+                    })->where('status', 'active')->first();
+                }
 
-            // Fallback: if only one active Instagram account exists in the database, use it as fallback
-            if (! $instagramItem && InstagramItem::where('status', 'active')->count() === 1) {
-                $fallbackItem = InstagramItem::where('status', 'active')->first();
-                $this->logInstagramEvent('FALLBACK_ACCOUNT', "Using single active InstagramItem #{$fallbackItem->id} (@{$fallbackItem->username}) as fallback for target {$targetInstagramId}");
-                $instagramItem = $fallbackItem;
+                // Fallback: if only one active Instagram account exists in the database, use it as fallback
+                if (! $instagramItem && InstagramItem::where('status', 'active')->count() === 1) {
+                    $fallbackItem = InstagramItem::where('status', 'active')->first();
+                    $this->logInstagramEvent('FALLBACK_ACCOUNT', "Using single active InstagramItem #{$fallbackItem->id} (@{$fallbackItem->username}) as fallback for target {$targetInstagramId}");
+                    $instagramItem = $fallbackItem;
+                }
             }
 
             if (! $instagramItem) {
@@ -1375,7 +1449,7 @@ class HomeController extends Controller
             $newChat = Chat::create([
                 'user_id' => $restaurant->id,
                 'instagram_item_id' => $instagramItem->id,
-                'name' => 'Instagram User',
+                'name' => $senderName ?? 'Instagram User',
                 'phone' => null,
                 'message' => $messageText,
                 'is_image' => false,
