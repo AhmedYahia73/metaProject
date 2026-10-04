@@ -107,4 +107,14 @@ class User extends Authenticatable
     {
         return $this->hasMany(InstagramItem::class);
     }
+
+    /**
+     * Get all chats for this user (restaurant).
+     *
+     * @return HasMany<Chat, $this>
+     */
+    public function chats(): HasMany
+    {
+        return $this->hasMany(Chat::class);
+    }
 }

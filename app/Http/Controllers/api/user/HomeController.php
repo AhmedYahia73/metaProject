@@ -5,6 +5,7 @@ namespace App\Http\Controllers\api\user;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\ContactUsRequest;
 use App\Mail\ContactUsMail;
+use App\Models\Chat;
 use App\Models\InstagramItem;
 use App\Models\MessengerAccount;
 use App\Models\MsgSend;
@@ -294,6 +295,28 @@ class HomeController extends Controller
         $user = $request->user();
         $graphVersion = config('services.meta.graph_version', 'v21.0');
 
+        // Pre-aggregate unread message counts for each channel/page (Chat is_read = false)
+        $messengerUnreadCounts = Chat::where('user_id', $user->id)
+            ->whereNotNull('messenger_account_id')
+            ->where('is_read', false)
+            ->groupBy('messenger_account_id')
+            ->selectRaw('messenger_account_id, count(*) as count')
+            ->pluck('count', 'messenger_account_id');
+
+        $instagramUnreadCounts = Chat::where('user_id', $user->id)
+            ->whereNotNull('instagram_item_id')
+            ->where('is_read', false)
+            ->groupBy('instagram_item_id')
+            ->selectRaw('instagram_item_id, count(*) as count')
+            ->pluck('count', 'instagram_item_id');
+
+        $whatsUnreadCounts = Chat::where('user_id', $user->id)
+            ->whereNotNull('whats_item_id')
+            ->where('is_read', false)
+            ->groupBy('whats_item_id')
+            ->selectRaw('whats_item_id, count(*) as count')
+            ->pluck('count', 'whats_item_id');
+
         $messengerPages = collect();
         $instagramPages = collect();
         $facebookConnected = ! empty($user->facebook_access_token);
@@ -328,7 +351,7 @@ class HomeController extends Controller
                         ->keyBy('instagram_id');
 
                     // Map Facebook Pages with profile pictures and auto-update tokens
-                    $messengerPages = collect($rawPages)->map(function (array $page) use ($existingMessengerAccounts) {
+                    $messengerPages = collect($rawPages)->map(function (array $page) use ($existingMessengerAccounts, $messengerUnreadCounts) {
                         $pageId = (string) $page['id'];
                         /** @var MessengerAccount|null $account */
                         $account = $existingMessengerAccounts->get($pageId);
@@ -345,6 +368,8 @@ class HomeController extends Controller
                         $pagePicture = $page['picture']['data']['url']
                             ?? "https://graph.facebook.com/{$pageId}/picture?type=large";
 
+                        $unreadCount = $account ? (int) ($messengerUnreadCounts[$account->id] ?? 0) : 0;
+
                         return [
                             'page_id' => $pageId,
                             'page_name' => $page['name'] ?? null,
@@ -352,13 +377,14 @@ class HomeController extends Controller
                             'profile_picture_url' => $pagePicture,
                             'subscription_status' => $subInfo['subscription_status'],
                             'available_msgs' => $subInfo['available_msgs'],
+                            'unread_count' => $unreadCount,
                         ];
                     })->values();
 
                     // Map Instagram Business Accounts with profile pictures and auto-update tokens
                     $instagramPages = collect($rawPages)
                         ->filter(fn (array $page) => ! empty($page['instagram_business_account']))
-                        ->map(function (array $page) use ($existingInstagramAccounts) {
+                        ->map(function (array $page) use ($existingInstagramAccounts, $instagramUnreadCounts) {
                             $ig = $page['instagram_business_account'];
                             $igId = (string) $ig['id'];
                             /** @var InstagramItem|null $account */
@@ -374,6 +400,8 @@ class HomeController extends Controller
                                 'available_msgs' => 0,
                             ];
 
+                            $unreadCount = $account ? (int) ($instagramUnreadCounts[$account->id] ?? 0) : 0;
+
                             return [
                                 'instagram_id' => $igId,
                                 'username' => $ig['username'] ?? null,
@@ -383,6 +411,7 @@ class HomeController extends Controller
                                 'connected_page_name' => $page['name'] ?? null,
                                 'subscription_status' => $subInfo['subscription_status'],
                                 'available_msgs' => $subInfo['available_msgs'],
+                                'unread_count' => $unreadCount,
                             ];
                         })->values();
                 } else {
@@ -405,7 +434,7 @@ class HomeController extends Controller
         if ($messengerPages->isEmpty()) {
             $messengerPages = MessengerAccount::where('user_id', $user->id)
                 ->get()
-                ->map(function (MessengerAccount $account) {
+                ->map(function (MessengerAccount $account) use ($messengerUnreadCounts) {
                     $subInfo = $account->getSubscriptionInfo();
 
                     return [
@@ -415,6 +444,7 @@ class HomeController extends Controller
                         'profile_picture_url' => "https://graph.facebook.com/{$account->page_id}/picture?type=large",
                         'subscription_status' => $subInfo['subscription_status'],
                         'available_msgs' => $subInfo['available_msgs'],
+                        'unread_count' => (int) ($messengerUnreadCounts[$account->id] ?? 0),
                     ];
                 });
         }
@@ -422,7 +452,7 @@ class HomeController extends Controller
         if ($instagramPages->isEmpty()) {
             $instagramPages = InstagramItem::where('user_id', $user->id)
                 ->get()
-                ->map(function (InstagramItem $account) {
+                ->map(function (InstagramItem $account) use ($instagramUnreadCounts) {
                     $subInfo = $account->getSubscriptionInfo();
 
                     return [
@@ -434,13 +464,14 @@ class HomeController extends Controller
                         'connected_page_name' => null,
                         'subscription_status' => $subInfo['subscription_status'],
                         'available_msgs' => $subInfo['available_msgs'],
+                        'unread_count' => (int) ($instagramUnreadCounts[$account->id] ?? 0),
                     ];
                 });
         }
 
         // Fetch WhatsApp numbers with profile pictures and active subscription information
         $whatsAccounts = $user->whatsItems()->latest()->get()
-            ->map(function (WhatsItem $item) {
+            ->map(function (WhatsItem $item) use ($whatsUnreadCounts) {
                 $subInfo = $item->getSubscriptionInfo();
 
                 return [
@@ -452,12 +483,18 @@ class HomeController extends Controller
                     'profile_picture_url' => $item->getProfilePictureUrl(),
                     'subscription_status' => $subInfo['subscription_status'],
                     'available_msgs' => $subInfo['available_msgs'],
+                    'unread_count' => (int) ($whatsUnreadCounts[$item->id] ?? 0),
                 ];
             });
+
+        $totalUnreadCount = (int) $messengerPages->sum('unread_count')
+            + (int) $instagramPages->sum('unread_count')
+            + (int) $whatsAccounts->sum('unread_count');
 
         return response()->json([
             'status' => true,
             'facebook_connected' => $facebookConnected,
+            'total_unread_count' => $totalUnreadCount,
             'messenger_pages' => $messengerPages,
             'instagram_pages' => $instagramPages,
             'whats_accounts' => $whatsAccounts,

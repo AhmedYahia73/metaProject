@@ -1,5 +1,7 @@
 <?php
 
+use App\Models\Chat;
+use App\Models\InstagramItem;
 use App\Models\MessengerAccount;
 use App\Models\User;
 use App\Models\WhatsItem;
@@ -70,20 +72,24 @@ test('authenticated user with facebook token gets messenger and instagram pages 
 
     $data = $response->json();
 
-    // Verify Facebook Page has profile_picture_url
+    // Verify Facebook Page has profile_picture_url and unread_count
     expect($data['messenger_pages'])->toHaveCount(1);
     expect($data['messenger_pages'][0]['page_id'])->toBe('page_111');
     expect($data['messenger_pages'][0]['profile_picture_url'])->toBe('https://cdn.facebook.com/images/page_111_avatar.jpg');
+    expect($data['messenger_pages'][0]['unread_count'])->toBe(0);
 
-    // Verify Instagram Page has profile_picture_url
+    // Verify Instagram Page has profile_picture_url and unread_count
     expect($data['instagram_pages'])->toHaveCount(1);
     expect($data['instagram_pages'][0]['instagram_id'])->toBe('ig_222');
     expect($data['instagram_pages'][0]['profile_picture_url'])->toBe('https://cdn.instagram.com/images/ig_222_avatar.jpg');
+    expect($data['instagram_pages'][0]['unread_count'])->toBe(0);
 
-    // Verify WhatsApp Account has profile_picture_url
+    // Verify WhatsApp Account has profile_picture_url and unread_count
     expect($data['whats_accounts'])->toHaveCount(1);
     expect($data['whats_accounts'][0]['id'])->toBe($whatsItem->id);
     expect($data['whats_accounts'][0]['profile_picture_url'])->toBe('https://pps.whatsapp.net/v/t61.24694/whats_avatar.jpg');
+    expect($data['whats_accounts'][0]['unread_count'])->toBe(0);
+    expect($data['total_unread_count'])->toBe(0);
 });
 
 test('user without facebook token still receives whats accounts and fallback db accounts', function () {
@@ -116,8 +122,124 @@ test('user without facebook token still receives whats accounts and fallback db 
     expect($data['whats_accounts'])->toHaveCount(1);
     expect($data['whats_accounts'][0]['id'])->toBe($whatsItem->id);
     expect($data['whats_accounts'][0]['profile_picture_url'])->toBeNull();
+    expect($data['whats_accounts'][0]['unread_count'])->toBe(0);
 
     expect($data['messenger_pages'])->toHaveCount(1);
     expect($data['messenger_pages'][0]['page_id'])->toBe('db_page_555');
     expect($data['messenger_pages'][0]['profile_picture_url'])->toBe('https://graph.facebook.com/db_page_555/picture?type=large');
+    expect($data['messenger_pages'][0]['unread_count'])->toBe(0);
+    expect($data['total_unread_count'])->toBe(0);
+});
+
+test('all_chats returns accurate unread_count for each page and total_unread_count', function () {
+    $user = User::factory()->create([
+        'role' => 'user',
+        'facebook_access_token' => null,
+    ]);
+
+    $otherUser = User::factory()->create();
+
+    $messengerAccount = MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'page_id' => 'fb_page_100',
+        'page_name' => 'FB Page 1',
+    ]);
+
+    $instagramItem = InstagramItem::factory()->create([
+        'user_id' => $user->id,
+        'instagram_id' => 'ig_acc_200',
+        'username' => 'ig_page_1',
+    ]);
+
+    $whatsItem = WhatsItem::factory()->create([
+        'user_id' => $user->id,
+        'phone' => '01011112222',
+    ]);
+
+    // Create unread chats for Messenger (2 unread, 1 read)
+    Chat::create([
+        'user_id' => $user->id,
+        'messenger_account_id' => $messengerAccount->id,
+        'message' => 'Unread Msg 1',
+        'is_read' => false,
+        'channel' => 'messenger',
+    ]);
+    Chat::create([
+        'user_id' => $user->id,
+        'messenger_account_id' => $messengerAccount->id,
+        'message' => 'Unread Msg 2',
+        'is_read' => false,
+        'channel' => 'messenger',
+    ]);
+    Chat::create([
+        'user_id' => $user->id,
+        'messenger_account_id' => $messengerAccount->id,
+        'message' => 'Read Msg 1',
+        'is_read' => true,
+        'channel' => 'messenger',
+    ]);
+
+    // Create unread chats for Instagram (3 unread, 1 read)
+    Chat::create([
+        'user_id' => $user->id,
+        'instagram_item_id' => $instagramItem->id,
+        'message' => 'IG Unread 1',
+        'is_read' => false,
+        'channel' => 'instagram',
+    ]);
+    Chat::create([
+        'user_id' => $user->id,
+        'instagram_item_id' => $instagramItem->id,
+        'message' => 'IG Unread 2',
+        'is_read' => false,
+        'channel' => 'instagram',
+    ]);
+    Chat::create([
+        'user_id' => $user->id,
+        'instagram_item_id' => $instagramItem->id,
+        'message' => 'IG Unread 3',
+        'is_read' => false,
+        'channel' => 'instagram',
+    ]);
+    Chat::create([
+        'user_id' => $user->id,
+        'instagram_item_id' => $instagramItem->id,
+        'message' => 'IG Read 1',
+        'is_read' => true,
+        'channel' => 'instagram',
+    ]);
+
+    // Create unread chats for WhatsApp (1 unread)
+    Chat::create([
+        'user_id' => $user->id,
+        'whats_item_id' => $whatsItem->id,
+        'phone' => '01011112222',
+        'message' => 'WA Unread 1',
+        'is_read' => false,
+        'channel' => 'whatsapp',
+    ]);
+
+    // Other user's chats should not be counted
+    Chat::create([
+        'user_id' => $otherUser->id,
+        'messenger_account_id' => $messengerAccount->id,
+        'message' => 'Other User Msg',
+        'is_read' => false,
+        'channel' => 'messenger',
+    ]);
+
+    $response = $this->actingAs($user)->getJson('/api/user/all_chats');
+
+    $response->assertOk()
+        ->assertJson([
+            'status' => true,
+            'total_unread_count' => 6, // 2 (FB) + 3 (IG) + 1 (WA) = 6
+        ]);
+
+    $data = $response->json();
+
+    expect($data['messenger_pages'][0]['unread_count'])->toBe(2);
+    expect($data['instagram_pages'][0]['unread_count'])->toBe(3);
+    expect($data['whats_accounts'][0]['unread_count'])->toBe(1);
+    expect($data['total_unread_count'])->toBe(6);
 });

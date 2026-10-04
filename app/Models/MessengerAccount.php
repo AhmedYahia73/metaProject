@@ -92,6 +92,16 @@ class MessengerAccount extends Model
     }
 
     /**
+     * Get the chats linked to this Messenger account.
+     *
+     * @return HasMany<Chat, $this>
+     */
+    public function chats(): HasMany
+    {
+        return $this->hasMany(Chat::class, 'messenger_account_id');
+    }
+
+    /**
      * Get active subscription details and available message count for this Messenger account.
      *
      * @return array{subscription_status: bool, available_msgs: int, start_date: ?string, end_date: ?string, total_msgs: int, used_msgs: int}
