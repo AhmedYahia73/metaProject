@@ -158,3 +158,65 @@ test('connecting facebook automatically refreshes page and instagram tokens', fu
     // Verify instagram item token was updated
     expect($instagramItem->fresh()->access_token)->toBe('fresh_page_token_abc');
 });
+
+test('linking facebook account when facebook_id already belongs to another user unlinks previous user and transfers assets', function () {
+    $previousUser = User::factory()->create([
+        'email' => 'previous_user@example.com',
+        'facebook_id' => 'shared_fb_12345',
+        'facebook_access_token' => 'old_fb_token',
+        'role' => 'user',
+    ]);
+
+    $newUser = User::factory()->create([
+        'email' => 'new_user@example.com',
+        'facebook_id' => null,
+        'facebook_access_token' => null,
+        'role' => 'user',
+    ]);
+
+    $igItem = InstagramItem::create([
+        'user_id' => $previousUser->id,
+        'instagram_id' => '17841449192689340',
+        'username' => 'keeto_app',
+        'page_id' => '1050529558136350',
+        'access_token' => 'old_page_token',
+        'verify_token' => 'test_verify_token_123',
+        'status' => 'active',
+    ]);
+
+    Sanctum::actingAs($newUser);
+
+    Http::fake(function (Request $request) {
+        if (str_contains($request->url(), '/me/accounts')) {
+            return Http::response(['data' => []], 200);
+        }
+        if (str_contains($request->url(), '/me')) {
+            return Http::response([
+                'id' => 'shared_fb_12345',
+                'name' => 'Ahmed Yahia',
+            ], 200);
+        }
+
+        return Http::response([], 200);
+    });
+
+    $response = $this->postJson('/api/auth/facebook', [
+        'access_token' => 'new_fresh_token_777',
+    ]);
+
+    $response->assertOk()
+        ->assertJson([
+            'status' => true,
+        ]);
+
+    // Previous user has facebook_id cleared
+    expect($previousUser->fresh()->facebook_id)->toBeNull();
+    expect($previousUser->fresh()->facebook_access_token)->toBeNull();
+
+    // New user owns the facebook_id
+    expect($newUser->fresh()->facebook_id)->toBe('shared_fb_12345');
+    expect($newUser->fresh()->facebook_access_token)->toBe('new_fresh_token_777');
+
+    // InstagramItem reassigned to new user
+    expect($igItem->fresh()->user_id)->toBe($newUser->id);
+});

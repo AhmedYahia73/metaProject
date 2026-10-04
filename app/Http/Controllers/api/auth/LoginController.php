@@ -5,6 +5,9 @@ namespace App\Http\Controllers\api\auth;
 use App\Http\Controllers\Controller;
 use App\Mail\ActivationCodeMail;
 use App\Mail\ResetPasswordCodeMail;
+use App\Models\InstagramItem;
+use App\Models\MessengerAccount;
+use App\Models\Order;
 use App\Models\User;
 use App\Services\MetaPageTokenService;
 use Illuminate\Http\JsonResponse;
@@ -370,6 +373,30 @@ class LoginController extends Controller
         $fbToken = $tokenService->exchangeForLongLivedToken($fbToken);
 
         if ($user) {
+            // If another user already has this facebook_id, unlink it first
+            // to avoid MySQL 1062 Duplicate entry unique constraint violation
+            $previousUser = User::where('facebook_id', $facebookId)
+                ->where('id', '!=', $user->id)
+                ->first();
+
+            if ($previousUser) {
+                $previousUser->update([
+                    'facebook_id' => null,
+                    'facebook_access_token' => null,
+                ]);
+
+                // Reassign existing MessengerAccounts, InstagramItems and Orders to the new user
+                MessengerAccount::where('user_id', $previousUser->id)->update(['user_id' => $user->id]);
+                InstagramItem::where('user_id', $previousUser->id)->update(['user_id' => $user->id]);
+                Order::where('user_id', $previousUser->id)->update(['user_id' => $user->id]);
+
+                Log::info('Facebook login: transferred Facebook link and assets from previous user', [
+                    'from_user_id' => $previousUser->id,
+                    'to_user_id' => $user->id,
+                    'facebook_id' => $facebookId,
+                ]);
+            }
+
             // Update facebook token on every login/link (tokens refresh)
             $user->update([
                 'facebook_id' => $facebookId,
