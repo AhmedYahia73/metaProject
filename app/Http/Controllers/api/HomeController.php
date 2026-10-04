@@ -1179,6 +1179,11 @@ class HomeController extends Controller
      */
     public function instagram_web_hook(Request $request): Response|JsonResponse
     {
+        Log::channel('stack')->info('[INSTAGRAM] Incoming webhook request', [
+            'method' => $request->method(),
+            'ip' => $request->ip(),
+            'payload' => $request->all(),
+        ]);
         if ($request->isMethod('get')) {
             return $this->instagramVerify($request);
         }
@@ -1215,25 +1220,72 @@ class HomeController extends Controller
                 return response()->json(['status' => 'no_messaging_event'], Response::HTTP_OK);
             }
 
-            // Ignore echoed messages (sent by the account itself)
-            if (data_get($messagingEvent, 'message.is_echo')) {
-                $this->logInstagramEvent('ECHO_IGNORED', '✓ Echo ignored (sent by account)');
-
-                return response()->json(['status' => 'echo_ignored'], Response::HTTP_OK);
-            }
-
             $senderId = (string) data_get($messagingEvent, 'sender.id');
             $recipientId = (string) data_get($messagingEvent, 'recipient.id');
             $messageText = trim((string) data_get($messagingEvent, 'message.text', ''));
+            $isEcho = (bool) data_get($messagingEvent, 'message.is_echo', false);
+            $mid = (string) data_get($messagingEvent, 'message.mid', '');
+
+            // ── Diagnostic inspection: identify connected accounts in DB
+            $allAccounts = [];
+            $senderAccount = null;
+            $recipientAccount = null;
+            $entryAccount = null;
+            try {
+                $allAccounts = InstagramItem::query()
+                    ->select(['id', 'user_id', 'instagram_id', 'username', 'name', 'page_id', 'status'])
+                    ->get()
+                    ->toArray();
+
+                $senderAccount = InstagramItem::where('instagram_id', $senderId)->orWhere('page_id', $senderId)->first();
+                $recipientAccount = InstagramItem::where('instagram_id', $recipientId)->orWhere('page_id', $recipientId)->first();
+                $entryAccount = InstagramItem::where('instagram_id', $entryId)->orWhere('page_id', $entryId)->first();
+            } catch (\Throwable $dbEx) {
+                Log::warning('[INSTAGRAM] Diagnostic DB inspection failed: '.$dbEx->getMessage());
+            }
+
+            $diagnostic = [
+                'entry_id' => $entryId,
+                'sender_id' => $senderId,
+                'recipient_id' => $recipientId,
+                'is_echo' => $isEcho,
+                'message_text' => $messageText,
+                'mid' => $mid,
+                'sender_matched_in_db' => $senderAccount ? "YES (Item #{$senderAccount->id} @{$senderAccount->username})" : 'NOT_FOUND_IN_DB',
+                'recipient_matched_in_db' => $recipientAccount ? "YES (Item #{$recipientAccount->id} @{$recipientAccount->username})" : 'NOT_FOUND_IN_DB',
+                'entry_matched_in_db' => $entryAccount ? "YES (Item #{$entryAccount->id} @{$entryAccount->username})" : 'NOT_FOUND_IN_DB',
+                'all_connected_accounts_in_db' => $allAccounts,
+            ];
+
+            $this->logInstagramEvent('INSPECT', '🔍 Webhook event inspection & account matching', $diagnostic);
+
+            // Ignore echoed messages (sent by the account itself)
+            if ($isEcho) {
+                $echoSenderDesc = $senderAccount
+                    ? "Account #{$senderAccount->id} (@{$senderAccount->username})"
+                    : "Account {$senderId} (matches entry ID {$entryId})";
+
+                $this->logInstagramEvent('ECHO_IGNORED', "✓ Echo ignored — message was sent OUTBOUND by the business account ({$echoSenderDesc}) to recipient {$recipientId}", [
+                    'sender_id' => $senderId,
+                    'recipient_id' => $recipientId,
+                    'entry_id' => $entryId,
+                    'is_echo' => true,
+                    'text' => $messageText,
+                    'diagnostic_advice' => 'Meta sends is_echo=true when the message originates from the business account. The bot only replies to incoming customer messages (is_echo=false/null). If you are testing, ensure the message is sent FROM a separate customer/tester account TO the business account, and verify that "Allow access to messages" is enabled in the Instagram app settings.',
+                ]);
+
+                return response()->json(['status' => 'echo_ignored', 'diagnostic' => $diagnostic], Response::HTTP_OK);
+            }
 
             $targetInstagramId = $recipientId ?: $entryId;
 
-            $this->logInstagramEvent('MESSAGE_EVENT', '✓ Message event received', [
+            $this->logInstagramEvent('MESSAGE_EVENT', '✓ Customer message event received', [
                 'sender_id' => $senderId,
                 'recipient_id' => $recipientId,
                 'entry_id' => $entryId,
+                'target_instagram_id' => $targetInstagramId,
                 'message_text' => $messageText,
-                'mid' => data_get($messagingEvent, 'message.mid'),
+                'mid' => $mid,
             ]);
 
             // Handle Meta test button from Developer Dashboard (sends dummy ID 0)
