@@ -1179,6 +1179,11 @@ class HomeController extends Controller
      */
     public function instagram_web_hook(Request $request): Response|JsonResponse
     {
+        Log::channel('stack')->info('[INSTAGRAM] Incoming webhook request', [
+            'method' => $request->method(),
+            'ip' => $request->ip(),
+            'payload' => $request->all(),
+        ]);
         if ($request->isMethod('get')) {
             return $this->instagramVerify($request);
         }
