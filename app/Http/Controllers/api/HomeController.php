@@ -1933,20 +1933,43 @@ class HomeController extends Controller
     }
 
     /**
-     * Send mark_seen sender action for Instagram.
+     * Send mark_seen and typing_on sender actions for Instagram.
+     * Displays the 3-dot typing indicator in Instagram DM while AI processes the response.
      */
     private function showInstagramTyping(
         string $accessToken,
         string $recipientId,
     ): void {
+        $endpoint = self::GRAPH_API_BASE.'/me/messages';
+
         try {
+            // 1. Mark incoming message as seen
             Http::withToken($accessToken)
-                ->post(self::GRAPH_API_BASE.'/me/messages', [
+                ->timeout(5)
+                ->post($endpoint, [
                     'recipient' => ['id' => $recipientId],
                     'sender_action' => 'mark_seen',
                 ]);
+
+            // 2. Turn on typing indicator dots
+            $response = Http::withToken($accessToken)
+                ->timeout(5)
+                ->post($endpoint, [
+                    'recipient' => ['id' => $recipientId],
+                    'sender_action' => 'typing_on',
+                ]);
+
+            if ($response->successful()) {
+                $this->logInstagramEvent('TYPING_ON', "✓ typing_on indicator sent to {$recipientId}");
+            } else {
+                Log::channel('stack')->warning('[INSTAGRAM] ✗ typing_on failed', [
+                    'recipient_id' => $recipientId,
+                    'status' => $response->status(),
+                    'body' => $response->json(),
+                ]);
+            }
         } catch (\Throwable $e) {
-            Log::channel('stack')->warning('[INSTAGRAM] ⚠ mark_seen exception: '.$e->getMessage());
+            Log::channel('stack')->warning('[INSTAGRAM] ⚠ showInstagramTyping exception: '.$e->getMessage());
         }
     }
 
