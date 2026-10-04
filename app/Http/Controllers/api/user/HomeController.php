@@ -360,10 +360,12 @@ class HomeController extends Controller
                             $account->update(['page_access_token' => $page['access_token']]);
                         }
 
-                        $subInfo = $account ? $account->getSubscriptionInfo() : [
-                            'subscription_status' => false,
-                            'available_msgs' => 0,
-                        ];
+                        if($account){
+                            $subInfo = $account->getSubscriptionInfo();
+                        }
+                        else{
+                            return null;
+                        }
 
                         $pagePicture = $page['picture']['data']['url']
                             ?? "https://graph.facebook.com/{$pageId}/picture?type=large";
@@ -395,10 +397,13 @@ class HomeController extends Controller
                                 $account->update(['access_token' => $pageAccessToken, 'page_id' => (string) $page['id']]);
                             }
 
-                            $subInfo = $account ? $account->getSubscriptionInfo() : [
-                                'subscription_status' => false,
-                                'available_msgs' => 0,
-                            ];
+
+                            if($account){
+                                $subInfo = $account->getSubscriptionInfo();
+                            }
+                            else{
+                                return null;
+                            }
 
                             $unreadCount = $account ? (int) ($instagramUnreadCounts[$account->id] ?? 0) : 0;
 
@@ -466,14 +471,20 @@ class HomeController extends Controller
                         'available_msgs' => $subInfo['available_msgs'],
                         'unread_count' => (int) ($instagramUnreadCounts[$account->id] ?? 0),
                     ];
-                });
+                })
+                ->values();
         }
 
         // Fetch WhatsApp numbers with profile pictures and active subscription information
         $whatsAccounts = $user->whatsItems()->latest()->get()
             ->map(function (WhatsItem $item) use ($whatsUnreadCounts) {
                 $subInfo = $item->getSubscriptionInfo();
-
+                if($account){
+                    $subInfo = $account->getSubscriptionInfo();
+                }
+                else{
+                    return null;
+                }
                 return [
                     'id' => $item->id,
                     'phone' => $item->phone,
@@ -485,7 +496,8 @@ class HomeController extends Controller
                     'available_msgs' => $subInfo['available_msgs'],
                     'unread_count' => (int) ($whatsUnreadCounts[$item->id] ?? 0),
                 ];
-            });
+            })
+            ->values();
 
         $totalUnreadCount = (int) $messengerPages->sum('unread_count')
             + (int) $instagramPages->sum('unread_count')
