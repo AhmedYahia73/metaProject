@@ -1357,6 +1357,17 @@ class HomeController extends Controller
                     'available_msgs' => $instagramItem->msg_number,
                 ]);
 
+                try {
+                    $fallbackReply = 'أهلاً بك! شكراً لتواصلك معنا. فريق خدمة العملاء سيتواصل معك في أقرب وقت للرد على استفسارك بالتفصيل ومساعدتك. يسعدنا دائماً خدمتك!';
+                    $this->sendInstagramMessage(
+                        accessToken: $instagramItem->access_token,
+                        recipientId: $senderId,
+                        text: $fallbackReply,
+                    );
+                } catch (\Throwable $fallbackException) {
+                    Log::warning('[INSTAGRAM] Fallback send failed: '.$fallbackException->getMessage());
+                }
+
                 return response()->json(['status' => 'limit_exceeded'], Response::HTTP_OK);
             }
 
@@ -1410,9 +1421,8 @@ class HomeController extends Controller
             );
 
             if (! $reply) {
-                $this->logInstagramEvent('AI_FAILED', "✗ OpenAI returned empty reply for restaurant #{$restaurant->id}");
-
-                return response()->json(['status' => 'ai_failed'], Response::HTTP_OK);
+                $reply = 'أهلاً بك! شكراً لتواصلك معنا. فريق خدمة العملاء سيتواصل معك في أقرب وقت للرد على استفسارك بالتفصيل ومساعدتك. يسعدنا دائماً خدمتك!';
+                $this->logInstagramEvent('AI_FALLBACK_USED', "AI empty or failed for restaurant #{$restaurant->id}, using customer service fallback message");
             }
 
             $this->logInstagramEvent('AI_REPLIED', '✓ OpenAI replied', [
@@ -1685,33 +1695,49 @@ class HomeController extends Controller
      */
     public function instagram_set_active_id(Request $request): JsonResponse
     {
-        $newIgId = (string) $request->input('instagram_id');
+        $newIgId = $request->input('instagram_id');
+        $status = $request->input('status');
         $itemId = $request->input('id');
-
-        if (empty($newIgId)) {
-            return response()->json(['status' => false, 'message' => 'instagram_id is required.'], Response::HTTP_UNPROCESSABLE_ENTITY);
-        }
+        $action = $request->input('action');
 
         $item = $itemId ? InstagramItem::find($itemId) : InstagramItem::where('status', 'active')->first();
 
         if (! $item) {
-            return response()->json(['status' => false, 'message' => 'No active InstagramItem found in database.'], Response::HTTP_NOT_FOUND);
+            return response()->json(['status' => false, 'message' => 'InstagramItem not found in database.'], Response::HTTP_NOT_FOUND);
         }
 
-        $oldId = $item->instagram_id;
-        $item->update(['instagram_id' => $newIgId]);
+        if ($action === 'delete') {
+            $desc = "#{$item->id} (@{$item->username})";
+            $item->delete();
+            $this->logInstagramEvent('ACCOUNT_DELETED', "Deleted InstagramItem {$desc}");
 
-        $this->logInstagramEvent('ID_UPDATED', "Updated InstagramItem #{$item->id} (@{$item->username}) instagram_id from {$oldId} to {$newIgId}");
+            return response()->json(['status' => true, 'message' => "Successfully deleted InstagramItem {$desc}."]);
+        }
+
+        $updates = [];
+        if (! empty($newIgId)) {
+            $updates['instagram_id'] = (string) $newIgId;
+        }
+        if (! empty($status)) {
+            $updates['status'] = (string) $status;
+        }
+
+        if (empty($updates)) {
+            return response()->json(['status' => false, 'message' => 'No fields to update provided (pass instagram_id or status).'], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $item->update($updates);
+        $this->logInstagramEvent('ACCOUNT_UPDATED', "Updated InstagramItem #{$item->id} (@{$item->username})", $updates);
 
         return response()->json([
             'status' => true,
-            'message' => "Successfully updated InstagramItem #{$item->id} (@{$item->username}) instagram_id from {$oldId} to {$newIgId}.",
+            'message' => "Successfully updated InstagramItem #{$item->id} (@{$item->username}).",
             'account' => [
                 'id' => $item->id,
                 'username' => $item->username,
                 'instagram_id' => $item->fresh()->instagram_id,
                 'page_id' => $item->page_id,
-                'status' => $item->status,
+                'status' => $item->fresh()->status,
             ],
         ]);
     }
@@ -1891,12 +1917,10 @@ class HomeController extends Controller
         } catch (\Throwable $e) {
             Log::warning('OpenAI getInstagramAiReply fallback triggered: '.$e->getMessage());
 
-            $fallback = 'أهلاً بك! نسعد بخدمتك.';
+            $fallback = 'أهلاً بك! شكراً لتواصلك معنا. فريق خدمة العملاء سيتواصل معك في أقرب وقت للرد على استفسارك بالتفصيل ومساعدتك. يسعدنا دائماً خدمتك!';
             $orderLinksMsg = $this->formatOrderingLinksMessage($instagramItem->website_url, $instagramItem->android_link, $instagramItem->ios_link);
             if ($orderLinksMsg) {
-                $fallback .= "\n{$orderLinksMsg}";
-            } else {
-                $fallback .= ' يمكنك طرح استفسارك أو طلبك مباشرة، وسنكون سعداء بمساعدتك.';
+                $fallback .= "\n\n{$orderLinksMsg}";
             }
 
             return $fallback;
