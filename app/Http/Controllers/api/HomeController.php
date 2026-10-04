@@ -1279,61 +1279,104 @@ class HomeController extends Controller
                 // If is_echo is true BUT the sender is NOT one of our bot accounts:
                 // Meta sends echo events for tester/admin accounts when they send a DM to our business page.
                 // We resolve the target InstagramItem and fetch the real customer IGSID from Meta Graph API.
-                $targetItem = null;
-                $decodedMid = (string) base64_decode($mid);
-
                 $activeItems = InstagramItem::where('status', 'active')->whereNotNull('access_token')->get();
-                foreach ($activeItems as $item) {
-                    if (! empty($item->instagram_id) && str_contains($decodedMid, (string) $item->instagram_id)) {
-                        $targetItem = $item;
-                        break;
-                    }
-                }
-
-                if (! $targetItem && $recipientAccount && $recipientAccount->status === 'active') {
-                    $targetItem = $recipientAccount;
-                }
-
-                if (! $targetItem && $activeItems->count() === 1) {
-                    $targetItem = $activeItems->first();
-                }
-
                 $resolvedFromGraph = false;
-                if ($targetItem && ! empty($mid)) {
-                    try {
-                        $msgResponse = Http::timeout(10)->get(self::GRAPH_API_BASE."/{$mid}", [
-                            'fields' => 'id,from,to,message',
-                            'access_token' => $targetItem->access_token,
-                        ]);
+                $senderIdB64 = ! empty($senderId) ? (string) base64_encode($senderId) : '';
 
-                        if ($msgResponse->successful()) {
-                            $fromId = (string) $msgResponse->json('from.id');
-                            $fromUsername = (string) ($msgResponse->json('from.username') ?? '');
-                            $fetchedText = (string) ($msgResponse->json('message') ?? $messageText);
-
-                            // Verify that this message was NOT sent by the bot account itself
-                            if (! empty($fromId) && $fromId !== (string) $targetItem->instagram_id) {
-                                $senderId = $fromId;
-                                if (! empty($fromUsername)) {
-                                    $senderName = $fromUsername;
-                                }
-                                if (! empty($fetchedText)) {
-                                    $messageText = $fetchedText;
-                                }
-                                $instagramItem = $targetItem;
-                                $targetInstagramId = (string) $targetItem->instagram_id;
-                                $resolvedFromGraph = true;
-
-                                $this->logInstagramEvent('INBOUND_RESOLVED', "✓ Resolved customer message from tester echo event for @{$targetItem->username} from @{$senderName} ({$fromId})", [
-                                    'sender_id' => $senderId,
-                                    'target_account' => $targetItem->username,
-                                    'message_text' => $messageText,
-                                    'mid' => $mid,
-                                ]);
+                foreach ($activeItems as $candidateItem) {
+                    $midsToTry = [];
+                    if (! empty($mid)) {
+                        $midsToTry[] = $mid;
+                        if (! empty($senderIdB64) && ! empty($candidateItem->instagram_id)) {
+                            $botIdB64 = (string) base64_encode((string) $candidateItem->instagram_id);
+                            if (str_contains($mid, $senderIdB64)) {
+                                $midsToTry[] = str_replace($senderIdB64, $botIdB64, $mid);
                             }
                         }
-                    } catch (\Throwable $ex) {
-                        Log::warning('[INSTAGRAM] Failed to query message details from Graph API: '.$ex->getMessage());
+                    }
+
+                    // 1. Try querying message by MID (both original and swapped)
+                    foreach ($midsToTry as $mIdToTry) {
+                        try {
+                            $msgResponse = Http::timeout(5)->get(self::GRAPH_API_BASE."/{$mIdToTry}", [
+                                'fields' => 'id,from,to,message',
+                                'access_token' => $candidateItem->access_token,
+                            ]);
+
+                            if ($msgResponse->successful()) {
+                                $fromId = (string) $msgResponse->json('from.id');
+                                $fromUsername = (string) ($msgResponse->json('from.username') ?? '');
+                                $fetchedText = (string) ($msgResponse->json('message') ?? $messageText);
+
+                                // Verify that this message was NOT sent by the bot account itself
+                                if (! empty($fromId) && $fromId !== (string) $candidateItem->instagram_id) {
+                                    $senderId = $fromId;
+                                    if (! empty($fromUsername)) {
+                                        $senderName = $fromUsername;
+                                    }
+                                    if (! empty($fetchedText)) {
+                                        $messageText = $fetchedText;
+                                    }
+                                    $instagramItem = $candidateItem;
+                                    $targetInstagramId = (string) $candidateItem->instagram_id;
+                                    $resolvedFromGraph = true;
+
+                                    $this->logInstagramEvent('INBOUND_RESOLVED', "✓ Resolved customer message from tester echo event for @{$candidateItem->username} from @{$senderName} ({$fromId})", [
+                                        'sender_id' => $senderId,
+                                        'target_account' => $candidateItem->username,
+                                        'message_text' => $messageText,
+                                        'mid' => $mIdToTry,
+                                    ]);
+                                    break 2;
+                                }
+                            }
+                        } catch (\Throwable $ex) {
+                            Log::warning('[INSTAGRAM] Failed to query message details from Graph API: '.$ex->getMessage());
+                        }
+                    }
+
+                    // 2. Fallback: query recent conversations on this page
+                    if (! empty($candidateItem->page_id)) {
+                        try {
+                            $convResponse = Http::timeout(5)->get(self::GRAPH_API_BASE."/{$candidateItem->page_id}/conversations", [
+                                'platform' => 'instagram',
+                                'limit' => 3,
+                                'fields' => 'participants,messages.limit(1){message,from,to}',
+                                'access_token' => $candidateItem->access_token,
+                            ]);
+
+                            if ($convResponse->successful()) {
+                                $convs = $convResponse->json('data', []);
+                                foreach ($convs as $conv) {
+                                    $latestMsg = data_get($conv, 'messages.data.0');
+                                    if ($latestMsg) {
+                                        $fromId = (string) data_get($latestMsg, 'from.id');
+                                        $fromUsername = (string) data_get($latestMsg, 'from.username');
+                                        $convText = (string) data_get($latestMsg, 'message');
+
+                                        if (! empty($fromId) && $fromId !== (string) $candidateItem->instagram_id && $convText === $messageText) {
+                                            $senderId = $fromId;
+                                            if (! empty($fromUsername)) {
+                                                $senderName = $fromUsername;
+                                            }
+                                            $messageText = $convText;
+                                            $instagramItem = $candidateItem;
+                                            $targetInstagramId = (string) $candidateItem->instagram_id;
+                                            $resolvedFromGraph = true;
+
+                                            $this->logInstagramEvent('INBOUND_RESOLVED', "✓ Resolved customer message from conversation lookup for @{$candidateItem->username} from @{$senderName} ({$fromId})", [
+                                                'sender_id' => $senderId,
+                                                'target_account' => $candidateItem->username,
+                                                'message_text' => $messageText,
+                                            ]);
+                                            break 2;
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (\Throwable $ex) {
+                            Log::warning('[INSTAGRAM] Conversation fallback query failed: '.$ex->getMessage());
+                        }
                     }
                 }
 
