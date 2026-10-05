@@ -26,8 +26,8 @@ class PaymobController extends Controller
     public function update(Request $request): JsonResponse
     {
         $paymob = Paymob::first();
-
-        $rules = [
+  
+        $validated = $request->validate([
             'title' => $paymob ? 'sometimes|required|string|max:255' : 'required|string|max:255',
             'type' => $paymob ? 'sometimes|required|in:live,test' : 'required|in:live,test',
             'callback' => $paymob ? 'sometimes|required|string|max:1000' : 'required|string|max:1000',
@@ -38,9 +38,7 @@ class PaymobController extends Controller
             'logo' => $paymob
                 ? 'sometimes|nullable|image|mimes:jpeg,png,jpg,gif,svg,webp,avif|max:5120'
                 : 'required|image|mimes:jpeg,png,jpg,gif,svg,webp,avif|max:5120',
-        ];
-
-        $validated = $request->validate($rules);
+        ]);
    
         if ($paymob) {
             // If new logo uploaded, replace old logo file via update_image
