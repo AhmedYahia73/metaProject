@@ -7,6 +7,7 @@ use App\Http\Controllers\api\admin\InstagramItemController as AdminInstagramItem
 use App\Http\Controllers\api\admin\MessengerAccountController;
 use App\Http\Controllers\api\admin\OrderController;
 use App\Http\Controllers\api\admin\PackageController;
+use App\Http\Controllers\api\admin\PaymobController;
 use App\Http\Controllers\api\admin\SettingController;
 use App\Http\Controllers\api\admin\SubscriperController;
 use App\Http\Controllers\api\admin\TaxController;
@@ -179,6 +180,10 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     // Settings (AI Context)
     Route::get('settings/ai-context', [SettingController::class, 'getAiContext']);
     Route::post('settings/ai-context', [SettingController::class, 'setAiContext']);
+
+    // Paymob Settings (View & Update/Create)
+    Route::get('paymob', [PaymobController::class, 'view']);
+    Route::post('paymob', [PaymobController::class, 'update']);
 
     // Admins Management (Automatic role: admin)
     Route::apiResource('admins', AdminController::class);
