@@ -5,6 +5,7 @@ namespace App\trait;
 use App\Models\InstagramItem;
 use App\Models\MessengerAccount;
 use App\Models\Order;
+use App\Models\Package;
 use App\Models\Paymob as PaymobModel;
 use App\Models\WhatsItem;
 use Carbon\Carbon;
@@ -17,6 +18,73 @@ use Symfony\Component\HttpFoundation\Response;
 
 trait paymob
 {
+    /**
+     * Calculate base price, discount, tax, and final price for a package.
+     *
+     * @return array{price: float, total_discount: float, total_tax: float, final_price: float}
+     */
+    public function calculatePackagePricing(Package $package): array
+    {
+        $package->loadMissing(['discount', 'tax']);
+
+        $basePrice = (float) $package->price;
+        $totalDiscount = 0.0;
+        $totalTax = 0.0;
+
+        $discount = $package->discount;
+        if ($discount) {
+            $discountAmount = (float) ($discount->amount ?? $discount->value ?? 0);
+
+            $isWithinPeriod = true;
+            $today = Carbon::today();
+
+            if (! empty($discount->from)) {
+                $fromDate = Carbon::parse($discount->from)->startOfDay();
+                if ($today->lt($fromDate)) {
+                    $isWithinPeriod = false;
+                }
+            }
+
+            if (! empty($discount->to)) {
+                $toDate = Carbon::parse($discount->to)->endOfDay();
+                if ($today->gt($toDate)) {
+                    $isWithinPeriod = false;
+                }
+            }
+
+            if ($isWithinPeriod && $discountAmount > 0) {
+                $isPercentage = in_array(strtolower((string) $discount->type), ['percentage', 'percent', '%'], true);
+                $totalDiscount = $isPercentage
+                    ? ($basePrice * $discountAmount) / 100
+                    : $discountAmount;
+
+                $totalDiscount = min($totalDiscount, $basePrice);
+            }
+        }
+
+        $priceAfterDiscount = max(0.0, $basePrice - $totalDiscount);
+
+        $tax = $package->tax;
+        if ($tax) {
+            $taxAmount = (float) ($tax->amount ?? $tax->value ?? 0);
+            if ($taxAmount > 0) {
+                $isTaxPercentage = in_array(strtolower((string) $tax->type), ['percentage', 'percent', '%'], true);
+                $totalTax = $isTaxPercentage
+                    ? ($priceAfterDiscount * $taxAmount) / 100
+                    : $taxAmount;
+            }
+        }
+
+        $finalPrice = max(0.0, $basePrice - $totalDiscount + $totalTax);
+
+        return [
+            'price' => round($basePrice, 2),
+            'total_discount' => round($totalDiscount, 2),
+            'total_tax' => round($totalTax, 2),
+            'final_price' => round($finalPrice, 2),
+        ];
+    }
+
     /**
      * Get the Paymob payment iframe link for a given order.
      *

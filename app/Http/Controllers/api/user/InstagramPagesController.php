@@ -307,25 +307,11 @@ class InstagramPagesController extends Controller
         }
 
         // Calculate pricing
-        $basePrice = (float) $package->price;
-        $totalDiscount = 0.0;
-        $totalTax = 0.0;
-
-        if ($package->discount) {
-            $totalDiscount = $package->discount->type === 'percentage'
-                ? $basePrice * ((float) $package->discount->value / 100)
-                : min((float) $package->discount->value, $basePrice);
-        }
-
-        $priceAfterDiscount = $basePrice - $totalDiscount;
-
-        if ($package->tax) {
-            $totalTax = $package->tax->type === 'percentage'
-                ? $priceAfterDiscount * ((float) $package->tax->value / 100)
-                : (float) $package->tax->value;
-        }
-
-        $finalPrice = round($basePrice - $totalDiscount + $totalTax, 2);
+        $pricing = $this->calculatePackagePricing($package);
+        $basePrice = $pricing['price'];
+        $totalDiscount = $pricing['total_discount'];
+        $totalTax = $pricing['total_tax'];
+        $finalPrice = $pricing['final_price'];
         $msgs = (int) $package->msg_number;
 
         $order = Order::create([
@@ -334,9 +320,9 @@ class InstagramPagesController extends Controller
             'instagram_item_id' => $instagramItem->id,
             'channel' => 'instagram',
             'status' => 'faild',
-            'total_discount' => round($totalDiscount, 2),
-            'total_tax' => round($totalTax, 2),
-            'price' => round($basePrice, 2),
+            'total_discount' => $totalDiscount,
+            'total_tax' => $totalTax,
+            'price' => $basePrice,
             'final_price' => $finalPrice,
             'msgs' => $msgs,
         ]);
@@ -353,6 +339,9 @@ class InstagramPagesController extends Controller
                 'instagram_item_id' => $instagramItem->id,
                 'instagram_username' => $instagramItem->username,
                 'package_id' => $package->id,
+                'price' => $basePrice,
+                'total_discount' => $totalDiscount,
+                'total_tax' => $totalTax,
                 'final_price' => $finalPrice,
                 'msgs' => $msgs,
                 'payment_url' => $paymobUrl,

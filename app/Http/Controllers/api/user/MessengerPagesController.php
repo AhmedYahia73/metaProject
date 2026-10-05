@@ -9,7 +9,6 @@ use App\Models\Order;
 use App\Models\Package;
 use App\trait\image;
 use App\trait\paymob;
-use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -343,43 +342,11 @@ class MessengerPagesController extends Controller
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         }
 
-        $basePrice = (float) $package->price;
-        $today = Carbon::today();
-
-        $totalDiscount = 0.0;
-        $discount = $package->discount;
-
-        if ($discount) {
-            $isWithinPeriod = true;
-
-            if ($discount->from && $today->lt(Carbon::parse($discount->from)->startOfDay())) {
-                $isWithinPeriod = false;
-            }
-
-            if ($discount->to && $today->gt(Carbon::parse($discount->to)->endOfDay())) {
-                $isWithinPeriod = false;
-            }
-
-            if ($isWithinPeriod) {
-                $totalDiscount = $discount->type === 'percentage'
-                    ? ($basePrice * (float) $discount->amount) / 100
-                    : (float) $discount->amount;
-
-                $totalDiscount = min($totalDiscount, $basePrice);
-            }
-        }
-
-        $priceAfterDiscount = max(0.0, $basePrice - $totalDiscount);
-        $totalTax = 0.0;
-        $tax = $package->tax;
-
-        if ($tax) {
-            $totalTax = $tax->type === 'percentage'
-                ? ($priceAfterDiscount * (float) $tax->amount) / 100
-                : (float) $tax->amount;
-        }
-
-        $finalPrice = $basePrice - $totalDiscount + $totalTax;
+        $pricing = $this->calculatePackagePricing($package);
+        $basePrice = $pricing['price'];
+        $totalDiscount = $pricing['total_discount'];
+        $totalTax = $pricing['total_tax'];
+        $finalPrice = $pricing['final_price'];
         $msgs = (int) $package->msg_number;
 
         // 4. Create MessengerAccount (disabled until approved)

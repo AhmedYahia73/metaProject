@@ -29,6 +29,14 @@ class Tax extends Model
     }
 
     /**
+     * Alias accessor so $tax->value returns the tax amount.
+     */
+    public function getValueAttribute(): ?float
+    {
+        return $this->amount !== null ? (float) $this->amount : null;
+    }
+
+    /**
      * Get the packages associated with this tax.
      *
      * @return HasMany<Package, $this>

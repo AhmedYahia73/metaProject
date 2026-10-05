@@ -1,8 +1,10 @@
 <?php
 
+use App\Models\Discount;
 use App\Models\Order;
 use App\Models\Package;
 use App\Models\Paymob;
+use App\Models\Tax;
 use App\Models\User;
 use App\Models\WhatsItem;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -292,4 +294,84 @@ test('faild orders do not appear in user pending_orders, history_orders or admin
     expect($adminIds)->toContain($pendingOrder->id);
     expect($adminIds)->toContain($approvedOrder->id);
     expect($adminIds)->not->toContain($faildOrder->id);
+});
+
+test('tax and discount are correctly calculated in Instagram, WhatsApp and Messenger requestSubscription', function () {
+    fakePaymobHttp(999111);
+    Sanctum::actingAs($this->user);
+
+    $discount = Discount::create([
+        'name' => '10% OFF',
+        'amount' => 10.00,
+        'type' => 'percentage',
+        'from' => now()->subDay()->toDateString(),
+        'to' => now()->addMonth()->toDateString(),
+    ]);
+
+    $tax = Tax::create([
+        'name' => 'VAT 14%',
+        'amount' => 14.00,
+        'type' => 'percentage',
+    ]);
+
+    $package = Package::create([
+        'name' => ['ar' => 'باقة مع ضريبة وخصم', 'en' => 'Package with Tax and Discount'],
+        'type' => 'all',
+        'msg_number' => 1000,
+        'price' => 200.00,
+        'discount_id' => $discount->id,
+        'tax_id' => $tax->id,
+        'months' => 1,
+    ]);
+
+    // Expected:
+    // Base: 200
+    // Discount 10%: 20
+    // Price after discount: 180
+    // Tax 14% of 180: 25.20
+    // Final price: 205.20
+
+    // 1. Instagram
+    $igRes = $this->postJson('/api/user/instagram/orders', [
+        'instagram_id' => 'IG_222',
+        'package_id' => $package->id,
+    ]);
+    $igRes->assertCreated();
+    expect($igRes->json('data.price'))->toBe(200);
+    expect($igRes->json('data.total_discount'))->toBe(20);
+    expect($igRes->json('data.total_tax'))->toBe(25.2);
+    expect($igRes->json('data.final_price'))->toBe(205.2);
+
+    $igOrder = Order::latest('id')->first();
+    expect((float) $igOrder->price)->toBe(200.0);
+    expect((float) $igOrder->total_discount)->toBe(20.0);
+    expect((float) $igOrder->total_tax)->toBe(25.2);
+    expect((float) $igOrder->final_price)->toBe(205.2);
+
+    // 2. WhatsApp
+    $whatsItem = WhatsItem::create([
+        'user_id' => $this->user->id,
+        'phone' => '01011113333',
+        'phone_status' => 'pending',
+    ]);
+    $whatsRes = $this->postJson('/api/user/whats/orders', [
+        'whats_item_id' => $whatsItem->id,
+        'package_id' => $package->id,
+    ]);
+    $whatsRes->assertCreated();
+    expect($whatsRes->json('data.price'))->toBe(200);
+    expect($whatsRes->json('data.total_discount'))->toBe(20);
+    expect($whatsRes->json('data.total_tax'))->toBe(25.2);
+    expect($whatsRes->json('data.final_price'))->toBe(205.2);
+
+    // 3. Messenger
+    $messengerRes = $this->postJson('/api/user/messenger/orders', [
+        'page_id' => 'PAGE_111',
+        'package_id' => $package->id,
+    ]);
+    $messengerRes->assertCreated();
+    expect($messengerRes->json('data.price'))->toBe(200);
+    expect($messengerRes->json('data.total_discount'))->toBe(20);
+    expect($messengerRes->json('data.total_tax'))->toBe(25.2);
+    expect($messengerRes->json('data.final_price'))->toBe(205.2);
 });

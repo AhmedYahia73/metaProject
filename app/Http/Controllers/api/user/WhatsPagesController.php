@@ -9,7 +9,6 @@ use App\Models\WhatsItem;
 use App\Services\MetaWhatsAppService;
 use App\trait\image;
 use App\trait\paymob;
-use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -520,52 +519,20 @@ class WhatsPagesController extends Controller
 
         $package = Package::with(['discount', 'tax'])->findOrFail($validated['package_id']);
 
-        $basePrice = (float) $package->price;
-        $today = Carbon::today();
-
-        $totalDiscount = 0.0;
-        $discount = $package->discount;
-
-        if ($discount) {
-            $isWithinPeriod = true;
-
-            if ($discount->from && $today->lt(Carbon::parse($discount->from)->startOfDay())) {
-                $isWithinPeriod = false;
-            }
-
-            if ($discount->to && $today->gt(Carbon::parse($discount->to)->endOfDay())) {
-                $isWithinPeriod = false;
-            }
-
-            if ($isWithinPeriod) {
-                $totalDiscount = $discount->type === 'percentage'
-                    ? ($basePrice * (float) $discount->amount) / 100
-                    : (float) $discount->amount;
-
-                $totalDiscount = min($totalDiscount, $basePrice);
-            }
-        }
-
-        $priceAfterDiscount = max(0.0, $basePrice - $totalDiscount);
-        $totalTax = 0.0;
-        $tax = $package->tax;
-
-        if ($tax) {
-            $totalTax = $tax->type === 'percentage'
-                ? ($priceAfterDiscount * (float) $tax->amount) / 100
-                : (float) $tax->amount;
-        }
-
-        $finalPrice = $basePrice - $totalDiscount + $totalTax;
+        $pricing = $this->calculatePackagePricing($package);
+        $basePrice = $pricing['price'];
+        $totalDiscount = $pricing['total_discount'];
+        $totalTax = $pricing['total_tax'];
+        $finalPrice = $pricing['final_price'];
         $msgs = (int) $package->msg_number;
 
         $order = Order::create([
             'package_id' => $package->id,
             'user_id' => $user->id,
-            'total_discount' => round($totalDiscount, 2),
-            'total_tax' => round($totalTax, 2),
-            'price' => round($basePrice, 2),
-            'final_price' => round($finalPrice, 2),
+            'total_discount' => $totalDiscount,
+            'total_tax' => $totalTax,
+            'price' => $basePrice,
+            'final_price' => $finalPrice,
             'msgs' => $msgs,
             'status' => 'faild',
             'channel' => 'whatsapp',

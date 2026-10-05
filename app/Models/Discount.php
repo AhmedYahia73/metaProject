@@ -33,6 +33,14 @@ class Discount extends Model
     }
 
     /**
+     * Alias accessor so $discount->value returns the discount amount.
+     */
+    public function getValueAttribute(): ?float
+    {
+        return $this->amount !== null ? (float) $this->amount : null;
+    }
+
+    /**
      * Get the packages associated with this discount.
      *
      * @return HasMany<Package, $this>
