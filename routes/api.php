@@ -58,7 +58,6 @@ Route::post('/instagram-webhook/set-active-id', [HomeController::class, 'instagr
 
 // Paymob Webhook / Redirection Callback (public)
 Route::match(['get', 'post'], '/paymob/callback', [PaymobCallbackController::class, 'callback']);
-Route::match(['get', 'post'], '/paymob-callback', [PaymobCallbackController::class, 'callback']);
 
 Route::view('/privacy-policy', 'privacy-policy');
 
