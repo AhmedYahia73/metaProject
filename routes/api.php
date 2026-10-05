@@ -9,6 +9,7 @@ use App\Http\Controllers\api\admin\MessengerAccountController;
 use App\Http\Controllers\api\admin\OrderController;
 use App\Http\Controllers\api\admin\PackageController;
 use App\Http\Controllers\api\admin\PaymobController;
+use App\Http\Controllers\api\admin\ReportController;
 use App\Http\Controllers\api\admin\SettingController;
 use App\Http\Controllers\api\admin\SubscriperController;
 use App\Http\Controllers\api\admin\TaxController;
@@ -163,9 +164,23 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     // Dashboard Statistics
     Route::get('contact_us', [ContactUsController::class, 'index']);
     Route::get('subscripers', [SubscriperController::class, 'subscripers']);
+    Route::get('subscripers/{id}', [SubscriperController::class, 'subscriper']);
+    Route::get('subscriper/{id}', [SubscriperController::class, 'subscriper']);
+    Route::get('subscriper', [SubscriperController::class, 'subscriper']);
 
     Route::get('user_lists', [DashboardController::class, 'user_lists']);
     Route::get('dashboard', [DashboardController::class, 'index']);
+
+    // Reports
+    Route::prefix('reports')->group(function () {
+        Route::get('orders', [ReportController::class, 'order_report']);
+        Route::get('messages', [ReportController::class, 'message_report']);
+        Route::get('subscribers', [ReportController::class, 'subscribers_report']);
+        Route::get('expiring-subscriptions', [ReportController::class, 'expiring_subscriptions_report']);
+    });
+    Route::get('order_report', [ReportController::class, 'order_report']);
+    Route::get('message_report', [ReportController::class, 'message_report']);
+    Route::get('subscribers_report', [ReportController::class, 'subscribers_report']);
 
     // Lookup endpoint for dropdowns (id & name for taxes and discounts)
     Route::get('tax-and-discount-list', [PackageController::class, 'taxAndDiscountList']);
