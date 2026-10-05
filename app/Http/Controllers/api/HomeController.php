@@ -2049,16 +2049,17 @@ class HomeController extends Controller
                 item: $instagramItem,
             );
 
-            if ($privateSent && ! empty($fallbackPrivateReply)) {
-                $recipientId = (string) ($privateSent['recipient_id'] ?? $senderId);
-                $metaMid = (string) ($privateSent['message_id'] ?? $commentId);
+            if ($commentSent || $privateSent) {
+                $chatMessage = $privateSent ? $fallbackPrivateReply : $fallbackCommentReply;
+                $recipientId = (string) (($privateSent['recipient_id'] ?? null) ?? $senderId);
+                $metaMid = (string) (($privateSent['message_id'] ?? null) ?? $commentId);
 
                 $newChat = Chat::create([
                     'user_id' => $restaurant?->id,
                     'instagram_item_id' => $instagramItem->id,
                     'name' => $senderName,
                     'phone' => null,
-                    'message' => $fallbackPrivateReply,
+                    'message' => $chatMessage,
                     'is_image' => false,
                     'is_admin' => true,
                     'sender_type' => 'bot',
@@ -2122,16 +2123,17 @@ class HomeController extends Controller
                 item: $instagramItem,
             );
 
-            if ($privateSent && ! empty($fallbackPrivateReply)) {
-                $recipientId = (string) ($privateSent['recipient_id'] ?? $senderId);
-                $metaMid = (string) ($privateSent['message_id'] ?? $commentId);
+            if ($commentSent || $privateSent) {
+                $chatMessage = $privateSent ? $fallbackPrivateReply : $fallbackCommentReply;
+                $recipientId = (string) (($privateSent['recipient_id'] ?? null) ?? $senderId);
+                $metaMid = (string) (($privateSent['message_id'] ?? null) ?? $commentId);
 
                 $newChat = Chat::create([
                     'user_id' => $restaurant?->id,
                     'instagram_item_id' => $instagramItem->id,
                     'name' => $senderName,
                     'phone' => null,
-                    'message' => $fallbackPrivateReply,
+                    'message' => $chatMessage,
                     'is_image' => false,
                     'is_admin' => true,
                     'sender_type' => 'bot',
@@ -2148,9 +2150,7 @@ class HomeController extends Controller
                 } catch (\Throwable $e) {
                     Log::warning('[IG_COMMENTS] InstagramEvent broadcast failed: '.$e->getMessage());
                 }
-            }
 
-            if ($commentSent || $privateSent) {
                 if ((int) $instagramItem->msg_number > 0) {
                     $instagramItem->decrement('msg_number');
                 }
@@ -2231,33 +2231,32 @@ class HomeController extends Controller
                 'channel' => 'instagram',
             ]);
 
-            // Save chat record if private message was sent
-            if ($privateSent && ! empty($privateReply)) {
-                $recipientId = (string) ($privateSent['recipient_id'] ?? $senderId);
-                $metaMid = (string) ($privateSent['message_id'] ?? $commentId);
+            // Save chat record — prefer private reply message, fall back to public comment reply
+            $chatMessage = ($privateSent && ! empty($privateReply)) ? $privateReply : $publicCommentReply;
+            $recipientId = (string) (($privateSent['recipient_id'] ?? null) ?? $senderId);
+            $metaMid = (string) (($privateSent['message_id'] ?? null) ?? $commentId);
 
-                $newChat = Chat::create([
-                    'user_id' => $restaurant?->id,
-                    'instagram_item_id' => $instagramItem->id,
-                    'name' => $senderName,
-                    'phone' => null,
-                    'message' => $privateReply,
-                    'is_image' => false,
-                    'is_admin' => true,
-                    'sender_type' => 'bot',
-                    'is_read' => true,
-                    'channel' => 'instagram',
-                    'instagram_sender_id' => $recipientId,
-                    'meta_message_id' => $metaMid,
-                ]);
+            $newChat = Chat::create([
+                'user_id' => $restaurant?->id,
+                'instagram_item_id' => $instagramItem->id,
+                'name' => $senderName,
+                'phone' => null,
+                'message' => $chatMessage,
+                'is_image' => false,
+                'is_admin' => true,
+                'sender_type' => 'bot',
+                'is_read' => true,
+                'channel' => 'instagram',
+                'instagram_sender_id' => $recipientId,
+                'meta_message_id' => $metaMid,
+            ]);
 
-                try {
-                    $chatData = $newChat->toArray();
-                    $chatData['instagram_id'] = $instagramItem->instagram_id;
-                    InstagramEvent::dispatch($chatData);
-                } catch (\Throwable $e) {
-                    Log::warning('[IG_COMMENTS] InstagramEvent broadcast failed: '.$e->getMessage());
-                }
+            try {
+                $chatData = $newChat->toArray();
+                $chatData['instagram_id'] = $instagramItem->instagram_id;
+                InstagramEvent::dispatch($chatData);
+            } catch (\Throwable $e) {
+                Log::warning('[IG_COMMENTS] InstagramEvent broadcast failed: '.$e->getMessage());
             }
         }
 
