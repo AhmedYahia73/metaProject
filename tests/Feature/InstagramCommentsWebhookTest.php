@@ -431,3 +431,55 @@ test('instagram comments webhook automatically refreshes token on 401 expired to
 
     expect($callCount)->toBe(2);
 });
+
+test('instagram comments webhook matches single active account when entry id differs and updates instagram_id', function () {
+    Http::fake([
+        'https://graph.facebook.com/*/replies' => Http::response(['id' => 'ig_reply_auto_1'], 200),
+        'https://graph.facebook.com/*/me/messages' => Http::response(['recipient_id' => 'customer_ig_auto', 'message_id' => 'mid_auto_1'], 200),
+    ]);
+
+    $restaurant = User::factory()->create(['role' => 'user']);
+    $item = InstagramItem::factory()->create([
+        'user_id' => $restaurant->id,
+        'instagram_id' => '17841449192689340', // Different from incoming entry id
+        'access_token' => 'EAAG_fake_token',
+        'msg_number' => 0, // Fallback branch
+        'start_date' => now()->subDays(5)->toDateString(),
+        'end_date' => now()->addDays(5)->toDateString(),
+        'status' => 'active',
+    ]);
+
+    $incomingEntryId = '17841401051588301';
+
+    $response = $this->postJson('/api/instagram-comments-webhook', [
+        'object' => 'instagram',
+        'entry' => [
+            [
+                'id' => $incomingEntryId,
+                'changes' => [
+                    [
+                        'field' => 'comments',
+                        'value' => [
+                            'id' => 'comment_diff_id_1',
+                            'media' => ['id' => 'media_diff_1'],
+                            'from' => [
+                                'id' => 'customer_ig_auto',
+                                'username' => 'olaallaamm',
+                            ],
+                            'text' => 'test',
+                        ],
+                    ],
+                ],
+            ],
+        ],
+    ]);
+
+    $response->assertOk()->assertJson([
+        'status' => 'fallback_sent',
+        'comment_sent' => true,
+        'instagram_sent' => true,
+    ]);
+
+    // Check that instagram_id in DB was auto-updated to the incoming entry ID
+    expect($item->fresh()->instagram_id)->toBe($incomingEntryId);
+});

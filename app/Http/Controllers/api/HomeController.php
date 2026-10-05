@@ -1901,6 +1901,90 @@ class HomeController extends Controller
             ->orWhere('page_id', $entryId)
             ->first();
 
+        // 1. Fallback: Trim match
+        if (! $instagramItem && ! empty($entryId)) {
+            $trimmedId = trim($entryId);
+            $instagramItem = InstagramItem::whereRaw('TRIM(instagram_id) = ?', [$trimmedId])
+                ->orWhereRaw('TRIM(page_id) = ?', [$trimmedId])
+                ->first();
+        }
+
+        // 2. Fallback: Check active accounts in DB and match via Graph API or single active account
+        if (! $instagramItem) {
+            $activeItems = InstagramItem::where('status', 'active')->whereNotNull('access_token')->get();
+
+            if ($activeItems->count() === 1) {
+                $candidate = $activeItems->first();
+                $matched = false;
+
+                if (! empty($mediaId)) {
+                    try {
+                        $mRes = Http::timeout(5)->withToken($candidate->access_token)
+                            ->get(self::GRAPH_API_BASE."/{$mediaId}", ['fields' => 'id']);
+                        if ($mRes->successful()) {
+                            $matched = true;
+                        }
+                    } catch (\Throwable $e) {
+                        // ignore
+                    }
+                }
+
+                if (! $matched && ! empty($entryId)) {
+                    try {
+                        $eRes = Http::timeout(5)->withToken($candidate->access_token)
+                            ->get(self::GRAPH_API_BASE."/{$entryId}", ['fields' => 'id,username']);
+                        if ($eRes->successful()) {
+                            $matched = true;
+                        }
+                    } catch (\Throwable $e) {
+                        // ignore
+                    }
+                }
+
+                $instagramItem = $candidate;
+                if (! empty($entryId) && $candidate->instagram_id !== $entryId) {
+                    $candidate->update(['instagram_id' => $entryId]);
+                    Log::channel('stack')->info("[IG_COMMENTS] ✓ Auto-updated single active InstagramItem #{$candidate->id} instagram_id to {$entryId}");
+                }
+            } elseif ($activeItems->count() > 1) {
+                foreach ($activeItems as $candidate) {
+                    $matched = false;
+                    if (! empty($mediaId)) {
+                        try {
+                            $mRes = Http::timeout(5)->withToken($candidate->access_token)
+                                ->get(self::GRAPH_API_BASE."/{$mediaId}", ['fields' => 'id']);
+                            if ($mRes->successful()) {
+                                $matched = true;
+                            }
+                        } catch (\Throwable $e) {
+                            // ignore
+                        }
+                    }
+
+                    if (! $matched && ! empty($entryId)) {
+                        try {
+                            $eRes = Http::timeout(5)->withToken($candidate->access_token)
+                                ->get(self::GRAPH_API_BASE."/{$entryId}", ['fields' => 'id,username']);
+                            if ($eRes->successful()) {
+                                $matched = true;
+                            }
+                        } catch (\Throwable $e) {
+                            // ignore
+                        }
+                    }
+
+                    if ($matched) {
+                        $instagramItem = $candidate;
+                        if (! empty($entryId) && $candidate->instagram_id !== $entryId) {
+                            $candidate->update(['instagram_id' => $entryId]);
+                            Log::channel('stack')->info("[IG_COMMENTS] ✓ Matched candidate InstagramItem #{$candidate->id} and updated instagram_id to {$entryId}");
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
         if (! $instagramItem) {
             Log::channel('stack')->warning("[IG_COMMENTS] Instagram account {$entryId} not found in InstagramItem");
 
