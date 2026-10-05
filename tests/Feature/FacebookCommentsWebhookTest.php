@@ -5,6 +5,7 @@ use App\Models\Chat;
 use App\Models\MessengerAccount;
 use App\Models\MsgSend;
 use App\Models\User;
+use App\Services\MetaPageTokenService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
@@ -344,4 +345,74 @@ test('facebook comments webhook processes non-inquiry comment (appreciation) and
 
     // No private chat recorded because it wasn't an inquiry
     expect(Chat::where('messenger_account_id', $account->id)->count())->toBe(0);
+});
+
+test('facebook comments webhook automatically refreshes token on 401 expired token and retries', function () {
+    $tokenService = Mockery::mock(MetaPageTokenService::class);
+    $tokenService->shouldReceive('isTokenExpiredError')->andReturn(true);
+    $tokenService->shouldReceive('refreshMessengerAccountToken')->andReturn('fresh_refreshed_page_token');
+    app()->instance(MetaPageTokenService::class, $tokenService);
+
+    $callCount = 0;
+    Http::fake([
+        'https://graph.facebook.com/*/comments' => function () use (&$callCount) {
+            $callCount++;
+            if ($callCount === 1) {
+                return Http::response([
+                    'error' => [
+                        'message' => 'Error validating access token: Session has expired',
+                        'type' => 'OAuthException',
+                        'code' => 190,
+                        'error_subcode' => 463,
+                    ],
+                ], 401);
+            }
+
+            return Http::response(['id' => 'refreshed_comment_reply_id'], 200);
+        },
+        'https://graph.facebook.com/*/me/messages' => Http::response(['recipient_id' => 'user_123', 'message_id' => 'mid_1'], 200),
+    ]);
+
+    $restaurant = User::factory()->create(['role' => 'user']);
+    $account = MessengerAccount::factory()->create([
+        'user_id' => $restaurant->id,
+        'page_id' => '106565280821724',
+        'msg_number' => 0, // Fallback branch
+        'start_date' => now()->subDays(5)->toDateString(),
+        'end_date' => now()->addDays(5)->toDateString(),
+        'status' => 'active',
+    ]);
+
+    $response = $this->postJson('/api/facebook-comments-webhook', [
+        'object' => 'page',
+        'entry' => [
+            [
+                'id' => $account->page_id,
+                'changes' => [
+                    [
+                        'field' => 'feed',
+                        'value' => [
+                            'item' => 'comment',
+                            'verb' => 'add',
+                            'comment_id' => 'comment_expired_retry_1',
+                            'post_id' => 'post_100',
+                            'from' => [
+                                'id' => 'customer_psid_retry',
+                                'name' => 'محمود',
+                            ],
+                            'message' => 'ممكن تفاصيل؟',
+                        ],
+                    ],
+                ],
+            ],
+        ],
+    ]);
+
+    $response->assertOk()->assertJson([
+        'status' => 'fallback_sent',
+        'comment_sent' => true,
+        'messenger_sent' => true,
+    ]);
+
+    expect($callCount)->toBe(2);
 });

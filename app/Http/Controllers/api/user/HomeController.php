@@ -6,10 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\ContactUsRequest;
 use App\Mail\ContactUsMail;
 use App\Models\Chat;
+use App\Models\Contact;
 use App\Models\InstagramItem;
 use App\Models\MessengerAccount;
 use App\Models\MsgSend;
-use App\Models\Contact;
 use App\Models\Order;
 use App\Models\Package;
 use App\Models\User;
@@ -206,7 +206,6 @@ class HomeController extends Controller
         $activeMailer = config('mail.default');
         $fromAddress = config('mail.from.address');
         $fromName = config('mail.from.name');
-    
 
         Contact::create($request->validated());
         try {
@@ -215,7 +214,7 @@ class HomeController extends Controller
 
             $debugOutput = $sentMessage?->getDebug();
             $messageId = $sentMessage?->getMessageId();
-  
+
             return response()->json([
                 'status' => true,
                 'message' => 'Your message has been sent successfully.',

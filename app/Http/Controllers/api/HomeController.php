@@ -757,13 +757,43 @@ class HomeController extends Controller
                 pageAccessToken: $messengerAccount->page_access_token,
                 commentId: $commentId,
                 message: $fallbackCommentReply,
+                account: $messengerAccount,
             );
 
             $messengerSent = $this->sendPrivateReplyToComment(
-                pageAccessToken: $messengerAccount->page_access_token,
+                pageAccessToken: $messengerAccount->fresh()?->page_access_token ?? $messengerAccount->page_access_token,
                 commentId: $commentId,
                 message: $fallbackMessengerReply,
+                account: $messengerAccount,
             );
+
+            if ($messengerSent && ! empty($fallbackMessengerReply)) {
+                $recipientPsid = (string) ($messengerSent['recipient_id'] ?? $senderId);
+                $metaMid = (string) ($messengerSent['message_id'] ?? $commentId);
+
+                $newChat = Chat::create([
+                    'user_id' => $restaurant->id,
+                    'messenger_account_id' => $messengerAccount->id,
+                    'name' => $senderName,
+                    'phone' => null,
+                    'message' => $fallbackMessengerReply,
+                    'is_image' => false,
+                    'is_admin' => true,
+                    'sender_type' => 'bot',
+                    'is_read' => true,
+                    'channel' => 'messenger',
+                    'messenger_sender_id' => $recipientPsid,
+                    'meta_message_id' => $metaMid,
+                ]);
+
+                try {
+                    $chatData = $newChat->toArray();
+                    $chatData['page_id'] = $messengerAccount->page_id;
+                    MessengerEvent::dispatch($chatData);
+                } catch (\Throwable $e) {
+                    Log::warning('[FB_COMMENTS] MessengerEvent broadcast failed: '.$e->getMessage());
+                }
+            }
 
             Cache::put($cacheKey, true, now()->addDays(7));
 
@@ -779,6 +809,7 @@ class HomeController extends Controller
         $postText = $this->getFacebookPostContent(
             pageAccessToken: $messengerAccount->page_access_token,
             postId: $postId,
+            account: $messengerAccount,
         );
 
         $aiDecision = $this->getFacebookCommentAiDecision(
@@ -799,13 +830,56 @@ class HomeController extends Controller
                 pageAccessToken: $messengerAccount->page_access_token,
                 commentId: $commentId,
                 message: $fallbackCommentReply,
+                account: $messengerAccount,
             );
 
             $messengerSent = $this->sendPrivateReplyToComment(
-                pageAccessToken: $messengerAccount->page_access_token,
+                pageAccessToken: $messengerAccount->fresh()?->page_access_token ?? $messengerAccount->page_access_token,
                 commentId: $commentId,
                 message: $fallbackMessengerReply,
+                account: $messengerAccount,
             );
+
+            if ($messengerSent && ! empty($fallbackMessengerReply)) {
+                $recipientPsid = (string) ($messengerSent['recipient_id'] ?? $senderId);
+                $metaMid = (string) ($messengerSent['message_id'] ?? $commentId);
+
+                $newChat = Chat::create([
+                    'user_id' => $restaurant->id,
+                    'messenger_account_id' => $messengerAccount->id,
+                    'name' => $senderName,
+                    'phone' => null,
+                    'message' => $fallbackMessengerReply,
+                    'is_image' => false,
+                    'is_admin' => true,
+                    'sender_type' => 'bot',
+                    'is_read' => true,
+                    'channel' => 'messenger',
+                    'messenger_sender_id' => $recipientPsid,
+                    'meta_message_id' => $metaMid,
+                ]);
+
+                try {
+                    $chatData = $newChat->toArray();
+                    $chatData['page_id'] = $messengerAccount->page_id;
+                    MessengerEvent::dispatch($chatData);
+                } catch (\Throwable $e) {
+                    Log::warning('[FB_COMMENTS] MessengerEvent broadcast failed: '.$e->getMessage());
+                }
+            }
+
+            if ($commentSent || $messengerSent) {
+                if ((int) $messengerAccount->msg_number > 0) {
+                    $messengerAccount->decrement('msg_number');
+                }
+
+                MsgSend::create([
+                    'user_id' => $restaurant->id,
+                    'messenger_account_id' => $messengerAccount->id,
+                    'whats_item_id' => null,
+                    'channel' => 'messenger',
+                ]);
+            }
 
             Cache::put($cacheKey, true, now()->addDays(7));
 
@@ -834,14 +908,16 @@ class HomeController extends Controller
                 pageAccessToken: $messengerAccount->page_access_token,
                 commentId: $commentId,
                 message: $publicCommentReply,
+                account: $messengerAccount,
             );
 
             // 2. Send private reply on Messenger
             if (! empty($privateMessengerReply)) {
                 $messengerSent = $this->sendPrivateReplyToComment(
-                    pageAccessToken: $messengerAccount->page_access_token,
+                    pageAccessToken: $messengerAccount->fresh()?->page_access_token ?? $messengerAccount->page_access_token,
                     commentId: $commentId,
                     message: $privateMessengerReply,
+                    account: $messengerAccount,
                 );
             }
         } else {
@@ -854,6 +930,7 @@ class HomeController extends Controller
                 pageAccessToken: $messengerAccount->page_access_token,
                 commentId: $commentId,
                 message: $publicCommentReply,
+                account: $messengerAccount,
             );
         }
 
@@ -915,13 +992,29 @@ class HomeController extends Controller
     /**
      * Reply to a Facebook post comment publicly via Graph API.
      */
-    private function replyToFacebookComment(string $pageAccessToken, string $commentId, string $message): bool
+    private function replyToFacebookComment(string $pageAccessToken, string $commentId, string $message, ?MessengerAccount $account = null): bool
     {
         try {
-            $response = Http::withToken($pageAccessToken)
+            $token = $account?->page_access_token ?: $pageAccessToken;
+            $response = Http::withToken($token)
                 ->post(self::GRAPH_API_BASE."/{$commentId}/comments", [
                     'message' => $message,
                 ]);
+
+            if (! $response->successful() && $account) {
+                /** @var MetaPageTokenService $tokenService */
+                $tokenService = app(MetaPageTokenService::class);
+                if ($tokenService->isTokenExpiredError($response->status(), $response->json() ?? [])) {
+                    Log::channel('stack')->warning("[FB_COMMENTS] Token expired for comment reply, attempting refresh for account #{$account->id}");
+                    $refreshedToken = $tokenService->refreshMessengerAccountToken($account);
+                    if ($refreshedToken) {
+                        $response = Http::withToken($refreshedToken)
+                            ->post(self::GRAPH_API_BASE."/{$commentId}/comments", [
+                                'message' => $message,
+                            ]);
+                    }
+                }
+            }
 
             if ($response->successful()) {
                 Log::channel('stack')->info("[FB_COMMENTS] ✓ Comment reply sent to {$commentId}");
@@ -947,10 +1040,11 @@ class HomeController extends Controller
      *
      * @return array<string, mixed>|null
      */
-    private function sendPrivateReplyToComment(string $pageAccessToken, string $commentId, string $message): ?array
+    private function sendPrivateReplyToComment(string $pageAccessToken, string $commentId, string $message, ?MessengerAccount $account = null): ?array
     {
         try {
-            $response = Http::withToken($pageAccessToken)
+            $token = $account?->fresh()?->page_access_token ?: ($account?->page_access_token ?: $pageAccessToken);
+            $response = Http::withToken($token)
                 ->post(self::GRAPH_API_BASE.'/me/messages', [
                     'recipient' => [
                         'comment_id' => $commentId,
@@ -959,6 +1053,26 @@ class HomeController extends Controller
                         'text' => $message,
                     ],
                 ]);
+
+            if (! $response->successful() && $account) {
+                /** @var MetaPageTokenService $tokenService */
+                $tokenService = app(MetaPageTokenService::class);
+                if ($tokenService->isTokenExpiredError($response->status(), $response->json() ?? [])) {
+                    Log::channel('stack')->warning("[FB_COMMENTS] Token expired for private reply, attempting refresh for account #{$account->id}");
+                    $refreshedToken = $tokenService->refreshMessengerAccountToken($account);
+                    if ($refreshedToken) {
+                        $response = Http::withToken($refreshedToken)
+                            ->post(self::GRAPH_API_BASE.'/me/messages', [
+                                'recipient' => [
+                                    'comment_id' => $commentId,
+                                ],
+                                'message' => [
+                                    'text' => $message,
+                                ],
+                            ]);
+                    }
+                }
+            }
 
             if ($response->successful()) {
                 Log::channel('stack')->info("[FB_COMMENTS] ✓ Private reply sent via Messenger for comment {$commentId}", [
@@ -984,18 +1098,33 @@ class HomeController extends Controller
     /**
      * Fetch Facebook Post text/story context via Graph API.
      */
-    private function getFacebookPostContent(string $pageAccessToken, string $postId): ?string
+    private function getFacebookPostContent(string $pageAccessToken, string $postId, ?MessengerAccount $account = null): ?string
     {
         if (empty($postId)) {
             return null;
         }
 
-        return Cache::remember("fb_post_content_{$postId}", 3600, function () use ($pageAccessToken, $postId) {
+        return Cache::remember("fb_post_content_{$postId}", 3600, function () use ($pageAccessToken, $postId, $account) {
             try {
-                $response = Http::withToken($pageAccessToken)
+                $token = $account?->page_access_token ?: $pageAccessToken;
+                $response = Http::withToken($token)
                     ->get(self::GRAPH_API_BASE."/{$postId}", [
                         'fields' => 'message,story',
                     ]);
+
+                if (! $response->successful() && $account) {
+                    /** @var MetaPageTokenService $tokenService */
+                    $tokenService = app(MetaPageTokenService::class);
+                    if ($tokenService->isTokenExpiredError($response->status(), $response->json() ?? [])) {
+                        $refreshedToken = $tokenService->refreshMessengerAccountToken($account);
+                        if ($refreshedToken) {
+                            $response = Http::withToken($refreshedToken)
+                                ->get(self::GRAPH_API_BASE."/{$postId}", [
+                                    'fields' => 'message,story',
+                                ]);
+                        }
+                    }
+                }
 
                 if ($response->successful()) {
                     return $response->json('message') ?: $response->json('story');
