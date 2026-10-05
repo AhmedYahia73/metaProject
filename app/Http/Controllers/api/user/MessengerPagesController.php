@@ -8,6 +8,7 @@ use App\Models\MessengerAccount;
 use App\Models\Order;
 use App\Models\Package;
 use App\trait\image;
+use App\trait\paymob;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -19,7 +20,7 @@ use Symfony\Component\HttpFoundation\Response;
 
 class MessengerPagesController extends Controller
 {
-    use image;
+    use image, paymob;
 
     private const GRAPH_API_BASE = 'https://graph.facebook.com';
 
@@ -421,7 +422,7 @@ class MessengerPagesController extends Controller
             $accountData
         );
 
-        // 5. Create Order (pending — from/to will be set by admin on approval)
+        // 5. Create Order (faild until Paymob callback approves)
         $order = Order::create([
             'package_id' => $package->id,
             'user_id' => $user->id,
@@ -430,12 +431,14 @@ class MessengerPagesController extends Controller
             'price' => round($basePrice, 2),
             'final_price' => round($finalPrice, 2),
             'msgs' => $msgs,
-            'status' => 'pending',
+            'status' => 'faild',
             'channel' => 'messenger',
             'messenger_account_id' => $messengerAccount->id,
             'from' => null,
             'to' => null,
         ]);
+
+        $paymobUrl = $this->getPaymobPaymentLink($order);
 
         Log::info('Messenger subscription requested', [
             'user_id' => $user->id,
@@ -446,7 +449,7 @@ class MessengerPagesController extends Controller
 
         return response()->json([
             'status' => true,
-            'message' => 'Subscription request submitted. Awaiting admin approval.',
+            'message' => 'Subscription request submitted. Please complete payment.',
             'data' => [
                 'order_id' => $order->id,
                 'page_name' => $messengerAccount->page_name,
@@ -461,8 +464,10 @@ class MessengerPagesController extends Controller
                 'total_discount' => round($totalDiscount, 2),
                 'total_tax' => round($totalTax, 2),
                 'final_price' => round($finalPrice, 2),
-                'status' => 'pending',
+                'status' => $order->status,
                 'messenger_account' => $messengerAccount->fresh(),
+                'payment_url' => $paymobUrl,
+                'paymob_url' => $paymobUrl,
             ],
         ], Response::HTTP_CREATED);
     }

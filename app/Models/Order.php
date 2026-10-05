@@ -22,6 +22,7 @@ class Order extends Model
         'to',
         'msgs',
         'status',
+        'transaction_id',
         'channel',
         'messenger_account_id',
         'whats_item_id',
@@ -194,6 +195,15 @@ class Order extends Model
      * @param  Builder<Order>  $query
      * @return Builder<Order>
      */
+    public function scopeFailed(Builder $query): Builder
+    {
+        return $query->whereIn('status', ['faild', 'failed']);
+    }
+
+    /**
+     * @param  Builder<Order>  $query
+     * @return Builder<Order>
+     */
     public function scopeInstagram(Builder $query): Builder
     {
         return $query->where('channel', 'instagram');
@@ -216,6 +226,11 @@ class Order extends Model
     public function isRejected(): bool
     {
         return $this->status === 'rejected';
+    }
+
+    public function isFailed(): bool
+    {
+        return in_array($this->status, ['faild', 'failed'], true);
     }
 
     public function isMessenger(): bool

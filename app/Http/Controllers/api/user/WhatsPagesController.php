@@ -8,6 +8,7 @@ use App\Models\Package;
 use App\Models\WhatsItem;
 use App\Services\MetaWhatsAppService;
 use App\trait\image;
+use App\trait\paymob;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -17,7 +18,7 @@ use Symfony\Component\HttpFoundation\Response;
 
 class WhatsPagesController extends Controller
 {
-    use image;
+    use image, paymob;
 
     public function __construct(
         protected MetaWhatsAppService $metaService
@@ -566,12 +567,14 @@ class WhatsPagesController extends Controller
             'price' => round($basePrice, 2),
             'final_price' => round($finalPrice, 2),
             'msgs' => $msgs,
-            'status' => 'pending',
+            'status' => 'faild',
             'channel' => 'whatsapp',
             'whats_item_id' => $whatsItem->id,
             'from' => null,
             'to' => null,
         ]);
+
+        $paymobUrl = $this->getPaymobPaymentLink($order);
 
         Log::info('WhatsApp subscription requested', [
             'user_id' => $user->id,
@@ -581,7 +584,7 @@ class WhatsPagesController extends Controller
 
         return response()->json([
             'status' => true,
-            'message' => 'Subscription request submitted. Awaiting admin approval.',
+            'message' => 'Subscription request submitted. Please complete payment.',
             'data' => [
                 'order_id' => $order->id,
                 'whats_item_id' => $whatsItem->id,
@@ -596,8 +599,10 @@ class WhatsPagesController extends Controller
                 'total_discount' => round($totalDiscount, 2),
                 'total_tax' => round($totalTax, 2),
                 'final_price' => round($finalPrice, 2),
-                'status' => 'pending',
+                'status' => $order->status,
                 'whats_item' => $whatsItem->fresh(),
+                'payment_url' => $paymobUrl,
+                'paymob_url' => $paymobUrl,
             ],
         ], Response::HTTP_CREATED);
     }

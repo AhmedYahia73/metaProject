@@ -9,8 +9,8 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('orders', function (Blueprint $table) {
-            // Status lifecycle: pending → approved | rejected
-            $table->enum('status', ['pending', 'approved', 'rejected'])->default('pending')->after('msgs');
+            // Status lifecycle: faild (initial) → approved | rejected (or pending)
+            $table->enum('status', ['faild', 'failed', 'pending', 'approved', 'rejected'])->default('faild')->after('msgs');
 
             // Which channel this order activates
             $table->enum('channel', ['whatsapp', 'messenger', 'instagram'])->default('whatsapp')->after('status');

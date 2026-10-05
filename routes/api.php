@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\api\admin\AdminController;
+use App\Http\Controllers\api\admin\ContactUsController;
 use App\Http\Controllers\api\admin\DashboardController;
 use App\Http\Controllers\api\admin\DiscountController;
 use App\Http\Controllers\api\admin\InstagramItemController as AdminInstagramItemController;
@@ -13,9 +14,9 @@ use App\Http\Controllers\api\admin\SubscriperController;
 use App\Http\Controllers\api\admin\TaxController;
 use App\Http\Controllers\api\admin\UserController;
 use App\Http\Controllers\api\admin\WhatsItemController as AdminWhatsItemController;
-use App\Http\Controllers\api\admin\ContactUsController;
 use App\Http\Controllers\api\auth\LoginController;
 use App\Http\Controllers\api\HomeController;
+use App\Http\Controllers\api\PaymobCallbackController;
 use App\Http\Controllers\api\user\ChatController;
 use App\Http\Controllers\api\user\HomeController as UserHomeController;
 use App\Http\Controllers\api\user\InstagramPagesController;
@@ -54,6 +55,10 @@ Route::get('/instagram-webhook/subscribe-page', [HomeController::class, 'instagr
 Route::post('/instagram-webhook/subscribe-page', [HomeController::class, 'instagram_subscribe_page']);
 Route::get('/instagram-webhook/set-active-id', [HomeController::class, 'instagram_set_active_id']);
 Route::post('/instagram-webhook/set-active-id', [HomeController::class, 'instagram_set_active_id']);
+
+// Paymob Webhook / Redirection Callback (public)
+Route::match(['get', 'post'], '/paymob/callback', [PaymobCallbackController::class, 'callback']);
+Route::match(['get', 'post'], '/paymob-callback', [PaymobCallbackController::class, 'callback']);
 
 Route::view('/privacy-policy', 'privacy-policy');
 
@@ -151,7 +156,7 @@ Route::prefix('user')->group(function () {
 |--------------------------------------------------------------------------
 */
 Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function () {
-    // Dashboard Statistics 
+    // Dashboard Statistics
     Route::get('contact_us', [ContactUsController::class, 'index']);
     Route::get('subscripers', [SubscriperController::class, 'subscripers']);
 
@@ -185,7 +190,7 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
 
     // Paymob Settings (View & Update/Create)
     Route::get('paymob', [PaymobController::class, 'view']);
-    Route::post('paymob', [PaymobController::class, 'update']);
+    Route::match(['post', 'put'], 'paymob', [PaymobController::class, 'update']);
 
     // Admins Management (Automatic role: admin)
     Route::apiResource('admins', AdminController::class);

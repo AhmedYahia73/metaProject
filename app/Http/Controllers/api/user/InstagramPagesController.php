@@ -8,6 +8,7 @@ use App\Models\MessengerAccount;
 use App\Models\Order;
 use App\Models\Package;
 use App\trait\image;
+use App\trait\paymob;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -18,7 +19,7 @@ use Symfony\Component\HttpFoundation\Response;
 
 class InstagramPagesController extends Controller
 {
-    use image;
+    use image, paymob;
 
     private const GRAPH_API_BASE = 'https://graph.facebook.com';
 
@@ -332,7 +333,7 @@ class InstagramPagesController extends Controller
             'user_id' => $user->id,
             'instagram_item_id' => $instagramItem->id,
             'channel' => 'instagram',
-            'status' => 'pending',
+            'status' => 'faild',
             'total_discount' => round($totalDiscount, 2),
             'total_tax' => round($totalTax, 2),
             'price' => round($basePrice, 2),
@@ -340,18 +341,22 @@ class InstagramPagesController extends Controller
             'msgs' => $msgs,
         ]);
 
+        $paymobUrl = $this->getPaymobPaymentLink($order);
+
         return response()->json([
             'status' => true,
-            'message' => 'Subscription request submitted successfully. Awaiting admin approval.',
+            'message' => 'Subscription request submitted successfully. Please complete payment.',
             'data' => [
                 'order_id' => $order->id,
-                'status' => 'pending',
+                'status' => $order->status,
                 'channel' => 'instagram',
                 'instagram_item_id' => $instagramItem->id,
                 'instagram_username' => $instagramItem->username,
                 'package_id' => $package->id,
                 'final_price' => $finalPrice,
                 'msgs' => $msgs,
+                'payment_url' => $paymobUrl,
+                'paymob_url' => $paymobUrl,
             ],
         ], Response::HTTP_CREATED);
     }

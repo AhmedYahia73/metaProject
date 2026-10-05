@@ -56,6 +56,8 @@ class OrderController extends Controller
 
         if ($request->filled('status')) {
             $query->where('status', $request->status);
+        } else {
+            $query->whereNotIn('status', ['faild', 'failed']);
         }
 
         if ($request->filled('channel')) {

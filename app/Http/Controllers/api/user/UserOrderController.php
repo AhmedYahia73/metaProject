@@ -135,7 +135,7 @@ class UserOrderController extends Controller
 
         $query = Order::with(['package:id,name', 'user:id,name,phone',
             'whatsItem:id,phone', 'messengerAccount:id,page_name', 'instagramItem:id,username,name'])
-            ->where('status', '!=', 'pending')->latest();
+            ->whereNotIn('status', ['pending', 'faild', 'failed'])->latest();
 
         if ($request->filled('user_id')) {
             $query->where('user_id', $request->user_id);

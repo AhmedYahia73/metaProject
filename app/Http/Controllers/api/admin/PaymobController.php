@@ -12,7 +12,7 @@ use Symfony\Component\HttpFoundation\Response;
 class PaymobController extends Controller
 {
     use image;
- 
+
     public function view(): JsonResponse
     {
         $paymob = Paymob::first();
@@ -21,12 +21,16 @@ class PaymobController extends Controller
             'status' => true,
             'data' => $paymob,
         ]);
-    } 
- 
+    }
+
     public function update(Request $request): JsonResponse
     {
+        if ($request->has('hmac') && ! $request->has('Hmac')) {
+            $request->merge(['Hmac' => $request->input('hmac')]);
+        }
+
         $paymob = Paymob::first();
-  
+
         $validated = $request->validate([
             'title' => $paymob ? 'sometimes|required|string|max:255' : 'required|string|max:255',
             'type' => $paymob ? 'sometimes|required|in:live,test' : 'required|in:live,test',
@@ -39,7 +43,7 @@ class PaymobController extends Controller
                 ? 'sometimes|nullable|image|mimes:jpeg,png,jpg,gif,svg,webp,avif|max:5120'
                 : 'required|image|mimes:jpeg,png,jpg,gif,svg,webp,avif|max:5120',
         ]);
-   
+
         if ($paymob) {
             // If new logo uploaded, replace old logo file via update_image
             if ($request->hasFile('logo')) {
@@ -77,5 +81,5 @@ class PaymobController extends Controller
             'message' => 'Paymob settings created successfully.',
             'data' => $paymob,
         ], Response::HTTP_CREATED);
-    } 
+    }
 }
