@@ -9,6 +9,7 @@ use App\Models\Chat;
 use App\Models\InstagramItem;
 use App\Models\MessengerAccount;
 use App\Models\MsgSend;
+use App\Models\Contact;
 use App\Models\Order;
 use App\Models\Package;
 use App\Models\User;
@@ -205,46 +206,16 @@ class HomeController extends Controller
         $activeMailer = config('mail.default');
         $fromAddress = config('mail.from.address');
         $fromName = config('mail.from.name');
+    
 
-        Log::channel('stack')->info('[CONTACT_US] 🚀 Preparing to send Contact Us email', [
-            'active_mailer' => $activeMailer,
-            'recipient' => $recipient,
-            'from_address' => $fromAddress,
-            'from_name' => $fromName,
-            'smtp_host' => config('mail.mailers.smtp.host'),
-            'smtp_port' => config('mail.mailers.smtp.port'),
-            'smtp_encryption' => config('mail.mailers.smtp.encryption'),
-            'smtp_username' => config('mail.mailers.smtp.username'),
-            'smtp_verify_peer' => config('mail.mailers.smtp.verify_peer'),
-            'form_data' => [
-                'name' => trim(($request->f_name ?? '').' '.($request->l_name ?? '')),
-                'email' => $request->email,
-                'phone' => $request->phone,
-            ],
-        ]);
-
-        if ($activeMailer === 'log') {
-            Log::channel('stack')->warning('[CONTACT_US] ⚠️ MAIL_MAILER is set to "log"! The email was NOT sent to the SMTP server. It was written to storage/logs/laravel.log. Run "php artisan config:clear" on your server if you updated .env to smtp.');
-        } elseif ($activeMailer === 'array') {
-            Log::channel('stack')->warning('[CONTACT_US] ⚠️ MAIL_MAILER is set to "array"! The email was only captured in memory.');
-        }
-
+        Contact::create($request->validated());
         try {
             /** @var SentMessage|null $sentMessage */
             $sentMessage = Mail::to($recipient)->send(new ContactUsMail($request->validated()));
 
             $debugOutput = $sentMessage?->getDebug();
             $messageId = $sentMessage?->getMessageId();
-
-            Log::channel('stack')->info('[CONTACT_US] ✅ Mail::send() executed successfully', [
-                'active_mailer' => $activeMailer,
-                'recipient' => $recipient,
-                'from_address' => $fromAddress,
-                'message_id' => $messageId,
-                'has_sent_message' => $sentMessage !== null,
-                'smtp_debug' => $debugOutput,
-            ]);
-
+  
             return response()->json([
                 'status' => true,
                 'message' => 'Your message has been sent successfully.',
