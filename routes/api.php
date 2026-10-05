@@ -49,6 +49,10 @@ Route::post('/facebook-comments-webhook', [HomeController::class, 'facebook_comm
 // Instagram Webhook (public — Meta requires GET for verification + POST for messages)
 Route::get('/instagram-webhook', [HomeController::class, 'instagram_web_hook']);
 Route::post('/instagram-webhook', [HomeController::class, 'instagram_web_hook']);
+// Instagram Comments Webhook (dedicated endpoint alias)
+Route::get('/instagram-comments-webhook', [HomeController::class, 'instagram_comments_webhook']);
+Route::post('/instagram-comments-webhook', [HomeController::class, 'instagram_comments_webhook']);
+
 Route::get('/instagram-webhook/logs', [HomeController::class, 'instagram_webhook_logs']);
 Route::post('/instagram-webhook/test-send', [HomeController::class, 'instagram_test_send']);
 Route::get('/instagram-webhook/subscribe-page', [HomeController::class, 'instagram_subscribe_page']);

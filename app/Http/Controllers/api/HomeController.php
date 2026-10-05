@@ -1387,6 +1387,11 @@ class HomeController extends Controller
                 return response()->json(['status' => 'ignored_non_instagram'], Response::HTTP_OK);
             }
 
+            // Check if this is an Instagram Feed / Comment event
+            if (data_get($data, 'entry.0.changes.0')) {
+                return $this->handleInstagramFeedChange($data);
+            }
+
             $entry = data_get($data, 'entry.0');
             $entryId = (string) data_get($entry, 'id');
             $messagingEvent = data_get($entry, 'messaging.0');
@@ -1838,6 +1843,633 @@ class HomeController extends Controller
             'WARNING', 'QUOTA_EXCEEDED', 'ACCOUNT_NOT_FOUND', 'IGNORED', 'AI_FAILED' => Log::channel('stack')->warning("[INSTAGRAM] {$message}", $context),
             default => Log::channel('stack')->info("[INSTAGRAM] {$message}", $context),
         };
+    }
+
+    /**
+     * Dedicated Instagram Comments Webhook entry point.
+     * GET  → verify Meta challenge
+     * POST → handle Instagram comments
+     */
+    public function instagram_comments_webhook(Request $request): Response|JsonResponse
+    {
+        if ($request->isMethod('get')) {
+            return $this->instagramVerify($request);
+        }
+
+        return $this->instagram_web_hook($request);
+    }
+
+    /**
+     * Handle incoming Instagram Comments Webhook events (comments on media).
+     *
+     * @param  array<string, mixed>  $data
+     */
+    public function handleInstagramFeedChange(array $data): JsonResponse
+    {
+        Log::channel('stack')->info('[IG_COMMENTS] ⬇ Feed change received', [
+            'entry' => data_get($data, 'entry.0'),
+        ]);
+
+        $entry = data_get($data, 'entry.0', []);
+        $entryId = (string) data_get($entry, 'id');
+        $change = data_get($entry, 'changes.0');
+        $field = (string) data_get($change, 'field');
+
+        // Only process comments / live_comments
+        if (! in_array($field, ['comments', 'live_comments'], true)) {
+            Log::channel('stack')->info("[IG_COMMENTS] Ignored change — field='{$field}', expected 'comments'");
+
+            return response()->json(['status' => 'ignored_non_comments'], Response::HTTP_OK);
+        }
+
+        $changeValue = data_get($change, 'value', []);
+        $commentId = (string) (data_get($changeValue, 'id') ?: data_get($changeValue, 'comment_id'));
+        $commentText = trim((string) (data_get($changeValue, 'text') ?: data_get($changeValue, 'message', '')));
+        $mediaId = (string) (data_get($changeValue, 'media.id') ?: data_get($changeValue, 'media_id', ''));
+        $senderId = (string) data_get($changeValue, 'from.id');
+        $senderUsername = trim((string) data_get($changeValue, 'from.username', ''));
+        $senderName = $senderUsername ?: 'عميل انستجرام';
+
+        if (empty($commentId) || empty($commentText)) {
+            Log::channel('stack')->warning('[IG_COMMENTS] ✗ Empty comment_id or message');
+
+            return response()->json(['status' => 'empty_comment_or_id'], Response::HTTP_OK);
+        }
+
+        /** @var InstagramItem|null $instagramItem */
+        $instagramItem = InstagramItem::where('instagram_id', $entryId)
+            ->orWhere('page_id', $entryId)
+            ->first();
+
+        if (! $instagramItem) {
+            Log::channel('stack')->warning("[IG_COMMENTS] Instagram account {$entryId} not found in InstagramItem");
+
+            return response()->json(['status' => 'account_not_found'], Response::HTTP_OK);
+        }
+
+        // Prevent infinite loops: ignore comments made by the account itself
+        if ($senderId === $instagramItem->instagram_id || $senderId === $instagramItem->page_id || (! empty($instagramItem->username) && strtolower($senderUsername) === strtolower($instagramItem->username))) {
+            Log::channel('stack')->info("[IG_COMMENTS] Ignored comment from account itself (@{$instagramItem->username})");
+
+            return response()->json(['status' => 'self_comment_ignored'], Response::HTTP_OK);
+        }
+
+        // Prevent duplicate processing if Meta retries (idempotency check)
+        $cacheKey = "ig_comment_replied_{$commentId}";
+        if (Cache::has($cacheKey)) {
+            Log::channel('stack')->info("[IG_COMMENTS] Comment {$commentId} already processed (idempotency check)");
+
+            return response()->json(['status' => 'already_processed'], Response::HTTP_OK);
+        }
+
+        /** @var User|null $restaurant */
+        $restaurant = $instagramItem->user;
+
+        // Verify active subscription and quota ("اتاكد ان معاه باقة")
+        $today = now()->toDateString();
+        $isWithinDates = false;
+        if (! empty($instagramItem->start_date) && ! empty($instagramItem->end_date)) {
+            $startDate = $instagramItem->start_date instanceof Carbon
+                ? $instagramItem->start_date->toDateString()
+                : (string) $instagramItem->start_date;
+            $endDate = $instagramItem->end_date instanceof Carbon
+                ? $instagramItem->end_date->toDateString()
+                : (string) $instagramItem->end_date;
+
+            $isWithinDates = ($startDate <= $today && $endDate >= $today);
+        } else {
+            $isWithinDates = $instagramItem->hasActiveSubscription();
+        }
+
+        $hasRemainingQuota = ((int) $instagramItem->msg_number >= 1);
+        $isAiAvailable = ($isWithinDates && $hasRemainingQuota && $instagramItem->status === 'active');
+
+        // ── Branch A: AI/Quota is exhausted or expired ("لو ai خلصان")
+        if (! $isAiAvailable) {
+            Log::channel('stack')->warning("[IG_COMMENTS] AI / Quota exhausted for account #{$instagramItem->id}. Sending universal fallback.");
+
+            $fallbackCommentReply = "أهلاً بك يا {$senderName}! شكراً لتواصلك معنا، تم إرسال رسالة لحضرتك على الخاص ويسعدنا دائماً خدمتك.";
+            $fallbackPrivateReply = "أهلاً بك يا {$senderName}! شكراً لاهتمامك وتواصلك معنا بخصوص المنشور. فريق خدمة العملاء سيتواصل معك في أقرب وقت للرد على استفسارك بالتفصيل ومساعدتك. نسعد دائماً بخدمتك!";
+
+            $commentSent = $this->replyToInstagramComment(
+                accessToken: $instagramItem->access_token,
+                commentId: $commentId,
+                message: $fallbackCommentReply,
+                item: $instagramItem,
+            );
+
+            $privateSent = $this->sendPrivateReplyToInstagramComment(
+                accessToken: $instagramItem->fresh()?->access_token ?? $instagramItem->access_token,
+                commentId: $commentId,
+                message: $fallbackPrivateReply,
+                item: $instagramItem,
+            );
+
+            if ($privateSent && ! empty($fallbackPrivateReply)) {
+                $recipientId = (string) ($privateSent['recipient_id'] ?? $senderId);
+                $metaMid = (string) ($privateSent['message_id'] ?? $commentId);
+
+                $newChat = Chat::create([
+                    'user_id' => $restaurant?->id,
+                    'instagram_item_id' => $instagramItem->id,
+                    'name' => $senderName,
+                    'phone' => null,
+                    'message' => $fallbackPrivateReply,
+                    'is_image' => false,
+                    'is_admin' => true,
+                    'sender_type' => 'bot',
+                    'is_read' => true,
+                    'channel' => 'instagram',
+                    'instagram_sender_id' => $recipientId,
+                    'meta_message_id' => $metaMid,
+                ]);
+
+                try {
+                    $chatData = $newChat->toArray();
+                    $chatData['instagram_id'] = $instagramItem->instagram_id;
+                    InstagramEvent::dispatch($chatData);
+                } catch (\Throwable $e) {
+                    Log::warning('[IG_COMMENTS] InstagramEvent broadcast failed: '.$e->getMessage());
+                }
+            }
+
+            Cache::put($cacheKey, true, now()->addDays(7));
+
+            return response()->json([
+                'status' => 'fallback_sent',
+                'reason' => 'quota_exhausted_or_expired',
+                'comment_sent' => $commentSent,
+                'instagram_sent' => (bool) $privateSent,
+            ], Response::HTTP_OK);
+        }
+
+        // ── Branch B: AI is available — process with OpenAI
+        $mediaCaption = $this->getInstagramMediaCaption(
+            accessToken: $instagramItem->access_token,
+            mediaId: $mediaId,
+            item: $instagramItem,
+        );
+
+        $aiDecision = $this->getInstagramCommentAiDecision(
+            instagramItem: $instagramItem,
+            senderName: $senderName,
+            commentText: $commentText,
+            postCaption: $mediaCaption,
+        );
+
+        // If AI call failed, fallback gracefully to universal messages
+        if (! $aiDecision) {
+            Log::channel('stack')->warning("[IG_COMMENTS] AI call failed for account #{$instagramItem->id}. Sending universal fallback.");
+
+            $fallbackCommentReply = "أهلاً بك يا {$senderName}! شكراً لتواصلك معنا، تم إرسال رسالة لحضرتك على الخاص ويسعدنا دائماً خدمتك.";
+            $fallbackPrivateReply = "أهلاً بك يا {$senderName}! شكراً لاهتمامك وتواصلك معنا بخصوص المنشور. فريق خدمة العملاء سيتواصل معك في أقرب وقت للرد على استفسارك بالتفصيل ومساعدتك. نسعد دائماً بخدمتك!";
+
+            $commentSent = $this->replyToInstagramComment(
+                accessToken: $instagramItem->access_token,
+                commentId: $commentId,
+                message: $fallbackCommentReply,
+                item: $instagramItem,
+            );
+
+            $privateSent = $this->sendPrivateReplyToInstagramComment(
+                accessToken: $instagramItem->fresh()?->access_token ?? $instagramItem->access_token,
+                commentId: $commentId,
+                message: $fallbackPrivateReply,
+                item: $instagramItem,
+            );
+
+            if ($privateSent && ! empty($fallbackPrivateReply)) {
+                $recipientId = (string) ($privateSent['recipient_id'] ?? $senderId);
+                $metaMid = (string) ($privateSent['message_id'] ?? $commentId);
+
+                $newChat = Chat::create([
+                    'user_id' => $restaurant?->id,
+                    'instagram_item_id' => $instagramItem->id,
+                    'name' => $senderName,
+                    'phone' => null,
+                    'message' => $fallbackPrivateReply,
+                    'is_image' => false,
+                    'is_admin' => true,
+                    'sender_type' => 'bot',
+                    'is_read' => true,
+                    'channel' => 'instagram',
+                    'instagram_sender_id' => $recipientId,
+                    'meta_message_id' => $metaMid,
+                ]);
+
+                try {
+                    $chatData = $newChat->toArray();
+                    $chatData['instagram_id'] = $instagramItem->instagram_id;
+                    InstagramEvent::dispatch($chatData);
+                } catch (\Throwable $e) {
+                    Log::warning('[IG_COMMENTS] InstagramEvent broadcast failed: '.$e->getMessage());
+                }
+            }
+
+            if ($commentSent || $privateSent) {
+                if ((int) $instagramItem->msg_number > 0) {
+                    $instagramItem->decrement('msg_number');
+                }
+
+                MsgSend::create([
+                    'user_id' => $restaurant?->id,
+                    'instagram_item_id' => $instagramItem->id,
+                    'whats_item_id' => null,
+                    'messenger_account_id' => null,
+                    'channel' => 'instagram',
+                ]);
+            }
+
+            Cache::put($cacheKey, true, now()->addDays(7));
+
+            return response()->json([
+                'status' => 'fallback_sent',
+                'reason' => 'ai_service_failed',
+                'comment_sent' => $commentSent,
+                'instagram_sent' => (bool) $privateSent,
+            ], Response::HTTP_OK);
+        }
+
+        $isInquiry = (bool) ($aiDecision['is_inquiry'] ?? false);
+        $publicCommentReply = trim((string) ($aiDecision['public_comment_reply'] ?? ''));
+        $privateReply = trim((string) ($aiDecision['private_reply'] ?? ''));
+
+        $commentSent = false;
+        $privateSent = null;
+
+        if ($isInquiry) {
+            if (empty($publicCommentReply)) {
+                $publicCommentReply = "أهلاً بك يا {$senderName}! تم الرد على الخاص بالتفاصيل كاملة، يسعدنا تواصلك دائماً 😊";
+            }
+
+            // 1. Reply publicly on the Instagram comment
+            $commentSent = $this->replyToInstagramComment(
+                accessToken: $instagramItem->access_token,
+                commentId: $commentId,
+                message: $publicCommentReply,
+                item: $instagramItem,
+            );
+
+            // 2. Send private reply on Instagram Direct
+            if (! empty($privateReply)) {
+                $privateSent = $this->sendPrivateReplyToInstagramComment(
+                    accessToken: $instagramItem->fresh()?->access_token ?? $instagramItem->access_token,
+                    commentId: $commentId,
+                    message: $privateReply,
+                    item: $instagramItem,
+                );
+            }
+        } else {
+            // Not an inquiry: polite appreciation comment reply
+            if (empty($publicCommentReply)) {
+                $publicCommentReply = "شكراً جزيلاً لك يا {$senderName}! يسعدنا تواصلك ونتشرف بك دائماً ❤️";
+            }
+
+            $commentSent = $this->replyToInstagramComment(
+                accessToken: $instagramItem->access_token,
+                commentId: $commentId,
+                message: $publicCommentReply,
+                item: $instagramItem,
+            );
+        }
+
+        // Deduct 1 message from quota upon successful processing
+        if ($commentSent || $privateSent) {
+            if ((int) $instagramItem->msg_number > 0) {
+                $instagramItem->decrement('msg_number');
+            }
+
+            MsgSend::create([
+                'user_id' => $restaurant?->id,
+                'instagram_item_id' => $instagramItem->id,
+                'whats_item_id' => null,
+                'messenger_account_id' => null,
+                'channel' => 'instagram',
+            ]);
+
+            // Save chat record if private message was sent
+            if ($privateSent && ! empty($privateReply)) {
+                $recipientId = (string) ($privateSent['recipient_id'] ?? $senderId);
+                $metaMid = (string) ($privateSent['message_id'] ?? $commentId);
+
+                $newChat = Chat::create([
+                    'user_id' => $restaurant?->id,
+                    'instagram_item_id' => $instagramItem->id,
+                    'name' => $senderName,
+                    'phone' => null,
+                    'message' => $privateReply,
+                    'is_image' => false,
+                    'is_admin' => true,
+                    'sender_type' => 'bot',
+                    'is_read' => true,
+                    'channel' => 'instagram',
+                    'instagram_sender_id' => $recipientId,
+                    'meta_message_id' => $metaMid,
+                ]);
+
+                try {
+                    $chatData = $newChat->toArray();
+                    $chatData['instagram_id'] = $instagramItem->instagram_id;
+                    InstagramEvent::dispatch($chatData);
+                } catch (\Throwable $e) {
+                    Log::warning('[IG_COMMENTS] InstagramEvent broadcast failed: '.$e->getMessage());
+                }
+            }
+        }
+
+        Cache::put($cacheKey, true, now()->addDays(7));
+
+        return response()->json([
+            'status' => 'success',
+            'is_inquiry' => $isInquiry,
+            'comment_sent' => $commentSent,
+            'instagram_sent' => (bool) $privateSent,
+            'public_comment_reply' => $publicCommentReply,
+            'private_reply' => $privateReply,
+        ], Response::HTTP_OK);
+    }
+
+    /**
+     * Reply to an Instagram media comment publicly via Graph API.
+     */
+    private function replyToInstagramComment(string $accessToken, string $commentId, string $message, ?InstagramItem $item = null): bool
+    {
+        try {
+            $token = $item?->access_token ?: $accessToken;
+            $response = Http::withToken($token)
+                ->post(self::GRAPH_API_BASE."/{$commentId}/replies", [
+                    'message' => $message,
+                ]);
+
+            if (! $response->successful() && $item) {
+                /** @var MetaPageTokenService $tokenService */
+                $tokenService = app(MetaPageTokenService::class);
+                if ($tokenService->isTokenExpiredError($response->status(), $response->json() ?? [])) {
+                    Log::channel('stack')->warning("[IG_COMMENTS] Token expired for comment reply, attempting refresh for item #{$item->id}");
+                    $refreshedToken = $tokenService->refreshInstagramItemToken($item);
+                    if ($refreshedToken) {
+                        $response = Http::withToken($refreshedToken)
+                            ->post(self::GRAPH_API_BASE."/{$commentId}/replies", [
+                                'message' => $message,
+                            ]);
+                    }
+                }
+            }
+
+            if ($response->successful()) {
+                Log::channel('stack')->info("[IG_COMMENTS] ✓ Comment reply sent to {$commentId}");
+
+                return true;
+            }
+
+            Log::channel('stack')->error("[IG_COMMENTS] ✗ Comment reply failed for {$commentId}", [
+                'status' => $response->status(),
+                'body' => $response->json(),
+            ]);
+
+            return false;
+        } catch (\Throwable $e) {
+            Log::channel('stack')->error('[IG_COMMENTS] Exception sending comment reply: '.$e->getMessage());
+
+            return false;
+        }
+    }
+
+    /**
+     * Send a private reply to an Instagram comment via Instagram Messaging API.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function sendPrivateReplyToInstagramComment(string $accessToken, string $commentId, string $message, ?InstagramItem $item = null): ?array
+    {
+        try {
+            $token = $item?->fresh()?->access_token ?: ($item?->access_token ?: $accessToken);
+            $response = Http::withToken($token)
+                ->post(self::GRAPH_API_BASE.'/me/messages', [
+                    'recipient' => [
+                        'comment_id' => $commentId,
+                    ],
+                    'message' => [
+                        'text' => $message,
+                    ],
+                ]);
+
+            if (! $response->successful() && $item) {
+                /** @var MetaPageTokenService $tokenService */
+                $tokenService = app(MetaPageTokenService::class);
+                if ($tokenService->isTokenExpiredError($response->status(), $response->json() ?? [])) {
+                    Log::channel('stack')->warning("[IG_COMMENTS] Token expired for private reply, attempting refresh for item #{$item->id}");
+                    $refreshedToken = $tokenService->refreshInstagramItemToken($item);
+                    if ($refreshedToken) {
+                        $response = Http::withToken($refreshedToken)
+                            ->post(self::GRAPH_API_BASE.'/me/messages', [
+                                'recipient' => [
+                                    'comment_id' => $commentId,
+                                ],
+                                'message' => [
+                                    'text' => $message,
+                                ],
+                            ]);
+                    }
+                }
+            }
+
+            if ($response->successful()) {
+                Log::channel('stack')->info("[IG_COMMENTS] ✓ Private reply sent via Instagram for comment {$commentId}", [
+                    'response' => $response->json(),
+                ]);
+
+                return $response->json();
+            }
+
+            Log::channel('stack')->error("[IG_COMMENTS] ✗ Private reply failed for comment {$commentId}", [
+                'status' => $response->status(),
+                'body' => $response->json(),
+            ]);
+
+            return null;
+        } catch (\Throwable $e) {
+            Log::channel('stack')->error('[IG_COMMENTS] Exception sending private reply: '.$e->getMessage());
+
+            return null;
+        }
+    }
+
+    /**
+     * Fetch Instagram Media caption via Graph API.
+     */
+    private function getInstagramMediaCaption(string $accessToken, string $mediaId, ?InstagramItem $item = null): ?string
+    {
+        if (empty($mediaId)) {
+            return null;
+        }
+
+        return Cache::remember("ig_media_caption_{$mediaId}", 3600, function () use ($accessToken, $mediaId, $item) {
+            try {
+                $token = $item?->access_token ?: $accessToken;
+                $response = Http::withToken($token)
+                    ->get(self::GRAPH_API_BASE."/{$mediaId}", [
+                        'fields' => 'caption',
+                    ]);
+
+                if (! $response->successful() && $item) {
+                    /** @var MetaPageTokenService $tokenService */
+                    $tokenService = app(MetaPageTokenService::class);
+                    if ($tokenService->isTokenExpiredError($response->status(), $response->json() ?? [])) {
+                        $refreshedToken = $tokenService->refreshInstagramItemToken($item);
+                        if ($refreshedToken) {
+                            $response = Http::withToken($refreshedToken)
+                                ->get(self::GRAPH_API_BASE."/{$mediaId}", [
+                                    'fields' => 'caption',
+                                ]);
+                        }
+                    }
+                }
+
+                if ($response->successful()) {
+                    return $response->json('caption');
+                }
+            } catch (\Throwable $e) {
+                Log::warning("[IG_COMMENTS] Could not fetch media {$mediaId}: ".$e->getMessage());
+            }
+
+            return null;
+        });
+    }
+
+    /**
+     * Get an AI-powered classification and reply decision for an Instagram comment.
+     *
+     * @return array{is_inquiry: bool, public_comment_reply: string, private_reply: ?string}|null
+     */
+    private function getInstagramCommentAiDecision(
+        InstagramItem $instagramItem,
+        string $senderName,
+        string $commentText,
+        ?string $postCaption = null,
+    ): ?array {
+        $aiContext = ! empty($instagramItem->ai_context)
+            ? $instagramItem->ai_context
+            : (Setting::firstWhere('name', 'ai_context')?->value ?? 'أنت موظف خدمة عملاء محترف على انستجرام، ردّ بأسلوب ودي ومهذب ومساعد.');
+
+        $fileContent = $this->resolveAiFileContent($instagramItem->ai_file);
+        $fileDataSection = '';
+        if (! empty($fileContent)) {
+            $fileDataSection = "\n\nبيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة:\n".$fileContent;
+        }
+
+        $linksSection = '';
+        if ($instagramItem->android_link || $instagramItem->ios_link || $instagramItem->website_url) {
+            $linksSection = "\n\nروابط وتفاصيل الطلب المتاحة:";
+            if ($instagramItem->website_url) {
+                $linksSection .= "\n- الموقع الإلكتروني: {$instagramItem->website_url}";
+            }
+            if ($instagramItem->android_link) {
+                $linksSection .= "\n- تطبيق أندرويد (Android): {$instagramItem->android_link}";
+            }
+            if ($instagramItem->ios_link) {
+                $linksSection .= "\n- تطبيق آيفون (iOS): {$instagramItem->ios_link}";
+            }
+        }
+
+        $instructions = <<<PROMPT
+        {$aiContext}
+        {$fileDataSection}
+        {$linksSection}
+
+        التعليمات الصارمة للرد على تعليقات انستجرام:
+        - أنت ممثل خدمة عملاء محترف ومؤدب جداً على انستجرام. استخدم لغة عربية ودودة، راقية، ومحترمة ومهذبة للغاية.
+        - رحب بالعميل باسمه أو حسابه دائماً في بداية الرد (مثال: أهلاً وسهلاً بك يا {$senderName} 🌸).
+        - العميل قام بكتابة تعليق على منشور لنا على انستجرام، لذا يجب أن يكون الرد الخاص على الدايركت (Direct) متصلاً بسياق البوست وسؤاله في التعليق.
+        - أجب بدقة على استفساره بالاعتماد الحصري على "بيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة" المذكورة أعلاه، ولا تخترع أي معلومات أو أسعار غير موجودة.
+        - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، اعتذر له بلباقة وأخبره أنه غير متوفر حالياً.
+        - إذا طلب العميل أو سأل عن كيفية الطلب، وضح له بلباقة روابط الطلب المتوفرة أعلاه.
+        - اختم الرسالة الخاصة دائماً بعبارة ترحيبية راقية مثل: «نسعد دائماً بخدمتك، ولو عندك أي استفسار آخر لا تتردد في مراسلتنا في أي وقت! 😊».
+
+        يجب أن تعيد الناتج بتنسيق JSON فقط بدون أي علامات markdown:
+        {
+          "is_inquiry": true,
+          "public_comment_reply": "نص الرد العام على التعليق في البوست على انستجرام",
+          "private_reply": "نص الرسالة الخاصة الترحيبية المفصلة والمهذبة التي ستُرسل له على الخاص (إذا كان استفساراً)، أو null إذا لم يكن استفساراً"
+        }
+        PROMPT;
+
+        $postSummary = ! empty($postCaption) ? $postCaption : '(منشور عام على انستجرام)';
+        $userInput = <<<INPUT
+        بيانات تفاعل العميل على انستجرام:
+        - حساب / اسم العميل: {$senderName}
+        - محتوى المنشور (البوست) الذي علّق عليه:
+        "{$postSummary}"
+
+        - تعليق العميل على المنشور:
+        "{$commentText}"
+        INPUT;
+
+        try {
+            $model = env('OPENAI_MODEL', 'gpt-4o-mini');
+
+            $rawOutput = '';
+            try {
+                $response = OpenAI::responses()->create([
+                    'model' => $model,
+                    'instructions' => $instructions,
+                    'input' => $userInput,
+                ]);
+                $rawOutput = trim((string) ($response->outputText ?? ''));
+            } catch (\Throwable $respException) {
+                // Fallback to chat completion if responses API fails
+                $response = OpenAI::chat()->create([
+                    'model' => $model,
+                    'messages' => [
+                        ['role' => 'system', 'content' => $instructions],
+                        ['role' => 'user', 'content' => $userInput],
+                    ],
+                ]);
+                $rawOutput = trim((string) ($response->choices[0]->message->content ?? ''));
+            }
+
+            if (empty($rawOutput)) {
+                return null;
+            }
+
+            // Clean markdown code blocks if present
+            $cleanJson = preg_replace('/^```(?:json)?\s*/i', '', $rawOutput);
+            $cleanJson = preg_replace('/\s*```$/', '', (string) $cleanJson);
+
+            $parsed = json_decode((string) $cleanJson, true);
+
+            if (is_array($parsed) && isset($parsed['is_inquiry'])) {
+                return [
+                    'is_inquiry' => (bool) $parsed['is_inquiry'],
+                    'public_comment_reply' => (string) ($parsed['public_comment_reply'] ?? ''),
+                    'private_reply' => ! empty($parsed['private_reply'])
+                        ? (string) $parsed['private_reply']
+                        : (! empty($parsed['private_messenger_reply']) ? (string) $parsed['private_messenger_reply'] : null),
+                ];
+            }
+
+            // Heuristic fallback if JSON decoding failed
+            $isInquiry = $this->isOrderIntent($commentText)
+                || str_contains($commentText, '؟')
+                || str_contains($commentText, '?')
+                || str_contains($commentText, 'كام')
+                || str_contains($commentText, 'بكام')
+                || str_contains($commentText, 'سعر')
+                || str_contains($commentText, 'توصيل')
+                || str_contains($commentText, 'عنوان');
+
+            return [
+                'is_inquiry' => $isInquiry,
+                'public_comment_reply' => $isInquiry
+                    ? "أهلاً بك يا {$senderName}! تم الرد على الخاص بالتفاصيل كاملة، يسعدنا تواصلك دائماً 😊"
+                    : "شكراً جزيلاً لك يا {$senderName}! يسعدنا تواصلك ونتشرف بك دائماً ❤️",
+                'private_reply' => $isInquiry ? $rawOutput : null,
+            ];
+        } catch (\Throwable $e) {
+            Log::warning('[IG_COMMENTS] OpenAI getInstagramCommentAiDecision exception: '.$e->getMessage());
+
+            return null;
+        }
     }
 
     /**
