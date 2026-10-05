@@ -303,11 +303,8 @@ class SubscriperController extends Controller
                 'next_order_price' => $renewalInfo['expected_amount'],
                 'next_order' => $renewalInfo['next_order'],
                 'messengerAccounts' => $messengerAccounts,
-                'messenger_accounts' => $messengerAccounts,
                 'whatsItems' => $whatsItems,
-                'whatsapp_items' => $whatsItems,
                 'instagramItems' => $instagramItems,
-                'instagram_items' => $instagramItems,
             ],
         ]);
     }
