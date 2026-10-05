@@ -425,7 +425,7 @@ trait paymob
                         Http::post(
                             "https://graph.facebook.com/{$graphVersion}/{$instagramItem->page_id}/subscribed_apps",
                             [
-                                'subscribed_fields' => 'messages,messaging_postbacks,message_reads',
+                                'subscribed_fields' => 'messages,messaging_postbacks,message_reads,feed,comments',
                                 'access_token' => $instagramItem->access_token,
                             ]
                         );

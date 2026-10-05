@@ -4,6 +4,7 @@ use App\Models\InstagramItem;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schedule;
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
@@ -34,7 +35,7 @@ Artisan::command('instagram:subscribe {id?}', function (?string $id = null) {
     $response = Http::post(
         "https://graph.facebook.com/{$graphVersion}/{$item->page_id}/subscribed_apps",
         [
-            'subscribed_fields' => 'messages,messaging_postbacks,message_reads',
+            'subscribed_fields' => 'messages,messaging_postbacks,message_reads,feed,comments',
             'access_token' => $item->access_token,
         ]
     );
@@ -60,3 +61,6 @@ Artisan::command('instagram:subscribe {id?}', function (?string $id = null) {
 
     return 1;
 })->purpose('Subscribe InstagramItem connected page to Meta webhooks');
+
+// Schedule polling for Instagram comments every minute as a reliable automation fallback
+Schedule::command('ig:poll-comments')->everyMinute()->withoutOverlapping(10);
