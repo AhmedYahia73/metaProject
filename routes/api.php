@@ -164,8 +164,6 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     // Dashboard Statistics
     Route::get('contact_us', [ContactUsController::class, 'index']);
     Route::get('subscripers', [SubscriperController::class, 'subscripers']);
-    Route::get('subscripers/{id}', [SubscriperController::class, 'subscriper']);
-    Route::get('subscriper/{id}', [SubscriperController::class, 'subscriper']);
     Route::get('subscriper', [SubscriperController::class, 'subscriper']);
 
     Route::get('user_lists', [DashboardController::class, 'user_lists']);
