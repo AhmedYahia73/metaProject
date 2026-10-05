@@ -93,6 +93,11 @@ class SubscriperController extends Controller
 
         $transform = function (User $user): array {
          
+            $availableMsgs = (int) (
+                $user->messengerAccounts->sum('msg_number') +
+                $user->whatsItems->sum('msg_number') +
+                $user->instagramItems->sum('msg_number')
+            );
             return [
                 'id' => $user->id,
                 'name' => $user->name,
