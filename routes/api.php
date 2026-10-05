@@ -139,6 +139,7 @@ Route::prefix('user')->group(function () {
         Route::get('instagram/accounts', [InstagramPagesController::class, 'accounts']);
         Route::post('instagram/orders', [InstagramPagesController::class, 'requestSubscription']);
         Route::get('instagram/items', [InstagramPagesController::class, 'items']);
+        Route::post('instagram/update-token', [InstagramPagesController::class, 'updateToken']);
 
         // Live Chat / Inbox (Instagram)
         Route::get('chat/instagram/accounts', [ChatController::class, 'instagramAccounts']);

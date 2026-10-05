@@ -7,6 +7,7 @@ use App\Models\InstagramItem;
 use App\Models\MessengerAccount;
 use App\Models\Order;
 use App\Models\Package;
+use App\Services\MetaPageTokenService;
 use App\trait\image;
 use App\trait\paymob;
 use Illuminate\Http\JsonResponse;
@@ -449,6 +450,55 @@ class InstagramPagesController extends Controller
         return response()->json([
             'status' => true,
             'data' => $items,
+        ]);
+    }
+
+    /**
+     * Update access token for user and/or InstagramItem, automatically sanitizing and syncing.
+     */
+    public function updateToken(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'access_token' => 'required|string',
+            'account_id' => 'sometimes|nullable|integer',
+        ]);
+
+        $cleanToken = MetaPageTokenService::sanitizeToken($validated['access_token']);
+        $user = $request->user();
+
+        if ($user) {
+            $user->update(['facebook_access_token' => $cleanToken]);
+        }
+
+        $accountId = $validated['account_id'] ?? null;
+        $item = null;
+        if ($accountId) {
+            $item = InstagramItem::find($accountId);
+        } elseif ($user) {
+            $item = InstagramItem::where('user_id', $user->id)->first();
+        }
+
+        if ($item) {
+            $item->update(['access_token' => $cleanToken]);
+        }
+
+        $syncResult = null;
+        if ($user) {
+            /** @var MetaPageTokenService $service */
+            $service = app(MetaPageTokenService::class);
+            $syncResult = $service->syncUserPagesAndTokens($user, $cleanToken);
+        }
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Access token updated and synced successfully.',
+            'data' => [
+                'user_id' => $user?->id,
+                'account_id' => $item?->id,
+                'token_sanitized' => $cleanToken !== $validated['access_token'],
+                'current_token_prefix' => substr((string) ($item?->access_token ?? $cleanToken), 0, 15).'...',
+                'sync_result' => $syncResult,
+            ],
         ]);
     }
 }

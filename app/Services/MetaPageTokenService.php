@@ -19,11 +19,35 @@ class MetaPageTokenService
     }
 
     /**
+     * Sanitize a token by trimming whitespace and stripping accidental duplicate prefixes.
+     */
+    public static function sanitizeToken(?string $token): ?string
+    {
+        if (empty($token)) {
+            return $token;
+        }
+
+        $token = trim($token);
+
+        // Fix accidental duplicate prefix e.g. "EAAV123EAAV123abc..." -> "EAAV123abc..."
+        $lastEaaPos = strrpos($token, 'EAA');
+        if ($lastEaaPos !== false && $lastEaaPos > 0) {
+            $candidate = substr($token, $lastEaaPos);
+            if (strlen($candidate) >= 30) {
+                $token = $candidate;
+            }
+        }
+
+        return $token;
+    }
+
+    /**
      * Exchange a short-lived Facebook User Access Token (1-2 hours) for a long-lived token (60 days).
      * If app_id or app_secret are not configured, returns the original token.
      */
     public function exchangeForLongLivedToken(string $shortLivedToken): string
     {
+        $shortLivedToken = self::sanitizeToken($shortLivedToken) ?: $shortLivedToken;
         $appId = config('services.meta.app_id');
         $appSecret = config('services.meta.app_secret');
 
@@ -69,7 +93,13 @@ class MetaPageTokenService
      */
     public function syncUserPagesAndTokens(User $user, ?string $userAccessToken = null): array
     {
-        $token = $userAccessToken ?: $user->facebook_access_token;
+        $rawToken = $userAccessToken ?: $user->facebook_access_token;
+        $token = self::sanitizeToken($rawToken);
+
+        if (! empty($token) && ! empty($user->facebook_access_token) && $token !== $user->facebook_access_token) {
+            $user->update(['facebook_access_token' => $token]);
+            Log::info("MetaPageTokenService: automatically sanitized malformed facebook_access_token for User #{$user->id}");
+        }
 
         if (empty($token)) {
             return [
@@ -161,6 +191,18 @@ class MetaPageTokenService
                     }
                     $igItem->update($igUpdate);
                     $instagramUpdated++;
+                }
+
+                if ($instagramItems->isEmpty()) {
+                    $singleItem = InstagramItem::where('user_id', $user->id)->first();
+                    if ($singleItem && InstagramItem::where('user_id', $user->id)->count() === 1) {
+                        $igUpdate = ['access_token' => $pageToken, 'page_id' => $pageId];
+                        if ($igId) {
+                            $igUpdate['instagram_id'] = $igId;
+                        }
+                        $singleItem->update($igUpdate);
+                        $instagramUpdated++;
+                    }
                 }
             }
 

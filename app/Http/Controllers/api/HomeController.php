@@ -2279,7 +2279,11 @@ class HomeController extends Controller
     private function replyToInstagramComment(string $accessToken, string $commentId, string $message, ?InstagramItem $item = null): bool
     {
         try {
-            $token = $item?->access_token ?: $accessToken;
+            $token = MetaPageTokenService::sanitizeToken($item?->access_token ?: $accessToken);
+            if ($item && ! empty($token) && $token !== $item->access_token) {
+                $item->update(['access_token' => $token]);
+            }
+
             $response = Http::withToken($token)
                 ->post(self::GRAPH_API_BASE."/{$commentId}/replies", [
                     'message' => $message,
@@ -2292,7 +2296,8 @@ class HomeController extends Controller
                     Log::channel('stack')->warning("[IG_COMMENTS] Token expired for comment reply, attempting refresh for item #{$item->id}");
                     $refreshedToken = $tokenService->refreshInstagramItemToken($item);
                     if ($refreshedToken) {
-                        $response = Http::withToken($refreshedToken)
+                        $token = MetaPageTokenService::sanitizeToken($refreshedToken);
+                        $response = Http::withToken($token)
                             ->post(self::GRAPH_API_BASE."/{$commentId}/replies", [
                                 'message' => $message,
                             ]);
@@ -2301,9 +2306,14 @@ class HomeController extends Controller
             }
 
             // Fallback: If Page Access Token was rejected, try the user's facebook_access_token (User Access Token)
-            if (! $response->successful() && ! empty($item?->user?->facebook_access_token) && $item->user->facebook_access_token !== $token) {
+            $userToken = MetaPageTokenService::sanitizeToken($item?->user?->facebook_access_token);
+            if ($item?->user && ! empty($userToken) && $userToken !== $item->user->facebook_access_token) {
+                $item->user->update(['facebook_access_token' => $userToken]);
+            }
+
+            if (! $response->successful() && ! empty($userToken) && $userToken !== $token) {
                 Log::channel('stack')->info("[IG_COMMENTS] Page token reply failed, retrying with user's facebook_access_token for item #{$item->id}");
-                $userTokenResponse = Http::withToken($item->user->facebook_access_token)
+                $userTokenResponse = Http::withToken($userToken)
                     ->post(self::GRAPH_API_BASE."/{$commentId}/replies", [
                         'message' => $message,
                     ]);
@@ -2343,7 +2353,12 @@ class HomeController extends Controller
     private function sendPrivateReplyToInstagramComment(string $accessToken, string $commentId, string $message, ?InstagramItem $item = null): ?array
     {
         try {
-            $token = $item?->fresh()?->access_token ?: ($item?->access_token ?: $accessToken);
+            $rawToken = $item?->fresh()?->access_token ?: ($item?->access_token ?: $accessToken);
+            $token = MetaPageTokenService::sanitizeToken($rawToken);
+            if ($item && ! empty($token) && $token !== $item->access_token) {
+                $item->update(['access_token' => $token]);
+            }
+
             $response = Http::withToken($token)
                 ->post(self::GRAPH_API_BASE.'/me/messages', [
                     'recipient' => [
@@ -2361,7 +2376,7 @@ class HomeController extends Controller
                     Log::channel('stack')->warning("[IG_COMMENTS] Token expired for private reply, attempting refresh for item #{$item->id}");
                     $refreshedToken = $tokenService->refreshInstagramItemToken($item);
                     if ($refreshedToken) {
-                        $token = $refreshedToken;
+                        $token = MetaPageTokenService::sanitizeToken($refreshedToken);
                         $response = Http::withToken($token)
                             ->post(self::GRAPH_API_BASE.'/me/messages', [
                                 'recipient' => [
