@@ -92,27 +92,13 @@ class SubscriperController extends Controller
         }
 
         $transform = function (User $user): array {
-            $availableMsgs = (int) (
-                $user->messengerAccounts->sum('msg_number') +
-                $user->whatsItems->sum('msg_number') +
-                $user->instagramItems->sum('msg_number')
-            );
-
-            $renewalInfo = $this->getNextRenewalInfo($user);
-
+         
             return [
                 'id' => $user->id,
                 'name' => $user->name,
                 'email' => $user->email,
                 'phone' => $user->phone,
-                'available_msgs' => $availableMsgs,
-                'messenger_accounts_count' => $user->messengerAccounts->count(),
-                'whatsapp_items_count' => $user->whatsItems->count(),
-                'instagram_items_count' => $user->instagramItems->count(),
-                'renewal_date' => $renewalInfo['renewal_date'],
-                'next_renewal_date' => $renewalInfo['renewal_date'],
-                'next_order_price' => $renewalInfo['expected_amount'],
-                'next_order' => $renewalInfo['next_order'],
+                'available_msgs' => $availableMsgs, 
             ];
         };
 
@@ -203,15 +189,11 @@ class SubscriperController extends Controller
                 'page_name' => $account->page_name,
                 'page_id' => $account->page_id,
                 'available_msgs' => max(0, (int) $account->msg_number),
-                'remaining_msgs' => max(0, (int) $account->msg_number),
-                'msg_number' => max(0, (int) $account->msg_number),
                 'from' => $from,
                 'to' => $to,
                 'start_date' => $from,
                 'end_date' => $to,
-                'is_subscribed' => $isSubscribed,
                 'is_subscripe' => $isSubscribed,
-                'subscribed' => $isSubscribed,
                 'renewal_date' => $to,
                 'status' => $account->status,
             ];
@@ -237,15 +219,9 @@ class SubscriperController extends Controller
                 'name' => $item->phone,
                 'phone' => $item->phone,
                 'available_msgs' => max(0, (int) $item->msg_number),
-                'remaining_msgs' => max(0, (int) $item->msg_number),
-                'msg_number' => max(0, (int) $item->msg_number),
                 'from' => $from,
-                'to' => $to,
-                'start_date' => $from,
-                'end_date' => $to,
-                'is_subscribed' => $isSubscribed,
+                'to' => $to, 
                 'is_subscripe' => $isSubscribed,
-                'subscribed' => $isSubscribed,
                 'renewal_date' => $to,
                 'phone_status' => $item->phone_status,
                 'status' => $item->phone_status,
@@ -272,15 +248,11 @@ class SubscriperController extends Controller
                 'name' => $item->name ?: $item->username,
                 'username' => $item->username,
                 'available_msgs' => max(0, (int) $item->msg_number),
-                'remaining_msgs' => max(0, (int) $item->msg_number),
-                'msg_number' => max(0, (int) $item->msg_number),
                 'from' => $from,
                 'to' => $to,
                 'start_date' => $from,
                 'end_date' => $to,
-                'is_subscribed' => $isSubscribed,
                 'is_subscripe' => $isSubscribed,
-                'subscribed' => $isSubscribed,
                 'renewal_date' => $to,
                 'status' => $item->status,
             ];
@@ -298,8 +270,6 @@ class SubscriperController extends Controller
                 'whatsapp_items_count' => $user->whatsItems->count(),
                 'instagram_items_count' => $user->instagramItems->count(),
                 'renewal_date' => $renewalInfo['renewal_date'],
-                'next_renewal_date' => $renewalInfo['renewal_date'],
-                'expected_amount' => $renewalInfo['expected_amount'],
                 'next_order_price' => $renewalInfo['expected_amount'],
                 'next_order' => $renewalInfo['next_order'],
                 'messengerAccounts' => $messengerAccounts,

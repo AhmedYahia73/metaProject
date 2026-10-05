@@ -174,7 +174,6 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
         Route::get('orders', [ReportController::class, 'order_report']);
         Route::get('messages', [ReportController::class, 'message_report']);
         Route::get('subscribers', [ReportController::class, 'subscribers_report']);
-        Route::get('expiring-subscriptions', [ReportController::class, 'expiring_subscriptions_report']);
     });
 
     // Lookup endpoint for dropdowns (id & name for taxes and discounts)
