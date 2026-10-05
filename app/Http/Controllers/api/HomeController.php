@@ -2300,6 +2300,18 @@ class HomeController extends Controller
                 }
             }
 
+            // Fallback: If Page Access Token was rejected, try the user's facebook_access_token (User Access Token)
+            if (! $response->successful() && ! empty($item?->user?->facebook_access_token) && $item->user->facebook_access_token !== $token) {
+                Log::channel('stack')->info("[IG_COMMENTS] Page token reply failed, retrying with user's facebook_access_token for item #{$item->id}");
+                $userTokenResponse = Http::withToken($item->user->facebook_access_token)
+                    ->post(self::GRAPH_API_BASE."/{$commentId}/replies", [
+                        'message' => $message,
+                    ]);
+                if ($userTokenResponse->successful()) {
+                    $response = $userTokenResponse;
+                }
+            }
+
             if ($response->successful()) {
                 Log::channel('stack')->info("[IG_COMMENTS] ✓ Comment reply sent to {$commentId}");
 
@@ -2308,6 +2320,10 @@ class HomeController extends Controller
 
             Log::channel('stack')->error("[IG_COMMENTS] ✗ Comment reply failed for {$commentId}", [
                 'status' => $response->status(),
+                'error_code' => $response->json('error.code'),
+                'error_subcode' => $response->json('error.error_subcode'),
+                'error_message' => $response->json('error.message'),
+                'error_type' => $response->json('error.type'),
                 'body' => $response->json(),
             ]);
 
@@ -2345,7 +2361,8 @@ class HomeController extends Controller
                     Log::channel('stack')->warning("[IG_COMMENTS] Token expired for private reply, attempting refresh for item #{$item->id}");
                     $refreshedToken = $tokenService->refreshInstagramItemToken($item);
                     if ($refreshedToken) {
-                        $response = Http::withToken($refreshedToken)
+                        $token = $refreshedToken;
+                        $response = Http::withToken($token)
                             ->post(self::GRAPH_API_BASE.'/me/messages', [
                                 'recipient' => [
                                     'comment_id' => $commentId,
@@ -2355,6 +2372,23 @@ class HomeController extends Controller
                                 ],
                             ]);
                     }
+                }
+            }
+
+            // Fallback: If /me/messages failed and we have a page_id, retry via /{page_id}/messages
+            if (! $response->successful() && ! empty($item?->page_id)) {
+                Log::channel('stack')->info("[IG_COMMENTS] /me/messages failed, retrying via /{$item->page_id}/messages for item #{$item->id}");
+                $pageEndpointResponse = Http::withToken($token)
+                    ->post(self::GRAPH_API_BASE."/{$item->page_id}/messages", [
+                        'recipient' => [
+                            'comment_id' => $commentId,
+                        ],
+                        'message' => [
+                            'text' => $message,
+                        ],
+                    ]);
+                if ($pageEndpointResponse->successful()) {
+                    $response = $pageEndpointResponse;
                 }
             }
 
@@ -2368,6 +2402,10 @@ class HomeController extends Controller
 
             Log::channel('stack')->error("[IG_COMMENTS] ✗ Private reply failed for comment {$commentId}", [
                 'status' => $response->status(),
+                'error_code' => $response->json('error.code'),
+                'error_subcode' => $response->json('error.error_subcode'),
+                'error_message' => $response->json('error.message'),
+                'error_type' => $response->json('error.type'),
                 'body' => $response->json(),
             ]);
 
