@@ -434,12 +434,40 @@ class HomeController extends Controller
 
             $senderId = (string) data_get($messagingEvent, 'sender.id');
             $messageText = trim((string) data_get($messagingEvent, 'message.text', ''));
+            $mid = (string) data_get($messagingEvent, 'message.mid', '');
 
             Log::channel('stack')->info('[MESSENGER] ✓ Message event', [
                 'sender_psid' => $senderId,
                 'message_text' => $messageText,
-                'mid' => data_get($messagingEvent, 'message.mid'),
+                'mid' => $mid,
             ]);
+
+            // ── Deduplication Layer 1: Unique MID ──
+            if (! empty($mid)) {
+                $midCacheKey = "msgr_msg_mid_{$mid}";
+                if (! Cache::add($midCacheKey, true, now()->addMinutes(15))) {
+                    Log::channel('stack')->info("[MESSENGER] Duplicate message ignored (MID already processed): {$mid}");
+
+                    return response()->json(['status' => 'duplicate_mid_ignored', 'mid' => $mid], Response::HTTP_OK);
+                }
+
+                if (Chat::where('meta_message_id', $mid)->exists()) {
+                    Log::channel('stack')->info("[MESSENGER] Duplicate message ignored (MID exists in Chat DB): {$mid}");
+
+                    return response()->json(['status' => 'duplicate_db_ignored', 'mid' => $mid], Response::HTTP_OK);
+                }
+            }
+
+            // ── Deduplication Layer 2: Sender + Content Fingerprint (8s window) ──
+            if (! empty($senderId) && ! empty($messageText)) {
+                $contentHash = md5("{$senderId}_{$messageText}");
+                $fpCacheKey = "msgr_msg_fp_{$contentHash}";
+                if (! Cache::add($fpCacheKey, true, now()->addSeconds(8))) {
+                    Log::channel('stack')->info("[MESSENGER] Duplicate message ignored (identical text from {$senderId} within 8s)");
+
+                    return response()->json(['status' => 'duplicate_fingerprint_ignored'], Response::HTTP_OK);
+                }
+            }
 
             // Ignore non-text messages (attachments, stickers, etc.)
             if (empty($messageText)) {
@@ -1385,134 +1413,54 @@ class HomeController extends Controller
 
             $senderName = 'Instagram User';
 
-            // Check echoed messages
+            // ── Ignore all echo messages immediately (echoes are outbound messages sent by bot/page)
             if ($isEcho) {
-                // If the message was sent OUTBOUND by our own bot account in the DB, ignore it to prevent loops
-                if ($senderAccount && $senderAccount->status === 'active') {
-                    $this->logInstagramEvent('ECHO_IGNORED', "✓ Echo ignored — message was sent OUTBOUND by the bot account #{$senderAccount->id} (@{$senderAccount->username}) to recipient {$recipientId}", [
+                $this->logInstagramEvent('ECHO_IGNORED', '✓ Echo ignored — outbound message event (is_echo = true)', [
+                    'sender_id' => $senderId,
+                    'recipient_id' => $recipientId,
+                    'entry_id' => $entryId,
+                    'mid' => $mid,
+                    'text' => $messageText,
+                ]);
+
+                return response()->json(['status' => 'echo_ignored', 'diagnostic' => $diagnostic], Response::HTTP_OK);
+            }
+
+            // ── Layer 1 Deduplication: Atomic Cache Lock + DB Check on unique MID ──
+            if (! empty($mid)) {
+                $midCacheKey = "ig_msg_mid_{$mid}";
+                if (! Cache::add($midCacheKey, true, now()->addMinutes(15))) {
+                    $this->logInstagramEvent('DUPLICATE_MID_IGNORED', "✓ Duplicate message ignored — MID already processing or processed: {$mid}", [
+                        'mid' => $mid,
                         'sender_id' => $senderId,
-                        'recipient_id' => $recipientId,
-                        'entry_id' => $entryId,
-                        'is_echo' => true,
                         'text' => $messageText,
                     ]);
 
-                    return response()->json(['status' => 'echo_ignored', 'diagnostic' => $diagnostic], Response::HTTP_OK);
+                    return response()->json(['status' => 'duplicate_mid_ignored', 'mid' => $mid], Response::HTTP_OK);
                 }
 
-                // If is_echo is true BUT the sender is NOT one of our bot accounts:
-                // Meta sends echo events for tester/admin accounts when they send a DM to our business page.
-                // We resolve the target InstagramItem and fetch the real customer IGSID from Meta Graph API.
-                $activeItems = InstagramItem::where('status', 'active')->whereNotNull('access_token')->get();
-                $resolvedFromGraph = false;
-                $senderIdB64 = ! empty($senderId) ? (string) base64_encode($senderId) : '';
-
-                foreach ($activeItems as $candidateItem) {
-                    $midsToTry = [];
-                    if (! empty($mid)) {
-                        $midsToTry[] = $mid;
-                        if (! empty($senderIdB64) && ! empty($candidateItem->instagram_id)) {
-                            $botIdB64 = (string) base64_encode((string) $candidateItem->instagram_id);
-                            if (str_contains($mid, $senderIdB64)) {
-                                $midsToTry[] = str_replace($senderIdB64, $botIdB64, $mid);
-                            }
-                        }
-                    }
-
-                    // 1. Try querying message by MID (both original and swapped)
-                    foreach ($midsToTry as $mIdToTry) {
-                        try {
-                            $msgResponse = Http::timeout(5)->get(self::GRAPH_API_BASE."/{$mIdToTry}", [
-                                'fields' => 'id,from,to,message',
-                                'access_token' => $candidateItem->access_token,
-                            ]);
-
-                            if ($msgResponse->successful()) {
-                                $fromId = (string) $msgResponse->json('from.id');
-                                $fromUsername = (string) ($msgResponse->json('from.username') ?? '');
-                                $fetchedText = (string) ($msgResponse->json('message') ?? $messageText);
-
-                                // Verify that this message was NOT sent by the bot account itself
-                                if (! empty($fromId) && $fromId !== (string) $candidateItem->instagram_id) {
-                                    $senderId = $fromId;
-                                    if (! empty($fromUsername)) {
-                                        $senderName = $fromUsername;
-                                    }
-                                    if (! empty($fetchedText)) {
-                                        $messageText = $fetchedText;
-                                    }
-                                    $instagramItem = $candidateItem;
-                                    $targetInstagramId = (string) $candidateItem->instagram_id;
-                                    $resolvedFromGraph = true;
-
-                                    $this->logInstagramEvent('INBOUND_RESOLVED', "✓ Resolved customer message from tester echo event for @{$candidateItem->username} from @{$senderName} ({$fromId})", [
-                                        'sender_id' => $senderId,
-                                        'target_account' => $candidateItem->username,
-                                        'message_text' => $messageText,
-                                        'mid' => $mIdToTry,
-                                    ]);
-                                    break 2;
-                                }
-                            }
-                        } catch (\Throwable $ex) {
-                            Log::warning('[INSTAGRAM] Failed to query message details from Graph API: '.$ex->getMessage());
-                        }
-                    }
-
-                    // 2. Fallback: query recent conversations on this page
-                    if (! empty($candidateItem->page_id)) {
-                        try {
-                            $convResponse = Http::timeout(5)->get(self::GRAPH_API_BASE."/{$candidateItem->page_id}/conversations", [
-                                'platform' => 'instagram',
-                                'limit' => 3,
-                                'fields' => 'participants,messages.limit(1){message,from,to}',
-                                'access_token' => $candidateItem->access_token,
-                            ]);
-
-                            if ($convResponse->successful()) {
-                                $convs = $convResponse->json('data', []);
-                                foreach ($convs as $conv) {
-                                    $latestMsg = data_get($conv, 'messages.data.0');
-                                    if ($latestMsg) {
-                                        $fromId = (string) data_get($latestMsg, 'from.id');
-                                        $fromUsername = (string) data_get($latestMsg, 'from.username');
-                                        $convText = (string) data_get($latestMsg, 'message');
-
-                                        if (! empty($fromId) && $fromId !== (string) $candidateItem->instagram_id && $convText === $messageText) {
-                                            $senderId = $fromId;
-                                            if (! empty($fromUsername)) {
-                                                $senderName = $fromUsername;
-                                            }
-                                            $messageText = $convText;
-                                            $instagramItem = $candidateItem;
-                                            $targetInstagramId = (string) $candidateItem->instagram_id;
-                                            $resolvedFromGraph = true;
-
-                                            $this->logInstagramEvent('INBOUND_RESOLVED', "✓ Resolved customer message from conversation lookup for @{$candidateItem->username} from @{$senderName} ({$fromId})", [
-                                                'sender_id' => $senderId,
-                                                'target_account' => $candidateItem->username,
-                                                'message_text' => $messageText,
-                                            ]);
-                                            break 2;
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (\Throwable $ex) {
-                            Log::warning('[INSTAGRAM] Conversation fallback query failed: '.$ex->getMessage());
-                        }
-                    }
-                }
-
-                if (! $resolvedFromGraph) {
-                    $this->logInstagramEvent('ECHO_IGNORED', "✓ Echo ignored — message originated from external account {$senderId}", [
-                        'sender_id' => $senderId,
-                        'recipient_id' => $recipientId,
-                        'entry_id' => $entryId,
-                        'text' => $messageText,
+                if (Chat::where('meta_message_id', $mid)->exists()) {
+                    $this->logInstagramEvent('DUPLICATE_DB_IGNORED', "✓ Duplicate message ignored — MID exists in Chat DB: {$mid}", [
+                        'mid' => $mid,
                     ]);
 
-                    return response()->json(['status' => 'echo_ignored', 'diagnostic' => $diagnostic], Response::HTTP_OK);
+                    return response()->json(['status' => 'duplicate_db_ignored', 'mid' => $mid], Response::HTTP_OK);
+                }
+            }
+
+            // ── Layer 2 Deduplication: Sender + Content Fingerprint (8s window) ──
+            // Protects against duplicate deliveries that may carry different MIDs
+            if (! empty($senderId) && ! empty($messageText)) {
+                $contentHash = md5("{$senderId}_{$messageText}");
+                $fpCacheKey = "ig_msg_fp_{$contentHash}";
+                if (! Cache::add($fpCacheKey, true, now()->addSeconds(8))) {
+                    $this->logInstagramEvent('DUPLICATE_FP_IGNORED', "✓ Duplicate message ignored — identical text from {$senderId} within 8s", [
+                        'sender_id' => $senderId,
+                        'text' => $messageText,
+                        'mid' => $mid,
+                    ]);
+
+                    return response()->json(['status' => 'duplicate_fingerprint_ignored'], Response::HTTP_OK);
                 }
             }
 
@@ -1602,6 +1550,13 @@ class HomeController extends Controller
                 } elseif (! empty($profile['username'])) {
                     $senderName = $profile['username'];
                 }
+            }
+
+            // Final safety check: ensure this exact meta_message_id hasn't been saved concurrently
+            if (! empty($mid) && Chat::where('meta_message_id', $mid)->exists()) {
+                $this->logInstagramEvent('CONCURRENT_DUPLICATE_IGNORED', "✓ Duplicate message caught right before DB insert: {$mid}");
+
+                return response()->json(['status' => 'already_saved'], Response::HTTP_OK);
             }
 
             // Save incoming customer message
