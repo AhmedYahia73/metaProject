@@ -452,20 +452,7 @@ class HomeController extends Controller
 
             // Check Messenger-specific message limit on the MessengerAccount
             if (! $messengerAccount->hasActiveSubscription()) {
-                Log::channel('stack')->warning("[MESSENGER] ✗ Limit exceeded or inactive subscription for account #{$messengerAccount->id} (restaurant #{$restaurant->id})");
-
-                try {
-                    if (! empty($messengerAccount->page_access_token)) {
-                        $fallbackReply = 'أهلاً بك! شكراً لتواصلك معنا. فريق خدمة العملاء سيتواصل معك في أقرب وقت للرد على استفسارك بالتفصيل. يسعدنا دائماً خدمتك!';
-                        $this->sendMessengerMessage(
-                            pageAccessToken: $messengerAccount->page_access_token,
-                            recipientId: $senderId,
-                            text: $fallbackReply,
-                        );
-                    }
-                } catch (\Throwable $fallbackException) {
-                    Log::warning('[MESSENGER] Fallback send failed: '.$fallbackException->getMessage());
-                }
+                Log::channel('stack')->warning("[MESSENGER] ✗ Limit exceeded or inactive subscription for account #{$messengerAccount->id} (restaurant #{$restaurant->id}). No reply sent.");
 
                 return response()->json(['status' => 'limit_exceeded'], Response::HTTP_OK);
             }
@@ -746,62 +733,15 @@ class HomeController extends Controller
         $hasRemainingQuota = ((int) $messengerAccount->msg_number >= 1);
         $isAiAvailable = ($isWithinDates && $hasRemainingQuota);
 
-        // ── Branch A: AI/Quota is exhausted or expired ("لو ai خلصان")
+        // ── Branch A: AI/Quota is exhausted or expired ("لو مش مشترك أو الباقة خلصانة") — لا يتم الرد
         if (! $isAiAvailable) {
-            Log::channel('stack')->warning("[FB_COMMENTS] AI / Quota exhausted for account #{$messengerAccount->id}. Sending universal fallback.");
-
-            $fallbackCommentReply = "أهلاً بك يا {$senderName}! شكراً لتواصلك معنا، تم إرسال رسالة لحضرتك على الخاص ويسعدنا دائماً خدمتك.";
-            $fallbackMessengerReply = "أهلاً بك يا {$senderName}! شكراً لاهتمامك وتواصلك معنا بخصوص المنشور. فريق خدمة العملاء سيتواصل معك في أقرب وقت للرد على استفسارك بالتفصيل ومساعدتك. نسعد دائماً بخدمتك!";
-
-            $commentSent = $this->replyToFacebookComment(
-                pageAccessToken: $messengerAccount->page_access_token,
-                commentId: $commentId,
-                message: $fallbackCommentReply,
-                account: $messengerAccount,
-            );
-
-            $messengerSent = $this->sendPrivateReplyToComment(
-                pageAccessToken: $messengerAccount->fresh()?->page_access_token ?? $messengerAccount->page_access_token,
-                commentId: $commentId,
-                message: $fallbackMessengerReply,
-                account: $messengerAccount,
-            );
-
-            if ($messengerSent && ! empty($fallbackMessengerReply)) {
-                $recipientPsid = (string) ($messengerSent['recipient_id'] ?? $senderId);
-                $metaMid = (string) ($messengerSent['message_id'] ?? $commentId);
-
-                $newChat = Chat::create([
-                    'user_id' => $restaurant->id,
-                    'messenger_account_id' => $messengerAccount->id,
-                    'name' => $senderName,
-                    'phone' => null,
-                    'message' => $fallbackMessengerReply,
-                    'is_image' => false,
-                    'is_admin' => true,
-                    'sender_type' => 'bot',
-                    'is_read' => true,
-                    'channel' => 'messenger',
-                    'messenger_sender_id' => $recipientPsid,
-                    'meta_message_id' => $metaMid,
-                ]);
-
-                try {
-                    $chatData = $newChat->toArray();
-                    $chatData['page_id'] = $messengerAccount->page_id;
-                    MessengerEvent::dispatch($chatData);
-                } catch (\Throwable $e) {
-                    Log::warning('[FB_COMMENTS] MessengerEvent broadcast failed: '.$e->getMessage());
-                }
-            }
+            Log::channel('stack')->warning("[FB_COMMENTS] Limit exceeded or inactive subscription for account #{$messengerAccount->id} (restaurant #{$restaurant->id}). No reply sent.");
 
             Cache::put($cacheKey, true, now()->addDays(7));
 
             return response()->json([
-                'status' => 'fallback_sent',
+                'status' => 'limit_exceeded',
                 'reason' => 'quota_exhausted_or_expired',
-                'comment_sent' => $commentSent,
-                'messenger_sent' => (bool) $messengerSent,
             ], Response::HTTP_OK);
         }
 
@@ -1647,20 +1587,9 @@ class HomeController extends Controller
 
             // Check Instagram-specific message limit
             if (! $instagramItem->hasActiveSubscription()) {
-                $this->logInstagramEvent('QUOTA_EXCEEDED', "✗ Limit exceeded or inactive subscription for InstagramItem #{$instagramItem->id} (restaurant #{$restaurant->id})", [
+                $this->logInstagramEvent('QUOTA_EXCEEDED', "✗ Limit exceeded or inactive subscription for InstagramItem #{$instagramItem->id} (restaurant #{$restaurant->id}). No reply sent.", [
                     'available_msgs' => $instagramItem->msg_number,
                 ]);
-
-                try {
-                    $fallbackReply = 'أهلاً بك! شكراً لتواصلك معنا. فريق خدمة العملاء سيتواصل معك في أقرب وقت للرد على استفسارك بالتفصيل ومساعدتك. يسعدنا دائماً خدمتك!';
-                    $this->sendInstagramMessage(
-                        accessToken: $instagramItem->access_token,
-                        recipientId: $senderId,
-                        text: $fallbackReply,
-                    );
-                } catch (\Throwable $fallbackException) {
-                    Log::warning('[INSTAGRAM] Fallback send failed: '.$fallbackException->getMessage());
-                }
 
                 return response()->json(['status' => 'limit_exceeded'], Response::HTTP_OK);
             }
@@ -2028,63 +1957,15 @@ class HomeController extends Controller
         $hasRemainingQuota = ((int) $instagramItem->msg_number >= 1);
         $isAiAvailable = ($isWithinDates && $hasRemainingQuota && $instagramItem->status === 'active');
 
-        // ── Branch A: AI/Quota is exhausted or expired ("لو ai خلصان")
+        // ── Branch A: AI/Quota is exhausted or expired ("لو مش مشترك أو الباقة خلصانة") — لا يتم الرد
         if (! $isAiAvailable) {
-            Log::channel('stack')->warning("[IG_COMMENTS] AI / Quota exhausted for account #{$instagramItem->id}. Sending universal fallback.");
-
-            $fallbackCommentReply = "أهلاً بك يا {$senderName}! شكراً لتواصلك معنا، تم إرسال رسالة لحضرتك على الخاص ويسعدنا دائماً خدمتك.";
-            $fallbackPrivateReply = "أهلاً بك يا {$senderName}! شكراً لاهتمامك وتواصلك معنا بخصوص المنشور. فريق خدمة العملاء سيتواصل معك في أقرب وقت للرد على استفسارك بالتفصيل ومساعدتك. نسعد دائماً بخدمتك!";
-
-            $commentSent = $this->replyToInstagramComment(
-                accessToken: $instagramItem->access_token,
-                commentId: $commentId,
-                message: $fallbackCommentReply,
-                item: $instagramItem,
-            );
-
-            $privateSent = $this->sendPrivateReplyToInstagramComment(
-                accessToken: $instagramItem->fresh()?->access_token ?? $instagramItem->access_token,
-                commentId: $commentId,
-                message: $fallbackPrivateReply,
-                item: $instagramItem,
-            );
-
-            if ($commentSent || $privateSent) {
-                $chatMessage = $privateSent ? $fallbackPrivateReply : $fallbackCommentReply;
-                $recipientId = (string) (($privateSent['recipient_id'] ?? null) ?? $senderId);
-                $metaMid = (string) (($privateSent['message_id'] ?? null) ?? $commentId);
-
-                $newChat = Chat::create([
-                    'user_id' => $restaurant?->id,
-                    'instagram_item_id' => $instagramItem->id,
-                    'name' => $senderName,
-                    'phone' => null,
-                    'message' => $chatMessage,
-                    'is_image' => false,
-                    'is_admin' => true,
-                    'sender_type' => 'bot',
-                    'is_read' => true,
-                    'channel' => 'instagram',
-                    'instagram_sender_id' => $recipientId,
-                    'meta_message_id' => $metaMid,
-                ]);
-
-                try {
-                    $chatData = $newChat->toArray();
-                    $chatData['instagram_id'] = $instagramItem->instagram_id;
-                    InstagramEvent::dispatch($chatData);
-                } catch (\Throwable $e) {
-                    Log::warning('[IG_COMMENTS] InstagramEvent broadcast failed: '.$e->getMessage());
-                }
-            }
+            Log::channel('stack')->warning("[IG_COMMENTS] Limit exceeded or inactive subscription for account #{$instagramItem->id} (restaurant #{$restaurant?->id}). No reply sent.");
 
             Cache::put($cacheKey, true, now()->addDays(7));
 
             return response()->json([
-                'status' => 'fallback_sent',
+                'status' => 'limit_exceeded',
                 'reason' => 'quota_exhausted_or_expired',
-                'comment_sent' => $commentSent,
-                'instagram_sent' => (bool) $privateSent,
             ], Response::HTTP_OK);
         }
 
