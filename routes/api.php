@@ -112,7 +112,7 @@ Route::prefix('user')->group(function () {
 
         // WhatsApp Self-Service — list numbers, add number, OTP activation, and request subscription
         Route::get('whats/ai_data/{id}', [WhatsPagesController::class, 'ai_data']);
-        Route::post('whats/directSubscription', [WhatsPagesController::class, 'whats_directSubscription']);
+        Route::post('whats/directSubscription', [WhatsPagesController::class, 'directSubscription']);
         Route::get('whats/packages', [WhatsPagesController::class, 'whats_packages']);
         Route::get('whats/pages', [WhatsPagesController::class, 'pages']);
         Route::get('whats/items', [WhatsPagesController::class, 'index']);
