@@ -5,6 +5,7 @@ namespace App\Http\Controllers\api\admin;
 use App\Http\Controllers\Controller;
 use App\Models\MessengerAccount;
 use App\Models\User;
+use App\Services\MetaPageTokenService;
 use App\trait\image;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -64,6 +65,10 @@ class MessengerAccountController extends Controller
         }
 
         $account = MessengerAccount::create($validated);
+
+        if ($account->status === 'active' && ! empty($account->page_access_token)) {
+            app(MetaPageTokenService::class)->subscribeFacebookPage($account->page_id, $account->page_access_token);
+        }
 
         return response()->json([
             'status' => true,
@@ -134,6 +139,10 @@ class MessengerAccountController extends Controller
         }
 
         $messengerAccount->update($validated);
+
+        if ($messengerAccount->status === 'active' && ! empty($messengerAccount->page_access_token)) {
+            app(MetaPageTokenService::class)->subscribeFacebookPage($messengerAccount->page_id, $messengerAccount->page_access_token);
+        }
 
         return response()->json([
             'status' => true,

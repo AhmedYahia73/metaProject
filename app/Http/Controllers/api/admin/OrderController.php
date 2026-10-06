@@ -8,11 +8,11 @@ use App\Models\MessengerAccount;
 use App\Models\Order;
 use App\Models\Package;
 use App\Models\User;
+use App\Services\MetaPageTokenService;
 use App\trait\image;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -389,25 +389,11 @@ class OrderController extends Controller
 
                 $account->update($accountUpdate);
 
-                // Subscribe the Facebook Page to receive messages via our webhook
-                $graphVersion = config('services.meta.graph_version', 'v21.0');
-
-                $subResponse = Http::post(
-                    "https://graph.facebook.com/{$graphVersion}/{$account->page_id}/subscribed_apps",
-                    [
-                        'subscribed_fields' => 'messages,messaging_postbacks',
-                        'access_token' => $account->page_access_token,
-                    ]
+                // Subscribe the Facebook Page to receive messages & comments via our webhook
+                $subscribed = app(MetaPageTokenService::class)->subscribeFacebookPage(
+                    $account->page_id,
+                    $account->page_access_token
                 );
-
-                $subscribed = $subResponse->successful() && ($subResponse->json('success') === true);
-
-                Log::info('Order approve: Messenger page subscription', [
-                    'order_id' => $order->id,
-                    'page_id' => $account->page_id,
-                    'subscribed' => $subscribed,
-                    'response' => $subResponse->json(),
-                ]);
 
                 $activationResult = [
                     'messenger_page_id' => $account->page_id,
@@ -452,15 +438,12 @@ class OrderController extends Controller
 
                 $instagramItem->update($itemUpdate);
 
-                // If page_id and access token exist, subscribe page to Instagram webhook events
-                if ($instagramItem->page_id && $instagramItem->access_token) {
-                    $graphVersion = config('services.meta.graph_version', 'v21.0');
-                    Http::post(
-                        "https://graph.facebook.com/{$graphVersion}/{$instagramItem->page_id}/subscribed_apps",
-                        [
-                            'subscribed_fields' => 'messages,messaging_postbacks,message_reads',
-                            'access_token' => $instagramItem->access_token,
-                        ]
+                // Subscribe Instagram Business Account & connected Page to webhook events
+                if ($instagramItem->access_token) {
+                    app(MetaPageTokenService::class)->subscribeInstagramAccount(
+                        $instagramItem->instagram_id,
+                        $instagramItem->access_token,
+                        $instagramItem->page_id
                     );
                 }
 

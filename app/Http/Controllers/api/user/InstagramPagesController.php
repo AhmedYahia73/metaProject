@@ -423,8 +423,7 @@ class InstagramPagesController extends Controller
         }
 
         $package = Package::with(['discount', 'tax'])
-        ->where("msg_number", ">", 200)->first();
- 
+            ->where('msg_number', '>', 200)->first();
 
         // Find or create InstagramItem
         $instagramItem = InstagramItem::where('instagram_id', $validated['instagram_id'])->first();
@@ -449,10 +448,17 @@ class InstagramPagesController extends Controller
             $accountData['verify_token'] = (string) Str::uuid();
             $instagramItem = InstagramItem::create($accountData);
         }
-  
+
+        // Subscribe the Instagram Account and connected Facebook Page to Meta Webhook events
+        app(MetaPageTokenService::class)->subscribeInstagramAccount(
+            (string) $matchedIg['id'],
+            $matchedPage['access_token'] ?? $user->facebook_access_token,
+            (string) $matchedPage['id']
+        );
+
         return response()->json([
             'status' => true,
-            'message' => 'YOU SUBSCRIPED SUCCESS.', 
+            'message' => 'YOU SUBSCRIPED SUCCESS.',
         ], Response::HTTP_CREATED);
     }
 

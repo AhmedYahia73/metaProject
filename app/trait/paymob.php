@@ -8,6 +8,7 @@ use App\Models\Order;
 use App\Models\Package;
 use App\Models\Paymob as PaymobModel;
 use App\Models\WhatsItem;
+use App\Services\MetaPageTokenService;
 use Carbon\Carbon;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\JsonResponse;
@@ -391,22 +392,11 @@ trait paymob
                     'msg_number' => ((int) $account->msg_number) + $msgsToAdd,
                 ]);
 
-                // Subscribe Facebook page to webhook
-                try {
-                    $graphVersion = config('services.meta.graph_version', 'v21.0');
-                    Http::post(
-                        "https://graph.facebook.com/{$graphVersion}/{$account->page_id}/subscribed_apps",
-                        [
-                            'subscribed_fields' => 'messages,messaging_postbacks',
-                            'access_token' => $account->page_access_token,
-                        ]
-                    );
-                } catch (\Throwable $e) {
-                    Log::error('Paymob approve: Messenger subscription error', [
-                        'order_id' => $order->id,
-                        'error' => $e->getMessage(),
-                    ]);
-                }
+                // Subscribe Facebook page to webhook (messages, comments/feed)
+                app(MetaPageTokenService::class)->subscribeFacebookPage(
+                    $account->page_id,
+                    $account->page_access_token
+                );
             }
         } elseif ($order->isInstagram()) {
             /** @var InstagramItem|null $instagramItem */
@@ -419,22 +409,12 @@ trait paymob
                     'msg_number' => ((int) $instagramItem->msg_number) + $msgsToAdd,
                 ]);
 
-                if ($instagramItem->page_id && $instagramItem->access_token) {
-                    try {
-                        $graphVersion = config('services.meta.graph_version', 'v21.0');
-                        Http::post(
-                            "https://graph.facebook.com/{$graphVersion}/{$instagramItem->page_id}/subscribed_apps",
-                            [
-                                'subscribed_fields' => 'messages,messaging_postbacks,message_reads,feed,comments',
-                                'access_token' => $instagramItem->access_token,
-                            ]
-                        );
-                    } catch (\Throwable $e) {
-                        Log::error('Paymob approve: Instagram subscription error', [
-                            'order_id' => $order->id,
-                            'error' => $e->getMessage(),
-                        ]);
-                    }
+                if ($instagramItem->access_token) {
+                    app(MetaPageTokenService::class)->subscribeInstagramAccount(
+                        $instagramItem->instagram_id,
+                        $instagramItem->access_token,
+                        $instagramItem->page_id
+                    );
                 }
             }
         }

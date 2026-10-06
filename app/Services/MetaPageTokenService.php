@@ -165,6 +165,10 @@ class MetaPageTokenService
                     }
                     $messengerAccount->update($update);
                     $messengerUpdated++;
+
+                    if ($messengerAccount->status === 'active') {
+                        $this->subscribeFacebookPage($pageId, $pageToken);
+                    }
                 }
 
                 // 2. Update existing InstagramItem linked to this page or Instagram account
@@ -191,6 +195,10 @@ class MetaPageTokenService
                     }
                     $igItem->update($igUpdate);
                     $instagramUpdated++;
+
+                    if ($igItem->status === 'active') {
+                        $this->subscribeInstagramAccount($igId ?: $igItem->instagram_id, $pageToken, $pageId);
+                    }
                 }
 
                 if ($instagramItems->isEmpty()) {
@@ -202,6 +210,10 @@ class MetaPageTokenService
                         }
                         $singleItem->update($igUpdate);
                         $instagramUpdated++;
+
+                        if ($singleItem->status === 'active') {
+                            $this->subscribeInstagramAccount($igId ?: $singleItem->instagram_id, $pageToken, $pageId);
+                        }
                     }
                 }
             }
@@ -232,6 +244,119 @@ class MetaPageTokenService
                 'instagram_updated' => 0,
             ];
         }
+    }
+
+    /**
+     * Subscribe a Facebook Page to receive webhook events (messages, postbacks, message reads, and feed/comments).
+     */
+    public function subscribeFacebookPage(string $pageId, string $pageToken): bool
+    {
+        $pageToken = self::sanitizeToken($pageToken) ?: $pageToken;
+        if (empty($pageId) || empty($pageToken)) {
+            return false;
+        }
+
+        try {
+            $response = Http::timeout(15)->post("{$this->baseUrl}/{$pageId}/subscribed_apps", [
+                'subscribed_fields' => 'messages,messaging_postbacks,message_reads,feed',
+                'access_token' => $pageToken,
+            ]);
+
+            $success = $response->successful() && ($response->json('success') === true);
+
+            Log::info("MetaPageTokenService: subscribeFacebookPage result for Page {$pageId}", [
+                'status' => $response->status(),
+                'success' => $success,
+                'response' => $response->json(),
+            ]);
+
+            return $success;
+        } catch (\Throwable $e) {
+            Log::warning("MetaPageTokenService: exception subscribing Facebook page {$pageId}: ".$e->getMessage());
+
+            return false;
+        }
+    }
+
+    /**
+     * Subscribe an Instagram Business Account and its connected Page to receive webhook events
+     * (messages, postbacks, message reads, and comments).
+     */
+    public function subscribeInstagramAccount(string $instagramId, string $pageToken, ?string $pageId = null): bool
+    {
+        $pageToken = self::sanitizeToken($pageToken) ?: $pageToken;
+        if (empty($pageToken)) {
+            return false;
+        }
+
+        $igSuccess = false;
+
+        // 1. Subscribe Instagram Business Account
+        if (! empty($instagramId)) {
+            try {
+                $response = Http::timeout(15)->post("{$this->baseUrl}/{$instagramId}/subscribed_apps", [
+                    'subscribed_fields' => 'messages,comments',
+                    'access_token' => $pageToken,
+                ]);
+
+                $igSuccess = $response->successful();
+
+                Log::info("MetaPageTokenService: subscribeInstagramAccount for IG {$instagramId}", [
+                    'status' => $response->status(),
+                    'success' => $igSuccess,
+                    'response' => $response->json(),
+                ]);
+            } catch (\Throwable $e) {
+                Log::warning("MetaPageTokenService: exception subscribing IG {$instagramId}: ".$e->getMessage());
+            }
+        }
+
+        // 2. Also ensure the connected Facebook Page is subscribed with Instagram & Feed fields
+        if (! empty($pageId)) {
+            try {
+                $pageResponse = Http::timeout(15)->post("{$this->baseUrl}/{$pageId}/subscribed_apps", [
+                    'subscribed_fields' => 'messages,messaging_postbacks,message_reads,feed,comments',
+                    'access_token' => $pageToken,
+                ]);
+
+                Log::info("MetaPageTokenService: subscribe Page {$pageId} for Instagram events", [
+                    'status' => $pageResponse->status(),
+                    'response' => $pageResponse->json(),
+                ]);
+            } catch (\Throwable $e) {
+                Log::warning("MetaPageTokenService: exception subscribing Page {$pageId} for Instagram: ".$e->getMessage());
+            }
+        }
+
+        return $igSuccess;
+    }
+
+    /**
+     * Subscribe all active Messenger accounts and Instagram items for a given user.
+     *
+     * @return array{messenger_subscribed: int, instagram_subscribed: int}
+     */
+    public function subscribeUserActiveAccounts(User $user): array
+    {
+        $messengerCount = 0;
+        $instagramCount = 0;
+
+        foreach ($user->messengerAccounts()->where('status', 'active')->whereNotNull('page_access_token')->get() as $account) {
+            if ($this->subscribeFacebookPage($account->page_id, $account->page_access_token)) {
+                $messengerCount++;
+            }
+        }
+
+        foreach ($user->instagramItems()->where('status', 'active')->whereNotNull('access_token')->get() as $item) {
+            if ($this->subscribeInstagramAccount($item->instagram_id, $item->access_token, $item->page_id)) {
+                $instagramCount++;
+            }
+        }
+
+        return [
+            'messenger_subscribed' => $messengerCount,
+            'instagram_subscribed' => $instagramCount,
+        ];
     }
 
     /**

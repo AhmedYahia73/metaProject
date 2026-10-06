@@ -5,6 +5,7 @@ namespace App\Http\Controllers\api\admin;
 use App\Http\Controllers\Controller;
 use App\Models\InstagramItem;
 use App\Models\User;
+use App\Services\MetaPageTokenService;
 use App\trait\image;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -84,6 +85,10 @@ class InstagramItemController extends Controller
 
         $item = InstagramItem::create($validated);
 
+        if ($item->status === 'active' && ! empty($item->access_token)) {
+            app(MetaPageTokenService::class)->subscribeInstagramAccount($item->instagram_id, $item->access_token, $item->page_id);
+        }
+
         return response()->json([
             'status' => true,
             'message' => 'Instagram account linked successfully.',
@@ -152,6 +157,10 @@ class InstagramItemController extends Controller
         }
 
         $instagramItem->update($validated);
+
+        if ($instagramItem->status === 'active' && ! empty($instagramItem->access_token)) {
+            app(MetaPageTokenService::class)->subscribeInstagramAccount($instagramItem->instagram_id, $instagramItem->access_token, $instagramItem->page_id);
+        }
 
         return response()->json([
             'status' => true,

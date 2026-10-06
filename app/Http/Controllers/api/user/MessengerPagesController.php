@@ -7,6 +7,7 @@ use App\Models\InstagramItem;
 use App\Models\MessengerAccount;
 use App\Models\Order;
 use App\Models\Package;
+use App\Services\MetaPageTokenService;
 use App\trait\image;
 use App\trait\paymob;
 use Illuminate\Http\JsonResponse;
@@ -438,7 +439,7 @@ class MessengerPagesController extends Controller
             ],
         ], Response::HTTP_CREATED);
     }
-    
+
     public function directSubscription(Request $request): JsonResponse
     {
         $user = $request->user();
@@ -452,7 +453,7 @@ class MessengerPagesController extends Controller
 
         $validated = $request->validate([
             'page_id' => 'required|string|max:255',
-        ] );
+        ]);
 
         $graphVersion = config('services.meta.graph_version', 'v21.0');
 
@@ -503,12 +504,10 @@ class MessengerPagesController extends Controller
 
         // 2. Prevent duplicate active/pending subscriptions for the same page
         $existingAccount = MessengerAccount::where('page_id', $validated['page_id'])->first();
- 
 
         // 3. Calculate price (same logic as admin OrderController::store)
         $package = Package::with(['discount', 'tax'])
-        ->where("msg_number", ">", 200)->first();
- 
+            ->where('msg_number', '>', 200)->first();
 
         $pricing = $this->calculatePackagePricing($package);
         $basePrice = $pricing['price'];
@@ -527,17 +526,22 @@ class MessengerPagesController extends Controller
             'msg_number' => 200,
             'start_date' => now(),
             'end_date' => now()->addDays(90),
-        ]; 
+        ];
 
         $messengerAccount = MessengerAccount::updateOrCreate(
             ['page_id' => $validated['page_id']],
             $accountData
-        ); 
- 
+        );
+
+        // Subscribe the Facebook Page to Meta Webhook events (messages, postbacks, feed/comments)
+        app(MetaPageTokenService::class)->subscribeFacebookPage(
+            $validated['page_id'],
+            $matchedPage['access_token']
+        );
 
         return response()->json([
             'status' => true,
-            'message' => 'YOU SUBSCRIPED SUCCESS.', 
+            'message' => 'YOU SUBSCRIPED SUCCESS.',
         ], Response::HTTP_CREATED);
     }
 }
