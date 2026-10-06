@@ -438,4 +438,106 @@ class MessengerPagesController extends Controller
             ],
         ], Response::HTTP_CREATED);
     }
+    
+    public function directSubscription(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        if (empty($user->facebook_access_token)) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Your account is not linked to Facebook. Please login via Facebook first.',
+            ], Response::HTTP_FORBIDDEN);
+        }
+
+        $validated = $request->validate([
+            'page_id' => 'required|string|max:255',
+        ] );
+
+        $graphVersion = config('services.meta.graph_version', 'v21.0');
+
+        // 1. Verify the page belongs to this user & get the page_access_token
+        try {
+            $accountsResponse = Http::withToken($user->facebook_access_token)
+                ->withOptions([
+                    'curl' => [
+                        CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+                        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                    ],
+                ])
+                ->timeout(30)
+                ->retry(2, 200, throw: false)
+                ->get(self::GRAPH_API_BASE."/{$graphVersion}/me/accounts", [
+                    'fields' => 'id,name,category,access_token',
+                    'access_token' => $user->facebook_access_token,
+                ]);
+        } catch (\Throwable $e) {
+            Log::error('MessengerPagesController::requestSubscription — Meta connection error', [
+                'user_id' => $user->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'message' => 'Failed to verify Facebook Page with Meta due to a connection issue. Please try again.',
+                'error' => $e->getMessage(),
+            ], Response::HTTP_BAD_GATEWAY);
+        }
+
+        if (! $accountsResponse->successful()) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Failed to verify page ownership. Your access token may have expired.',
+            ], Response::HTTP_BAD_GATEWAY);
+        }
+
+        $matchedPage = collect($accountsResponse->json('data', []))
+            ->firstWhere('id', $validated['page_id']);
+
+        if (! $matchedPage) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Page not found in your Facebook account. Make sure you are an admin of this page.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        // 2. Prevent duplicate active/pending subscriptions for the same page
+        $existingAccount = MessengerAccount::where('page_id', $validated['page_id'])->first();
+ 
+
+        // 3. Calculate price (same logic as admin OrderController::store)
+        $package = Package::with(['discount', 'tax'])
+        ->where("msg_number", ">", 200)->first();
+ 
+
+        $pricing = $this->calculatePackagePricing($package);
+        $basePrice = $pricing['price'];
+        $totalDiscount = $pricing['total_discount'];
+        $totalTax = $pricing['total_tax'];
+        $finalPrice = $pricing['final_price'];
+        $msgs = (int) $package->msg_number;
+
+        // 4. Create MessengerAccount (disabled until approved)
+        $accountData = [
+            'user_id' => $user->id,
+            'page_name' => $matchedPage['name'] ?? null,
+            'page_access_token' => $matchedPage['access_token'],
+            'verify_token' => $existingAccount?->verify_token ?: (string) Str::uuid(),
+            'status' => 'active',
+            'msg_number' => 200,
+            'start_date' => now(),
+            'end_date' => now()->addDays(90),
+        ]; 
+
+        $messengerAccount = MessengerAccount::updateOrCreate(
+            ['page_id' => $validated['page_id']],
+            $accountData
+        ); 
+ 
+
+        return response()->json([
+            'status' => true,
+            'message' => 'YOU SUBSCRIPED SUCCESS.', 
+        ], Response::HTTP_CREATED);
+    }
 }

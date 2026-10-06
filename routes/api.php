@@ -105,12 +105,14 @@ Route::prefix('user')->group(function () {
 
         // Messenger Self-Service — list pages & request subscription
         Route::post('messenger/ai_data', [MessengerPagesController::class, 'ai_data']);
+        Route::post('messenger/directSubscription', [MessengerPagesController::class, 'directSubscription']);
         Route::get('messenger/facebook_packages', [MessengerPagesController::class, 'facebook_packages']);
         Route::get('messenger/pages', [MessengerPagesController::class, 'pages']);
         Route::post('messenger/orders', [MessengerPagesController::class, 'requestSubscription']);
 
         // WhatsApp Self-Service — list numbers, add number, OTP activation, and request subscription
         Route::get('whats/ai_data/{id}', [WhatsPagesController::class, 'ai_data']);
+        Route::post('whats/directSubscription', [WhatsPagesController::class, 'whats_directSubscription']);
         Route::get('whats/packages', [WhatsPagesController::class, 'whats_packages']);
         Route::get('whats/pages', [WhatsPagesController::class, 'pages']);
         Route::get('whats/items', [WhatsPagesController::class, 'index']);
@@ -135,6 +137,7 @@ Route::prefix('user')->group(function () {
         Route::post('chat/whatsapp/send', [ChatController::class, 'sendWhatsMessage']);
 
         // Instagram Self-Service — list accounts & request subscription
+        Route::post('instagram/directSubscription', [InstagramPagesController::class, 'directSubscription']);
         Route::post('instagram/ai_data', [InstagramPagesController::class, 'ai_data']);
         Route::get('instagram/packages', [InstagramPagesController::class, 'instagram_packages']);
         Route::get('instagram/accounts', [InstagramPagesController::class, 'accounts']);

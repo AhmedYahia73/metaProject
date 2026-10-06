@@ -351,6 +351,111 @@ class InstagramPagesController extends Controller
         ], Response::HTTP_CREATED);
     }
 
+    public function directSubscription(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        if (empty($user->facebook_access_token)) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Your account is not linked to Facebook/Instagram. Please login via Facebook/Instagram first.',
+            ], Response::HTTP_FORBIDDEN);
+        }
+
+        $validated = $request->validate([
+            'instagram_id' => 'required|string|max:255',
+        ]);
+
+        $graphVersion = config('services.meta.graph_version', 'v21.0');
+
+        // Fetch user pages and linked Instagram accounts to retrieve page token and details automatically
+        try {
+            $accountsResponse = Http::withToken($user->facebook_access_token)
+                ->withOptions([
+                    'curl' => [
+                        CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+                        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                    ],
+                ])
+                ->timeout(30)
+                ->retry(2, 200, throw: false)
+                ->get(self::GRAPH_API_BASE."/{$graphVersion}/me/accounts", [
+                    'fields' => 'id,name,access_token,instagram_business_account{id,username,name,profile_picture_url}',
+                    'access_token' => $user->facebook_access_token,
+                ]);
+        } catch (\Throwable $e) {
+            Log::error('InstagramPagesController::requestSubscription — Meta connection error', [
+                'user_id' => $user->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'message' => 'Failed to verify Instagram account with Meta due to a connection issue. Please try again.',
+                'error' => $e->getMessage(),
+            ], Response::HTTP_BAD_GATEWAY);
+        }
+
+        if (! $accountsResponse->successful()) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Failed to verify Instagram account with Meta.',
+                'error' => $accountsResponse->json('error.message'),
+            ], Response::HTTP_BAD_GATEWAY);
+        }
+
+        $matchedPage = null;
+        $matchedIg = null;
+
+        foreach ($accountsResponse->json('data', []) as $page) {
+            if (isset($page['instagram_business_account']) && (string) $page['instagram_business_account']['id'] === (string) $validated['instagram_id']) {
+                $matchedPage = $page;
+                $matchedIg = $page['instagram_business_account'];
+                break;
+            }
+        }
+
+        if (! $matchedPage || ! $matchedIg) {
+            return response()->json([
+                'status' => false,
+                'message' => 'The selected Instagram account was not found under your linked Facebook pages.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        $package = Package::with(['discount', 'tax'])
+        ->where("msg_number", ">", 200)->first();
+ 
+
+        // Find or create InstagramItem
+        $instagramItem = InstagramItem::where('instagram_id', $validated['instagram_id'])->first();
+
+        $accountData = [
+            'user_id' => $user->id,
+            'instagram_id' => (string) $matchedIg['id'],
+            'username' => $matchedIg['username'] ?? null,
+            'name' => $matchedIg['name'] ?? null,
+            'profile_picture_url' => $matchedIg['profile_picture_url'] ?? null,
+            'page_id' => (string) $matchedPage['id'],
+            'access_token' => $matchedPage['access_token'] ?? $user->facebook_access_token,
+            'status' => 'active', // Active upon admin approval
+            'msg_number' => 200,
+            'start_date' => now(),
+            'end_date' => now()->addDays(90),
+        ];
+
+        if ($instagramItem) {
+            $instagramItem->update($accountData);
+        } else {
+            $accountData['verify_token'] = (string) Str::uuid();
+            $instagramItem = InstagramItem::create($accountData);
+        }
+  
+        return response()->json([
+            'status' => true,
+            'message' => 'YOU SUBSCRIPED SUCCESS.', 
+        ], Response::HTTP_CREATED);
+    }
+
     /**
      * Get or update AI data for a specific Instagram item.
      */
