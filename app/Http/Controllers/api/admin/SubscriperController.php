@@ -92,18 +92,19 @@ class SubscriperController extends Controller
         }
 
         $transform = function (User $user): array {
-         
+
             $availableMsgs = (int) (
                 $user->messengerAccounts->sum('msg_number') +
                 $user->whatsItems->sum('msg_number') +
                 $user->instagramItems->sum('msg_number')
             );
+
             return [
                 'id' => $user->id,
                 'name' => $user->name,
                 'email' => $user->email,
                 'phone' => $user->phone,
-                'available_msgs' => $availableMsgs, 
+                'available_msgs' => $availableMsgs,
             ];
         };
 
@@ -225,7 +226,7 @@ class SubscriperController extends Controller
                 'phone' => $item->phone,
                 'available_msgs' => max(0, (int) $item->msg_number),
                 'from' => $from,
-                'to' => $to, 
+                'to' => $to,
                 'is_subscripe' => $isSubscribed,
                 'renewal_date' => $to,
                 'phone_status' => $item->phone_status,

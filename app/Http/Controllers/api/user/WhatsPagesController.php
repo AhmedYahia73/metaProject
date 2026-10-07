@@ -573,7 +573,7 @@ class WhatsPagesController extends Controller
             ],
         ], Response::HTTP_CREATED);
     }
-    
+
     public function directSubscription(Request $request): JsonResponse
     {
         $user = $request->user();
@@ -583,7 +583,7 @@ class WhatsPagesController extends Controller
         ]);
 
         $whatsItem = WhatsItem::where('user_id', $user->id)->findOrFail($validated['whats_item_id']);
-  
+
         // Update optional links and AI config on the WhatsApp item
         $itemUpdate = [
             'msg_number' => 200,
@@ -591,14 +591,14 @@ class WhatsPagesController extends Controller
             'end_date' => now()->addDays(90),
             'phone_status' => 'verified',
         ];
-   
+
         if (! empty($itemUpdate)) {
             $whatsItem->update($itemUpdate);
-        }  
+        }
 
         return response()->json([
             'status' => true,
-            'message' => 'YOU SUBSCRIPED SUCCESS.', 
+            'message' => 'YOU SUBSCRIPED SUCCESS.',
         ], Response::HTTP_CREATED);
     }
 

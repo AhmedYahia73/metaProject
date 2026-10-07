@@ -77,25 +77,57 @@ class HomeController extends Controller
         try {
             $data = $request->all();
 
-            // 2. Resolve the restaurant user via phone_number_id from WhatsItem
+            // 2. Resolve the restaurant user via phone number (metadata.display_phone_number) or phone_number_id
             $phoneNumberId = data_get($data, 'entry.0.changes.0.value.metadata.phone_number_id');
+            $displayPhoneNumber = data_get($data, 'entry.0.changes.0.value.metadata.display_phone_number');
 
             // Handle Meta test button from Developer Dashboard (sends dummy ID 123456123)
             if ((string) $phoneNumberId === '123456123') {
                 $phoneNumberId = config('services.meta.phone_number_id', '1296872370175605');
             }
 
-            if (! $phoneNumberId) {
-                return response()->json(['status' => 'ignored'], Response::HTTP_OK);
+            $whatsItem = null;
+            $cleanDisplayPhone = preg_replace('/[^0-9]/', '', (string) $displayPhoneNumber);
+
+            // Search by phone number first
+            if (! empty($cleanDisplayPhone)) {
+                $whatsItem = WhatsItem::where(function ($query) use ($cleanDisplayPhone) {
+                    $query->where('phone', $cleanDisplayPhone)
+                        ->orWhere('phone', '+'.$cleanDisplayPhone);
+
+                    // Egyptian local format variations (01xxxxxxxxx vs 201xxxxxxxxx)
+                    if (str_starts_with($cleanDisplayPhone, '20') && strlen($cleanDisplayPhone) === 12) {
+                        $national = substr($cleanDisplayPhone, 2);
+                        $query->orWhere('phone', '0'.$national)
+                            ->orWhere('phone', $national);
+                    } elseif (str_starts_with($cleanDisplayPhone, '01') && strlen($cleanDisplayPhone) === 11) {
+                        $query->orWhere('phone', '2'.$cleanDisplayPhone)
+                            ->orWhere('phone', '+2'.$cleanDisplayPhone);
+                    }
+
+                    if (strlen($cleanDisplayPhone) >= 9) {
+                        $query->orWhere('phone', 'like', '%'.substr($cleanDisplayPhone, -9));
+                    }
+                })->first();
             }
 
-            /** @var WhatsItem|null $whatsItem */
-            $whatsItem = WhatsItem::where('phone_number_id', $phoneNumberId)->first();
+            // Fallback: If not matched by phone number, search by phone_number_id
+            if (! $whatsItem && ! empty($phoneNumberId)) {
+                $whatsItem = WhatsItem::where('phone_number_id', $phoneNumberId)->first();
+            }
 
             if (! $whatsItem) {
-                Log::warning("Webhook received for unknown phone_number_id: {$phoneNumberId}");
+                Log::warning("Webhook received for unknown phone: {$displayPhoneNumber} (phone_number_id: {$phoneNumberId})");
 
                 return response()->json(['status' => 'restaurant_not_found'], Response::HTTP_OK);
+            }
+
+            // Update the phone_number_id to the incoming one if changed
+            if (! empty($phoneNumberId) && (string) $whatsItem->phone_number_id !== (string) $phoneNumberId) {
+                $whatsItem->update([
+                    'phone_number_id' => $phoneNumberId,
+                ]);
+                Log::info("Webhook: Updated phone_number_id to {$phoneNumberId} for WhatsItem #{$whatsItem->id} ({$whatsItem->phone})");
             }
 
             /** @var User $restaurant */
