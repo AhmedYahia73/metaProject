@@ -743,7 +743,7 @@ class ChatController extends Controller
             $to = '2'.$to;
         }
 
-        $token = $item->access_token ?: config('services.meta.system_user_token');
+        $token = config('services.meta.system_user_token') ?: $item->access_token;
         $messageText = trim($validated['message']);
 
         // Send via WhatsApp Cloud API

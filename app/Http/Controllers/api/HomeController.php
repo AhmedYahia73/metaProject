@@ -122,12 +122,21 @@ class HomeController extends Controller
                 return response()->json(['status' => 'restaurant_not_found'], Response::HTTP_OK);
             }
 
-            // Update the phone_number_id to the incoming one if changed
+            // Update the phone_number_id and sync access_token with latest config if changed
+            $systemToken = config('services.meta.system_user_token');
+            $whatsItemUpdates = [];
+
             if (! empty($phoneNumberId) && (string) $whatsItem->phone_number_id !== (string) $phoneNumberId) {
-                $whatsItem->update([
-                    'phone_number_id' => $phoneNumberId,
-                ]);
-                Log::info("Webhook: Updated phone_number_id to {$phoneNumberId} for WhatsItem #{$whatsItem->id} ({$whatsItem->phone})");
+                $whatsItemUpdates['phone_number_id'] = $phoneNumberId;
+            }
+
+            if (! empty($systemToken) && $whatsItem->access_token !== $systemToken) {
+                $whatsItemUpdates['access_token'] = $systemToken;
+            }
+
+            if (! empty($whatsItemUpdates)) {
+                $whatsItem->update($whatsItemUpdates);
+                Log::info("Webhook: Updated WhatsItem #{$whatsItem->id} ({$whatsItem->phone})", $whatsItemUpdates);
             }
 
             /** @var User $restaurant */
@@ -214,7 +223,7 @@ class HomeController extends Controller
 
             // Mark customer message as read (shows ✓✓ in WhatsApp)
             $incomingMessageId = data_get($incomingMessage, 'id');
-            $token = $whatsItem->access_token ?: config('services.meta.system_user_token');
+            $token = config('services.meta.system_user_token') ?: $whatsItem->access_token;
             if ($incomingMessageId) {
                 $this->showWhatsAppTyping(
                     accessToken: (string) $token,
@@ -234,7 +243,7 @@ class HomeController extends Controller
             }
 
             // 7. Send reply via WhatsApp — only record to DB if successful
-            $token = $whatsItem->access_token ?: config('services.meta.system_user_token');
+            $token = config('services.meta.system_user_token') ?: $whatsItem->access_token;
             $sent = $this->sendTextMessage(
                 accessToken: (string) $token,
                 phoneNumberId: $whatsItem->phone_number_id,
