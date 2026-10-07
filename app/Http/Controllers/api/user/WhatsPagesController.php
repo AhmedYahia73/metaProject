@@ -590,6 +590,7 @@ class WhatsPagesController extends Controller
             'start_date' => now(),
             'end_date' => now()->addDays(90),
             'phone_status' => 'verified',
+            'phone_verified_at' => now(),
         ];
 
         if (! empty($itemUpdate)) {
