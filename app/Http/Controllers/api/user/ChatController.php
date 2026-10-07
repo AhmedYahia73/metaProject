@@ -728,7 +728,7 @@ class ChatController extends Controller
         ]);
 
         $item = $user->whatsItems()
-            ->where('phone_status', 'active')
+            ->whereIn('phone_status', ['active', 'verified'])
             ->findOrFail($validated['whats_item_id']);
 
         if (! $item->hasActiveSubscription()) {
