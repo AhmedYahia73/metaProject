@@ -56,12 +56,20 @@ class MetaPageTokenService
         }
 
         try {
-            $response = Http::get("{$this->baseUrl}/oauth/access_token", [
-                'grant_type' => 'fb_exchange_token',
-                'client_id' => $appId,
-                'client_secret' => $appSecret,
-                'fb_exchange_token' => $shortLivedToken,
-            ]);
+            $response = Http::withOptions([
+                'curl' => [
+                    CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+                    CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                ],
+            ])
+                ->connectTimeout(5)
+                ->timeout(8)
+                ->get("{$this->baseUrl}/oauth/access_token", [
+                    'grant_type' => 'fb_exchange_token',
+                    'client_id' => $appId,
+                    'client_secret' => $appSecret,
+                    'fb_exchange_token' => $shortLivedToken,
+                ]);
 
             if ($response->successful()) {
                 $longLived = (string) $response->json('access_token', '');
@@ -91,7 +99,7 @@ class MetaPageTokenService
      *
      * @return array{synced: bool, pages_count: int, messenger_updated: int, instagram_updated: int}
      */
-    public function syncUserPagesAndTokens(User $user, ?string $userAccessToken = null): array
+    public function syncUserPagesAndTokens(User $user, ?string $userAccessToken = null, bool $subscribeWebhooks = false): array
     {
         $rawToken = $userAccessToken ?: $user->facebook_access_token;
         $token = self::sanitizeToken($rawToken);
@@ -118,8 +126,9 @@ class MetaPageTokenService
                         CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
                     ],
                 ])
-                ->timeout(20)
-                ->retry(2, 200, throw: false)
+                ->connectTimeout(5)
+                ->timeout(8)
+                ->retry(1, 100, throw: false)
                 ->get("{$this->baseUrl}/me/accounts", [
                     'fields' => 'id,name,access_token,category,instagram_business_account{id,username,name}',
                     'access_token' => $token,
@@ -166,7 +175,7 @@ class MetaPageTokenService
                     $messengerAccount->update($update);
                     $messengerUpdated++;
 
-                    if ($messengerAccount->status === 'active') {
+                    if ($subscribeWebhooks && $messengerAccount->status === 'active') {
                         $this->subscribeFacebookPage($pageId, $pageToken);
                     }
                 }
@@ -196,7 +205,7 @@ class MetaPageTokenService
                     $igItem->update($igUpdate);
                     $instagramUpdated++;
 
-                    if ($igItem->status === 'active') {
+                    if ($subscribeWebhooks && $igItem->status === 'active') {
                         $this->subscribeInstagramAccount($igId ?: $igItem->instagram_id, $pageToken, $pageId);
                     }
                 }
@@ -211,7 +220,7 @@ class MetaPageTokenService
                         $singleItem->update($igUpdate);
                         $instagramUpdated++;
 
-                        if ($singleItem->status === 'active') {
+                        if ($subscribeWebhooks && $singleItem->status === 'active') {
                             $this->subscribeInstagramAccount($igId ?: $singleItem->instagram_id, $pageToken, $pageId);
                         }
                     }
@@ -257,10 +266,18 @@ class MetaPageTokenService
         }
 
         try {
-            $response = Http::timeout(15)->post("{$this->baseUrl}/{$pageId}/subscribed_apps", [
-                'subscribed_fields' => 'messages,messaging_postbacks,message_reads,feed',
-                'access_token' => $pageToken,
-            ]);
+            $response = Http::withOptions([
+                'curl' => [
+                    CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+                    CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                ],
+            ])
+                ->connectTimeout(5)
+                ->timeout(8)
+                ->post("{$this->baseUrl}/{$pageId}/subscribed_apps", [
+                    'subscribed_fields' => 'messages,messaging_postbacks,message_reads,feed',
+                    'access_token' => $pageToken,
+                ]);
 
             $success = $response->successful() && ($response->json('success') === true);
 
@@ -291,13 +308,23 @@ class MetaPageTokenService
 
         $igSuccess = false;
 
+        $httpOptions = [
+            'curl' => [
+                CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+                CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+            ],
+        ];
+
         // 1. Subscribe Instagram Business Account
         if (! empty($instagramId)) {
             try {
-                $response = Http::timeout(15)->post("{$this->baseUrl}/{$instagramId}/subscribed_apps", [
-                    'subscribed_fields' => 'messages,comments',
-                    'access_token' => $pageToken,
-                ]);
+                $response = Http::withOptions($httpOptions)
+                    ->connectTimeout(5)
+                    ->timeout(8)
+                    ->post("{$this->baseUrl}/{$instagramId}/subscribed_apps", [
+                        'subscribed_fields' => 'messages,comments',
+                        'access_token' => $pageToken,
+                    ]);
 
                 $igSuccess = $response->successful();
 
@@ -314,10 +341,13 @@ class MetaPageTokenService
         // 2. Also ensure the connected Facebook Page is subscribed with Instagram & Feed fields
         if (! empty($pageId)) {
             try {
-                $pageResponse = Http::timeout(15)->post("{$this->baseUrl}/{$pageId}/subscribed_apps", [
-                    'subscribed_fields' => 'messages,messaging_postbacks,message_reads,feed,comments',
-                    'access_token' => $pageToken,
-                ]);
+                $pageResponse = Http::withOptions($httpOptions)
+                    ->connectTimeout(5)
+                    ->timeout(8)
+                    ->post("{$this->baseUrl}/{$pageId}/subscribed_apps", [
+                        'subscribed_fields' => 'messages,messaging_postbacks,message_reads,feed,comments',
+                        'access_token' => $pageToken,
+                    ]);
 
                 Log::info("MetaPageTokenService: subscribe Page {$pageId} for Instagram events", [
                     'status' => $pageResponse->status(),

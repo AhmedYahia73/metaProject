@@ -305,8 +305,9 @@ class LoginController extends Controller
                         CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
                     ],
                 ])
-                ->timeout(30)
-                ->retry(2, 200, throw: false)
+                ->connectTimeout(5)
+                ->timeout(10)
+                ->retry(1, 100, throw: false)
                 ->get("https://graph.facebook.com/{$graphVersion}/me", [
                     'fields' => 'id,name,email',
                     'access_token' => $fbToken,
@@ -368,9 +369,15 @@ class LoginController extends Controller
         $isLinkingExistingAccount = (bool) ($request->user() || auth('sanctum')->check());
 
         // Exchange short-lived token for long-lived token (60 days) if Meta App credentials exist
-        /** @var MetaPageTokenService $tokenService */
-        $tokenService = app(MetaPageTokenService::class);
-        $fbToken = $tokenService->exchangeForLongLivedToken($fbToken);
+        try {
+            /** @var MetaPageTokenService $tokenService */
+            $tokenService = app(MetaPageTokenService::class);
+            $fbToken = $tokenService->exchangeForLongLivedToken($fbToken);
+        } catch (\Throwable $e) {
+            Log::warning('Facebook login: exchangeForLongLivedToken failed', [
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         if ($user) {
             // If another user already has this facebook_id, unlink it first
@@ -423,7 +430,14 @@ class LoginController extends Controller
         ]);
 
         // Automatically update all user's Facebook pages and Instagram items with fresh tokens
-        app(MetaPageTokenService::class)->syncUserPagesAndTokens($user, $fbToken);
+        try {
+            app(MetaPageTokenService::class)->syncUserPagesAndTokens($user, $fbToken, false);
+        } catch (\Throwable $e) {
+            Log::warning('Facebook login: syncUserPagesAndTokens failed', [
+                'user_id' => $user->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         $token = $user->createToken('facebook_auth_token')->plainTextToken;
 

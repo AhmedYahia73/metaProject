@@ -220,3 +220,89 @@ test('linking facebook account when facebook_id already belongs to another user 
     // InstagramItem reassigned to new user
     expect($igItem->fresh()->user_id)->toBe($newUser->id);
 });
+
+test('facebook login succeeds even when page sync fails or times out', function () {
+    $user = User::factory()->create([
+        'email' => 'resilient_user@example.com',
+        'facebook_id' => 'fb_resilient_123',
+        'role' => 'user',
+    ]);
+
+    Sanctum::actingAs($user);
+
+    Http::fake(function (Request $request) {
+        if (str_contains($request->url(), '/me/accounts')) {
+            return Http::response(['error' => ['message' => 'Service temporarily unavailable']], 500);
+        }
+        if (str_contains($request->url(), '/me')) {
+            return Http::response([
+                'id' => 'fb_resilient_123',
+                'name' => 'Resilient User',
+            ], 200);
+        }
+
+        return Http::response([], 200);
+    });
+
+    $response = $this->postJson('/api/auth/facebook', [
+        'access_token' => 'resilient_fb_token',
+    ]);
+
+    $response->assertOk()
+        ->assertJson([
+            'status' => true,
+        ]);
+
+    expect($user->fresh()->facebook_access_token)->toBe('resilient_fb_token');
+});
+
+test('facebook login does not make slow subscribed_apps webhook calls', function () {
+    $user = User::factory()->create([
+        'email' => 'nosub_user@example.com',
+        'facebook_id' => 'fb_nosub_123',
+        'role' => 'user',
+    ]);
+
+    MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'page_id' => 'page_fast_1',
+        'status' => 'active',
+        'page_access_token' => 'old_fast_token',
+    ]);
+
+    Sanctum::actingAs($user);
+
+    $calledSubscribedApps = false;
+
+    Http::fake(function (Request $request) use (&$calledSubscribedApps) {
+        if (str_contains($request->url(), 'subscribed_apps')) {
+            $calledSubscribedApps = true;
+        }
+        if (str_contains($request->url(), '/me/accounts')) {
+            return Http::response([
+                'data' => [
+                    [
+                        'id' => 'page_fast_1',
+                        'name' => 'Fast Page',
+                        'access_token' => 'new_fast_page_token',
+                    ],
+                ],
+            ], 200);
+        }
+        if (str_contains($request->url(), '/me')) {
+            return Http::response([
+                'id' => 'fb_nosub_123',
+                'name' => 'No Sub User',
+            ], 200);
+        }
+
+        return Http::response([], 200);
+    });
+
+    $response = $this->postJson('/api/auth/facebook', [
+        'access_token' => 'no_sub_fb_token',
+    ]);
+
+    $response->assertOk();
+    expect($calledSubscribedApps)->toBeFalse('Facebook login should not call subscribed_apps during login to prevent timeouts');
+});
