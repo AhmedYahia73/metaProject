@@ -620,6 +620,7 @@ class HomeController extends Controller
                 pageAccessToken: $messengerAccount->page_access_token,
                 recipientId: $senderId,
                 text: $reply,
+                account: $messengerAccount,
             );
 
             Log::channel('stack')->info('[MESSENGER] ✓ Messenger API send result', [
@@ -1329,31 +1330,60 @@ class HomeController extends Controller
 
     /**
      * Send a text message via Facebook Messenger Send API.
+     * Automatically attempts token refresh if expired.
      * Returns true only when the API responds with a success status.
      */
     private function sendMessengerMessage(
         string $pageAccessToken,
         string $recipientId,
         string $text,
+        ?MessengerAccount $account = null,
     ): bool {
-        $response = Http::withToken($pageAccessToken)
-            ->post(self::GRAPH_API_BASE.'/me/messages', [
-                'recipient' => ['id' => $recipientId],
-                'message' => ['text' => $text],
-                'messaging_type' => 'RESPONSE',
+        try {
+            $token = MetaPageTokenService::sanitizeToken($account?->fresh()?->page_access_token ?: ($account?->page_access_token ?: $pageAccessToken));
+            $response = Http::withToken($token)
+                ->post(self::GRAPH_API_BASE.'/me/messages', [
+                    'recipient' => ['id' => $recipientId],
+                    'message' => ['text' => $text],
+                    'messaging_type' => 'RESPONSE',
+                ]);
+
+            if (! $response->successful() && $account) {
+                /** @var MetaPageTokenService $tokenService */
+                $tokenService = app(MetaPageTokenService::class);
+                if ($tokenService->isTokenExpiredError($response->status(), $response->json() ?? [])) {
+                    Log::channel('stack')->warning("[MESSENGER] Token expired for sendMessengerMessage, attempting refresh for account #{$account->id}");
+                    $refreshedToken = $tokenService->refreshMessengerAccountToken($account);
+                    if ($refreshedToken) {
+                        $token = MetaPageTokenService::sanitizeToken($refreshedToken);
+                        $response = Http::withToken($token)
+                            ->post(self::GRAPH_API_BASE.'/me/messages', [
+                                'recipient' => ['id' => $recipientId],
+                                'message' => ['text' => $text],
+                                'messaging_type' => 'RESPONSE',
+                            ]);
+                    }
+                }
+            }
+
+            if ($response->successful()) {
+                return true;
+            }
+
+            Log::error('Messenger API send error', [
+                'recipient_id' => $recipientId,
+                'status' => $response->status(),
+                'body' => $response->json(),
             ]);
 
-        if ($response->successful()) {
-            return true;
+            return false;
+        } catch (\Throwable $e) {
+            Log::error('Messenger API send exception: '.$e->getMessage(), [
+                'recipient_id' => $recipientId,
+            ]);
+
+            return false;
         }
-
-        Log::error('Messenger API send error', [
-            'recipient_id' => $recipientId,
-            'status' => $response->status(),
-            'body' => $response->json(),
-        ]);
-
-        return false;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1663,6 +1693,7 @@ class HomeController extends Controller
                 accessToken: $instagramItem->access_token,
                 recipientId: $senderId,
                 text: $reply,
+                item: $instagramItem,
             );
 
             if ($sent) {
@@ -2753,32 +2784,70 @@ class HomeController extends Controller
 
     /**
      * Send a text message via Instagram Send API.
+     * Automatically attempts token refresh if expired.
      */
     private function sendInstagramMessage(
         string $accessToken,
         string $recipientId,
         string $text,
+        ?InstagramItem $item = null,
     ): bool {
-        $response = Http::withToken($accessToken)
-            ->post(self::GRAPH_API_BASE.'/me/messages', [
-                'recipient' => ['id' => $recipientId],
-                'message' => ['text' => $text],
+        try {
+            $token = MetaPageTokenService::sanitizeToken($item?->fresh()?->access_token ?: ($item?->access_token ?: $accessToken));
+            $response = Http::withToken($token)
+                ->post(self::GRAPH_API_BASE.'/me/messages', [
+                    'recipient' => ['id' => $recipientId],
+                    'message' => ['text' => $text],
+                ]);
+
+            if (! $response->successful() && $item) {
+                /** @var MetaPageTokenService $tokenService */
+                $tokenService = app(MetaPageTokenService::class);
+                if ($tokenService->isTokenExpiredError($response->status(), $response->json() ?? [])) {
+                    $this->logInstagramEvent('TOKEN_EXPIRED', "Token expired for sendInstagramMessage, attempting refresh for item #{$item->id}");
+                    $refreshedToken = $tokenService->refreshInstagramItemToken($item);
+                    if ($refreshedToken) {
+                        $token = MetaPageTokenService::sanitizeToken($refreshedToken);
+                        $response = Http::withToken($token)
+                            ->post(self::GRAPH_API_BASE.'/me/messages', [
+                                'recipient' => ['id' => $recipientId],
+                                'message' => ['text' => $text],
+                            ]);
+                    }
+                }
+            }
+
+            // Fallback for Instagram: if /me/messages failed with Page token and we have page_id, retry via /{page_id}/messages
+            if (! $response->successful() && $item && ! empty($item->page_id)) {
+                $pageResponse = Http::withToken($token)
+                    ->post(self::GRAPH_API_BASE."/{$item->page_id}/messages", [
+                        'recipient' => ['id' => $recipientId],
+                        'message' => ['text' => $text],
+                    ]);
+                if ($pageResponse->successful()) {
+                    $response = $pageResponse;
+                }
+            }
+
+            if ($response->successful()) {
+                $this->logInstagramEvent('SEND_SUCCESS', "Message sent via Graph API to {$recipientId}", [
+                    'meta_response' => $response->json(),
+                ]);
+
+                return true;
+            }
+
+            $this->logInstagramEvent('SEND_ERROR', "Instagram API send error to {$recipientId}", [
+                'status' => $response->status(),
+                'body' => $response->json(),
             ]);
 
-        if ($response->successful()) {
-            $this->logInstagramEvent('SEND_SUCCESS', "Message sent via Graph API to {$recipientId}", [
-                'meta_response' => $response->json(),
-            ]);
+            return false;
+        } catch (\Throwable $e) {
+            $this->logInstagramEvent('SEND_EXCEPTION', 'Instagram send exception: '.$e->getMessage());
 
-            return true;
+            return false;
         }
-
-        $this->logInstagramEvent('SEND_ERROR', "Instagram API send error to {$recipientId}", [
-            'status' => $response->status(),
-            'body' => $response->json(),
-        ]);
-
-        return false;
     }
 
     /**

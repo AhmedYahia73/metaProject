@@ -51,7 +51,16 @@ class MetaPageTokenService
         $appId = config('services.meta.app_id');
         $appSecret = config('services.meta.app_secret');
 
-        if (empty($appId) || empty($appSecret) || empty($shortLivedToken)) {
+        if (empty($appId) || empty($appSecret)) {
+            Log::warning('MetaPageTokenService: META_APP_ID or META_APP_SECRET is not configured in .env! Cannot exchange token for long-lived (60 days) token. Facebook will issue short-lived Page Tokens that expire in 1-2 hours.', [
+                'has_app_id' => ! empty($appId),
+                'has_app_secret' => ! empty($appSecret),
+            ]);
+
+            return $shortLivedToken;
+        }
+
+        if (empty($shortLivedToken)) {
             return $shortLivedToken;
         }
 
@@ -116,6 +125,14 @@ class MetaPageTokenService
                 'messenger_updated' => 0,
                 'instagram_updated' => 0,
             ];
+        }
+
+        // Ensure token is exchanged for a long-lived user token (60 days).
+        // Critical: When querying /me/accounts with a long-lived user token, Meta issues NEVER-EXPIRING (permanent) Page Access Tokens!
+        $longLived = $this->exchangeForLongLivedToken($token);
+        if (! empty($longLived) && $longLived !== $token) {
+            $token = $longLived;
+            $user->update(['facebook_access_token' => $token]);
         }
 
         try {
