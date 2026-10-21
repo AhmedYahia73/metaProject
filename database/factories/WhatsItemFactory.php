@@ -23,7 +23,9 @@ class WhatsItemFactory extends Factory
             'phone' => fake()->unique()->numerify('2010########'),
             'phone_number_id' => (string) fake()->unique()->numberBetween(100000000000000, 999999999999999),
             'waba_id' => (string) fake()->numberBetween(100000000000000, 999999999999999),
+            'customer_waba_id' => null,
             'access_token' => 'fake_meta_access_token',
+            'token_type' => 'system',
             'phone_status' => 'active',
             'phone_verified_at' => now(),
             'android_link' => fake()->optional()->url(),
@@ -46,6 +48,17 @@ class WhatsItemFactory extends Factory
         return $this->state(fn (array $attributes) => [
             'phone_status' => 'verified',
             'phone_verified_at' => now(),
+        ]);
+    }
+
+    /**
+     * Embedded Signup state: customer owns their WABA & token.
+     */
+    public function embeddedSignup(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'token_type' => 'customer',
+            'customer_waba_id' => $attributes['waba_id'],
         ]);
     }
 }

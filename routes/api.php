@@ -19,6 +19,7 @@ use App\Http\Controllers\api\auth\LoginController;
 use App\Http\Controllers\api\HomeController;
 use App\Http\Controllers\api\PaymobCallbackController;
 use App\Http\Controllers\api\user\ChatController;
+use App\Http\Controllers\api\user\EmbeddedSignupController;
 use App\Http\Controllers\api\user\HomeController as UserHomeController;
 use App\Http\Controllers\api\user\InstagramPagesController;
 use App\Http\Controllers\api\user\MessengerPagesController;
@@ -109,6 +110,11 @@ Route::prefix('user')->group(function () {
         Route::get('messenger/facebook_packages', [MessengerPagesController::class, 'facebook_packages']);
         Route::get('messenger/pages', [MessengerPagesController::class, 'pages']);
         Route::post('messenger/orders', [MessengerPagesController::class, 'requestSubscription']);
+
+        // WhatsApp Embedded Signup — connect customer's own WABA (no 20-number limit)
+        Route::post('whats/embedded-signup', [EmbeddedSignupController::class, 'completeSignup']);
+        Route::post('whats/embedded-signup/inspect', [EmbeddedSignupController::class, 'inspectCode']);
+        Route::post('whats/items/{whatsItem}/resubscribe-webhook', [EmbeddedSignupController::class, 'resubscribeWebhook']);
 
         // WhatsApp Self-Service — list numbers, add number, OTP activation, and request subscription
         Route::get('whats/ai_data/{id}', [WhatsPagesController::class, 'ai_data']);

@@ -122,7 +122,9 @@ class HomeController extends Controller
                 return response()->json(['status' => 'restaurant_not_found'], Response::HTTP_OK);
             }
 
-            // Update the phone_number_id and sync access_token with latest config if changed
+            // Update the phone_number_id if changed.
+            // For system-token numbers: sync token from config.
+            // For customer (Embedded Signup) numbers: keep their own token — do NOT overwrite.
             $systemToken = config('services.meta.system_user_token');
             $whatsItemUpdates = [];
 
@@ -130,7 +132,8 @@ class HomeController extends Controller
                 $whatsItemUpdates['phone_number_id'] = $phoneNumberId;
             }
 
-            if (! empty($systemToken) && $whatsItem->access_token !== $systemToken) {
+            $isSystemToken = ($whatsItem->token_type ?? 'system') === 'system';
+            if ($isSystemToken && ! empty($systemToken) && $whatsItem->access_token !== $systemToken) {
                 $whatsItemUpdates['access_token'] = $systemToken;
             }
 
@@ -222,8 +225,9 @@ class HomeController extends Controller
             }
 
             // Mark customer message as read (shows ✓✓ in WhatsApp)
+            // Use the item's own token for Embedded Signup numbers, system token for classic numbers.
             $incomingMessageId = data_get($incomingMessage, 'id');
-            $token = config('services.meta.system_user_token') ?: $whatsItem->access_token;
+            $token = $this->resolveWhatsToken($whatsItem);
             if ($incomingMessageId) {
                 $this->showWhatsAppTyping(
                     accessToken: (string) $token,
@@ -242,8 +246,8 @@ class HomeController extends Controller
                 return response()->json(['status' => 'ai_failed'], Response::HTTP_OK);
             }
 
-            // 7. Send reply via WhatsApp — only record to DB if successful
-            $token = config('services.meta.system_user_token') ?: $whatsItem->access_token;
+            // 8. Send reply via WhatsApp — use item's own token (Embedded Signup) or system token
+            $token = $this->resolveWhatsToken($whatsItem);
             $sent = $this->sendTextMessage(
                 accessToken: (string) $token,
                 phoneNumberId: $whatsItem->phone_number_id,
@@ -336,6 +340,21 @@ class HomeController extends Controller
     // ─────────────────────────────────────────────────────────────────────────
     // Private Helpers
     // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Resolve the correct access token for a WhatsItem.
+     *
+     * - Embedded Signup numbers (token_type = 'customer') own their token → use it directly.
+     * - Classic numbers (token_type = 'system') → use system_user_token from config.
+     */
+    private function resolveWhatsToken(WhatsItem $whatsItem): string
+    {
+        if (($whatsItem->token_type ?? 'system') === 'customer' && ! empty($whatsItem->access_token)) {
+            return $whatsItem->access_token;
+        }
+
+        return (string) (config('services.meta.system_user_token') ?: $whatsItem->access_token);
+    }
 
     /**
      * Determine whether the restaurant still has messages left in its active subscription.
