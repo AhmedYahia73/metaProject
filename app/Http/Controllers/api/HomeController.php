@@ -835,10 +835,8 @@ class HomeController extends Controller
             ], Response::HTTP_OK);
         }
 
-        // ── Branch B: Reply to comment without AI ("تم الرد على الخاص يا فندم") ──
+        // ── Branch B: 1. Reply to public comment with fixed text (without AI) ──
         $publicCommentReply = 'تم الرد على الخاص يا فندم';
-
-        // 1. Reply publicly on the post comment
         $commentSent = $this->replyToFacebookComment(
             pageAccessToken: $messengerAccount->page_access_token,
             commentId: $commentId,
@@ -846,8 +844,26 @@ class HomeController extends Controller
             account: $messengerAccount,
         );
 
-        // 2. Send private reply on Messenger
-        $privateMessengerReply = "أهلاً بك يا {$senderName}! نسعد بخدمتك، تم الرد على الخاص، تفضل بكتابة استفسارك وسنقوم بمساعدتك فوراً 😊";
+        // ── Branch B: 2. Open private conversation on Messenger using AI ──
+        $postText = $this->getFacebookPostContent(
+            pageAccessToken: $messengerAccount->page_access_token,
+            postId: $postId,
+            account: $messengerAccount,
+        );
+
+        $aiDecision = $this->getFacebookCommentAiDecision(
+            messengerAccount: $messengerAccount,
+            senderName: $senderName,
+            commentText: $commentText,
+            postText: $postText,
+        );
+
+        $isInquiry = (bool) ($aiDecision['is_inquiry'] ?? true);
+        $privateMessengerReply = trim((string) ($aiDecision['private_messenger_reply'] ?? ''));
+        if (empty($privateMessengerReply)) {
+            $privateMessengerReply = "أهلاً بك يا {$senderName}! شكراً لاهتمامك وتواصلك معنا بخصوص المنشور، فريق خدمة العملاء يسعده دائماً خدمتك. تفضل بأي استفسار وسنرد عليك فوراً!";
+        }
+
         $messengerSent = $this->sendPrivateReplyToComment(
             pageAccessToken: $messengerAccount->fresh()?->page_access_token ?? $messengerAccount->page_access_token,
             commentId: $commentId,
@@ -1136,6 +1152,12 @@ class HomeController extends Controller
                     'instructions' => $instructions,
                     'input' => $userInput,
                 ]);
+
+                $totalTokens = (int) ($response->usage?->totalTokens ?? 0);
+                if ($totalTokens > 0) {
+                    DailyToken::recordForMessenger($messengerAccount->id, $totalTokens);
+                }
+
                 $rawOutput = trim((string) ($response->outputText ?? ''));
             } catch (\Throwable $respException) {
                 // Fallback to chat completion if responses API fails
@@ -1146,6 +1168,12 @@ class HomeController extends Controller
                         ['role' => 'user', 'content' => $userInput],
                     ],
                 ]);
+
+                $totalTokens = (int) ($response->usage?->totalTokens ?? 0);
+                if ($totalTokens > 0) {
+                    DailyToken::recordForMessenger($messengerAccount->id, $totalTokens);
+                }
+
                 $rawOutput = trim((string) ($response->choices[0]->message->content ?? ''));
             }
 
@@ -1907,10 +1935,8 @@ class HomeController extends Controller
             ], Response::HTTP_OK);
         }
 
-        // ── Branch B: Reply to comment without AI ("تم الرد على الخاص يا فندم") ──
+        // ── Branch B: 1. Reply to public comment with fixed text (without AI) ──
         $publicCommentReply = 'تم الرد على الخاص يا فندم';
-
-        // 1. Reply publicly on the Instagram comment
         $commentSent = $this->replyToInstagramComment(
             accessToken: $instagramItem->access_token,
             commentId: $commentId,
@@ -1918,8 +1944,26 @@ class HomeController extends Controller
             item: $instagramItem,
         );
 
-        // 2. Send private reply on Instagram Direct
-        $privateReply = "أهلاً بك يا {$senderName}! نسعد بخدمتك، تم الرد على الخاص، تفضل بكتابة استفسارك وسنقوم بمساعدتك فوراً 😊";
+        // ── Branch B: 2. Open private conversation on Instagram Direct using AI ──
+        $mediaCaption = $this->getInstagramMediaCaption(
+            accessToken: $instagramItem->access_token,
+            mediaId: $mediaId,
+            item: $instagramItem,
+        );
+
+        $aiDecision = $this->getInstagramCommentAiDecision(
+            instagramItem: $instagramItem,
+            senderName: $senderName,
+            commentText: $commentText,
+            postCaption: $mediaCaption,
+        );
+
+        $isInquiry = (bool) ($aiDecision['is_inquiry'] ?? true);
+        $privateReply = trim((string) ($aiDecision['private_reply'] ?? ''));
+        if (empty($privateReply)) {
+            $privateReply = "أهلاً بك يا {$senderName}! شكراً لاهتمامك وتواصلك معنا بخصوص المنشور، فريق خدمة العملاء يسعده دائماً خدمتك. تفضل بأي استفسار وسنرد عليك فوراً!";
+        }
+
         $privateSent = $this->sendPrivateReplyToInstagramComment(
             accessToken: $instagramItem->fresh()?->access_token ?? $instagramItem->access_token,
             commentId: $commentId,
@@ -2261,6 +2305,12 @@ class HomeController extends Controller
                     'instructions' => $instructions,
                     'input' => $userInput,
                 ]);
+
+                $totalTokens = (int) ($response->usage?->totalTokens ?? 0);
+                if ($totalTokens > 0) {
+                    DailyToken::recordForInstagram($instagramItem->id, $totalTokens);
+                }
+
                 $rawOutput = trim((string) ($response->outputText ?? ''));
             } catch (\Throwable $respException) {
                 // Fallback to chat completion if responses API fails
@@ -2271,6 +2321,12 @@ class HomeController extends Controller
                         ['role' => 'user', 'content' => $userInput],
                     ],
                 ]);
+
+                $totalTokens = (int) ($response->usage?->totalTokens ?? 0);
+                if ($totalTokens > 0) {
+                    DailyToken::recordForInstagram($instagramItem->id, $totalTokens);
+                }
+
                 $rawOutput = trim((string) ($response->choices[0]->message->content ?? ''));
             }
 
