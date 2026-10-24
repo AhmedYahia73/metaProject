@@ -180,3 +180,104 @@ test('it replies to comment with static text and opens private chat using AI whi
     expect($dailyToken)->not->toBeNull()
         ->and((int) $dailyToken->tokens)->toBe(125);
 });
+
+test('admin can list whats items with monthly total_tokens and filter by from/to dates', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+    $user = User::factory()->create(['role' => 'user']);
+    $item = WhatsItem::factory()->create(['user_id' => $user->id]);
+
+    // Token in this month: 200
+    DailyToken::create([
+        'date' => now()->toDateString(),
+        'tokens' => 200,
+        'whats_item_id' => $item->id,
+    ]);
+
+    // Token in last month: 500
+    DailyToken::create([
+        'date' => now()->subMonths(2)->toDateString(),
+        'tokens' => 500,
+        'whats_item_id' => $item->id,
+    ]);
+
+    // 1. Default request (current month only)
+    $response = $this->actingAs($admin)
+        ->getJson("/api/admin/users/{$user->id}/whats-items");
+
+    $response->assertOk();
+    $data = $response->json('data.0');
+    expect((int) $data['total_tokens'])->toBe(200);
+
+    // 2. Filter from/to including last month
+    $from = now()->subMonths(3)->toDateString();
+    $to = now()->toDateString();
+    $filterResponse = $this->actingAs($admin)
+        ->getJson("/api/admin/users/{$user->id}/whats-items?from={$from}&to={$to}");
+
+    $filterResponse->assertOk();
+    $filteredData = $filterResponse->json('data.0');
+    expect((int) $filteredData['total_tokens'])->toBe(700);
+});
+
+test('admin can list messenger accounts with monthly total_tokens and filter by from/to dates', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+    $user = User::factory()->create(['role' => 'user']);
+    $account = MessengerAccount::factory()->create(['user_id' => $user->id]);
+
+    DailyToken::create([
+        'date' => now()->toDateString(),
+        'tokens' => 300,
+        'messenger_account_id' => $account->id,
+    ]);
+
+    $response = $this->actingAs($admin)
+        ->getJson("/api/admin/users/{$user->id}/messenger-accounts");
+
+    $response->assertOk();
+    expect((int) $response->json('data.0.total_tokens'))->toBe(300);
+});
+
+test('admin can list instagram items with monthly total_tokens and filter by from/to dates', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+    $user = User::factory()->create(['role' => 'user']);
+    $item = InstagramItem::factory()->create(['user_id' => $user->id]);
+
+    DailyToken::create([
+        'date' => now()->toDateString(),
+        'tokens' => 450,
+        'instagram_item_id' => $item->id,
+    ]);
+
+    $response = $this->actingAs($admin)
+        ->getJson("/api/admin/users/{$user->id}/instagram-items");
+
+    $response->assertOk();
+    expect((int) $response->json('data.0.total_tokens'))->toBe(450);
+});
+
+test('admin can list users with aggregated total_tokens across all channels', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+    $user = User::factory()->create(['role' => 'user']);
+    $whatsItem = WhatsItem::factory()->create(['user_id' => $user->id]);
+    $messengerAccount = MessengerAccount::factory()->create(['user_id' => $user->id]);
+
+    DailyToken::create([
+        'date' => now()->toDateString(),
+        'tokens' => 150,
+        'whats_item_id' => $whatsItem->id,
+    ]);
+
+    DailyToken::create([
+        'date' => now()->toDateString(),
+        'tokens' => 350,
+        'messenger_account_id' => $messengerAccount->id,
+    ]);
+
+    $response = $this->actingAs($admin)
+        ->getJson('/api/admin/users?paginate=0');
+
+    $response->assertOk();
+    $targetUser = collect($response->json('data'))->firstWhere('id', $user->id);
+    expect($targetUser)->not->toBeNull()
+        ->and((int) $targetUser['total_tokens'])->toBe(500);
+});

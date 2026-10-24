@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\MessengerAccount;
 use App\Models\User;
 use App\Services\MetaPageTokenService;
+use App\trait\FiltersDailyTokens;
 use App\trait\image;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -14,18 +15,39 @@ use Symfony\Component\HttpFoundation\Response;
 
 class MessengerAccountController extends Controller
 {
+    use FiltersDailyTokens;
     use image;
 
     /**
      * List all Messenger pages linked to a user (restaurant).
      */
-    public function index(User $user): JsonResponse
+    public function index(Request $request, User $user): JsonResponse
     {
+        [$startDate, $endDate] = $this->resolveDateRange($request);
+
         $accounts = $user->messengerAccounts()
-            ->select('id', 'user_id', 'page_id', 'page_name',
-                'verify_token', 'status', 'ai_context', 'ai_file',
-                'android_link', 'ios_link', 'website_url')
+            ->select(
+                'id',
+                'user_id',
+                'page_id',
+                'page_name',
+                'verify_token',
+                'status',
+                'ai_context',
+                'ai_file',
+                'android_link',
+                'ios_link',
+                'website_url'
+            )
+            ->withSum(['dailyTokens as total_tokens' => function ($q) use ($startDate, $endDate) {
+                $this->filterDailyTokensDate($q, $startDate, $endDate);
+            }], 'tokens')
             ->get();
+
+        $accounts->each(function ($account) {
+            $account->total_tokens = (int) ($account->total_tokens ?? 0);
+            $account->tokens = $account->total_tokens;
+        });
 
         return response()->json([
             'status' => true,
