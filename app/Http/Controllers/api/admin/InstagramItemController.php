@@ -53,7 +53,6 @@ class InstagramItemController extends Controller
 
         $items->each(function ($item) {
             $item->total_tokens = (int) ($item->total_tokens ?? 0);
-            $item->tokens = $item->total_tokens;
         });
 
         return response()->json([

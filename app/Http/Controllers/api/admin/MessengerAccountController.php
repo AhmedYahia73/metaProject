@@ -46,7 +46,6 @@ class MessengerAccountController extends Controller
 
         $accounts->each(function ($account) {
             $account->total_tokens = (int) ($account->total_tokens ?? 0);
-            $account->tokens = $account->total_tokens;
         });
 
         return response()->json([

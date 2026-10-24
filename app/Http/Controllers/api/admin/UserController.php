@@ -95,11 +95,9 @@ class UserController extends Controller
 
         $formatter = function ($u) {
             $u->total_tokens = (int) ($u->total_tokens ?? 0);
-            $u->tokens = $u->total_tokens;
             if ($u->relationLoaded('whatsItems')) {
                 $u->whatsItems->each(function ($item) {
                     $item->total_tokens = (int) ($item->total_tokens ?? 0);
-                    $item->tokens = $item->total_tokens;
                 });
             }
         };
