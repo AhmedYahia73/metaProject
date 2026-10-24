@@ -102,6 +102,16 @@ class MessengerAccount extends Model
     }
 
     /**
+     * Get the daily tokens consumed by this Messenger account.
+     *
+     * @return HasMany<DailyToken, $this>
+     */
+    public function dailyTokens(): HasMany
+    {
+        return $this->hasMany(DailyToken::class, 'messenger_account_id');
+    }
+
+    /**
      * Get active subscription details and available message count for this Messenger account.
      *
      * @return array{subscription_status: bool, available_msgs: int, start_date: ?string, end_date: ?string, total_msgs: int, used_msgs: int}

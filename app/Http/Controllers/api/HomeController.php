@@ -8,6 +8,7 @@ use App\Events\TypingEvent;
 use App\Events\WhatsEvent;
 use App\Http\Controllers\Controller;
 use App\Models\Chat;
+use App\Models\DailyToken;
 use App\Models\Food;
 use App\Models\InstagramItem;
 use App\Models\MessengerAccount;
@@ -834,134 +835,25 @@ class HomeController extends Controller
             ], Response::HTTP_OK);
         }
 
-        // ── Branch B: AI is available — process with OpenAI
-        $postText = $this->getFacebookPostContent(
+        // ── Branch B: Reply to comment without AI ("تم الرد على الخاص يا فندم") ──
+        $publicCommentReply = 'تم الرد على الخاص يا فندم';
+
+        // 1. Reply publicly on the post comment
+        $commentSent = $this->replyToFacebookComment(
             pageAccessToken: $messengerAccount->page_access_token,
-            postId: $postId,
+            commentId: $commentId,
+            message: $publicCommentReply,
             account: $messengerAccount,
         );
 
-        $aiDecision = $this->getFacebookCommentAiDecision(
-            messengerAccount: $messengerAccount,
-            senderName: $senderName,
-            commentText: $commentText,
-            postText: $postText,
+        // 2. Send private reply on Messenger
+        $privateMessengerReply = "أهلاً بك يا {$senderName}! نسعد بخدمتك، تم الرد على الخاص، تفضل بكتابة استفسارك وسنقوم بمساعدتك فوراً 😊";
+        $messengerSent = $this->sendPrivateReplyToComment(
+            pageAccessToken: $messengerAccount->fresh()?->page_access_token ?? $messengerAccount->page_access_token,
+            commentId: $commentId,
+            message: $privateMessengerReply,
+            account: $messengerAccount,
         );
-
-        // If AI call failed, fallback gracefully to universal messages
-        if (! $aiDecision) {
-            Log::channel('stack')->warning("[FB_COMMENTS] AI call failed for account #{$messengerAccount->id}. Sending universal fallback.");
-
-            $fallbackCommentReply = "أهلاً بك يا {$senderName}! شكراً لتواصلك معنا، تم إرسال رسالة لحضرتك على الخاص ويسعدنا دائماً خدمتك.";
-            $fallbackMessengerReply = "أهلاً بك يا {$senderName}! شكراً لاهتمامك وتواصلك معنا بخصوص المنشور. فريق خدمة العملاء سيتواصل معك في أقرب وقت للرد على استفسارك بالتفصيل ومساعدتك. نسعد دائماً بخدمتك!";
-
-            $commentSent = $this->replyToFacebookComment(
-                pageAccessToken: $messengerAccount->page_access_token,
-                commentId: $commentId,
-                message: $fallbackCommentReply,
-                account: $messengerAccount,
-            );
-
-            $messengerSent = $this->sendPrivateReplyToComment(
-                pageAccessToken: $messengerAccount->fresh()?->page_access_token ?? $messengerAccount->page_access_token,
-                commentId: $commentId,
-                message: $fallbackMessengerReply,
-                account: $messengerAccount,
-            );
-
-            if ($messengerSent && ! empty($fallbackMessengerReply)) {
-                $recipientPsid = (string) ($messengerSent['recipient_id'] ?? $senderId);
-                $metaMid = (string) ($messengerSent['message_id'] ?? $commentId);
-
-                $newChat = Chat::create([
-                    'user_id' => $restaurant->id,
-                    'messenger_account_id' => $messengerAccount->id,
-                    'name' => $senderName,
-                    'phone' => null,
-                    'message' => $fallbackMessengerReply,
-                    'is_image' => false,
-                    'is_admin' => true,
-                    'sender_type' => 'bot',
-                    'is_read' => true,
-                    'channel' => 'messenger',
-                    'messenger_sender_id' => $recipientPsid,
-                    'meta_message_id' => $metaMid,
-                ]);
-
-                try {
-                    $chatData = $newChat->toArray();
-                    $chatData['page_id'] = $messengerAccount->page_id;
-                    MessengerEvent::dispatch($chatData);
-                } catch (\Throwable $e) {
-                    Log::warning('[FB_COMMENTS] MessengerEvent broadcast failed: '.$e->getMessage());
-                }
-            }
-
-            if ($commentSent || $messengerSent) {
-                if ((int) $messengerAccount->msg_number > 0) {
-                    $messengerAccount->decrement('msg_number');
-                }
-
-                MsgSend::create([
-                    'user_id' => $restaurant->id,
-                    'messenger_account_id' => $messengerAccount->id,
-                    'whats_item_id' => null,
-                    'channel' => 'messenger',
-                ]);
-            }
-
-            Cache::put($cacheKey, true, now()->addDays(7));
-
-            return response()->json([
-                'status' => 'fallback_sent',
-                'reason' => 'ai_service_failed',
-                'comment_sent' => $commentSent,
-                'messenger_sent' => (bool) $messengerSent,
-            ], Response::HTTP_OK);
-        }
-
-        $isInquiry = (bool) ($aiDecision['is_inquiry'] ?? false);
-        $publicCommentReply = trim((string) ($aiDecision['public_comment_reply'] ?? ''));
-        $privateMessengerReply = trim((string) ($aiDecision['private_messenger_reply'] ?? ''));
-
-        $commentSent = false;
-        $messengerSent = null;
-
-        if ($isInquiry) {
-            if (empty($publicCommentReply)) {
-                $publicCommentReply = "أهلاً بك يا {$senderName}! تم الرد على الخاص بالتفاصيل كاملة، يسعدنا تواصلك دائماً 😊";
-            }
-
-            // 1. Reply publicly on the post comment
-            $commentSent = $this->replyToFacebookComment(
-                pageAccessToken: $messengerAccount->page_access_token,
-                commentId: $commentId,
-                message: $publicCommentReply,
-                account: $messengerAccount,
-            );
-
-            // 2. Send private reply on Messenger
-            if (! empty($privateMessengerReply)) {
-                $messengerSent = $this->sendPrivateReplyToComment(
-                    pageAccessToken: $messengerAccount->fresh()?->page_access_token ?? $messengerAccount->page_access_token,
-                    commentId: $commentId,
-                    message: $privateMessengerReply,
-                    account: $messengerAccount,
-                );
-            }
-        } else {
-            // Not an inquiry: polite appreciation comment reply
-            if (empty($publicCommentReply)) {
-                $publicCommentReply = "شكراً جزيلاً لك يا {$senderName}! يسعدنا تواصلك ونتشرف بك دائماً ❤️";
-            }
-
-            $commentSent = $this->replyToFacebookComment(
-                pageAccessToken: $messengerAccount->page_access_token,
-                commentId: $commentId,
-                message: $publicCommentReply,
-                account: $messengerAccount,
-            );
-        }
 
         // Deduct 1 message from quota upon successful processing
         if ($commentSent || $messengerSent) {
@@ -2015,134 +1907,25 @@ class HomeController extends Controller
             ], Response::HTTP_OK);
         }
 
-        // ── Branch B: AI is available — process with OpenAI
-        $mediaCaption = $this->getInstagramMediaCaption(
+        // ── Branch B: Reply to comment without AI ("تم الرد على الخاص يا فندم") ──
+        $publicCommentReply = 'تم الرد على الخاص يا فندم';
+
+        // 1. Reply publicly on the Instagram comment
+        $commentSent = $this->replyToInstagramComment(
             accessToken: $instagramItem->access_token,
-            mediaId: $mediaId,
+            commentId: $commentId,
+            message: $publicCommentReply,
             item: $instagramItem,
         );
 
-        $aiDecision = $this->getInstagramCommentAiDecision(
-            instagramItem: $instagramItem,
-            senderName: $senderName,
-            commentText: $commentText,
-            postCaption: $mediaCaption,
+        // 2. Send private reply on Instagram Direct
+        $privateReply = "أهلاً بك يا {$senderName}! نسعد بخدمتك، تم الرد على الخاص، تفضل بكتابة استفسارك وسنقوم بمساعدتك فوراً 😊";
+        $privateSent = $this->sendPrivateReplyToInstagramComment(
+            accessToken: $instagramItem->fresh()?->access_token ?? $instagramItem->access_token,
+            commentId: $commentId,
+            message: $privateReply,
+            item: $instagramItem,
         );
-
-        // If AI call failed, fallback gracefully to universal messages
-        if (! $aiDecision) {
-            Log::channel('stack')->warning("[IG_COMMENTS] AI call failed for account #{$instagramItem->id}. Sending universal fallback.");
-
-            $fallbackCommentReply = "أهلاً بك يا {$senderName}! شكراً لتواصلك معنا، تم إرسال رسالة لحضرتك على الخاص ويسعدنا دائماً خدمتك.";
-            $fallbackPrivateReply = "أهلاً بك يا {$senderName}! شكراً لاهتمامك وتواصلك معنا بخصوص المنشور. فريق خدمة العملاء سيتواصل معك في أقرب وقت للرد على استفسارك بالتفصيل ومساعدتك. نسعد دائماً بخدمتك!";
-
-            $commentSent = $this->replyToInstagramComment(
-                accessToken: $instagramItem->access_token,
-                commentId: $commentId,
-                message: $fallbackCommentReply,
-                item: $instagramItem,
-            );
-
-            $privateSent = $this->sendPrivateReplyToInstagramComment(
-                accessToken: $instagramItem->fresh()?->access_token ?? $instagramItem->access_token,
-                commentId: $commentId,
-                message: $fallbackPrivateReply,
-                item: $instagramItem,
-            );
-
-            if ($commentSent || $privateSent) {
-                $chatMessage = $privateSent ? $fallbackPrivateReply : $fallbackCommentReply;
-                $recipientId = (string) (($privateSent['recipient_id'] ?? null) ?? $senderId);
-                $metaMid = (string) (($privateSent['message_id'] ?? null) ?? $commentId);
-
-                $newChat = Chat::create([
-                    'user_id' => $restaurant?->id,
-                    'instagram_item_id' => $instagramItem->id,
-                    'name' => $senderName,
-                    'phone' => null,
-                    'message' => $chatMessage,
-                    'is_image' => false,
-                    'is_admin' => true,
-                    'sender_type' => 'bot',
-                    'is_read' => true,
-                    'channel' => 'instagram',
-                    'instagram_sender_id' => $recipientId,
-                    'meta_message_id' => $metaMid,
-                ]);
-
-                try {
-                    $chatData = $newChat->toArray();
-                    $chatData['instagram_id'] = $instagramItem->instagram_id;
-                    InstagramEvent::dispatch($chatData);
-                } catch (\Throwable $e) {
-                    Log::warning('[IG_COMMENTS] InstagramEvent broadcast failed: '.$e->getMessage());
-                }
-
-                if ((int) $instagramItem->msg_number > 0) {
-                    $instagramItem->decrement('msg_number');
-                }
-
-                MsgSend::create([
-                    'user_id' => $restaurant?->id,
-                    'instagram_item_id' => $instagramItem->id,
-                    'whats_item_id' => null,
-                    'messenger_account_id' => null,
-                    'channel' => 'instagram',
-                ]);
-            }
-
-            Cache::put($cacheKey, true, now()->addDays(7));
-
-            return response()->json([
-                'status' => 'fallback_sent',
-                'reason' => 'ai_service_failed',
-                'comment_sent' => $commentSent,
-                'instagram_sent' => (bool) $privateSent,
-            ], Response::HTTP_OK);
-        }
-
-        $isInquiry = (bool) ($aiDecision['is_inquiry'] ?? false);
-        $publicCommentReply = trim((string) ($aiDecision['public_comment_reply'] ?? ''));
-        $privateReply = trim((string) ($aiDecision['private_reply'] ?? ''));
-
-        $commentSent = false;
-        $privateSent = null;
-
-        if ($isInquiry) {
-            if (empty($publicCommentReply)) {
-                $publicCommentReply = "أهلاً بك يا {$senderName}! تم الرد على الخاص بالتفاصيل كاملة، يسعدنا تواصلك دائماً 😊";
-            }
-
-            // 1. Reply publicly on the Instagram comment
-            $commentSent = $this->replyToInstagramComment(
-                accessToken: $instagramItem->access_token,
-                commentId: $commentId,
-                message: $publicCommentReply,
-                item: $instagramItem,
-            );
-
-            // 2. Send private reply on Instagram Direct
-            if (! empty($privateReply)) {
-                $privateSent = $this->sendPrivateReplyToInstagramComment(
-                    accessToken: $instagramItem->fresh()?->access_token ?? $instagramItem->access_token,
-                    commentId: $commentId,
-                    message: $privateReply,
-                    item: $instagramItem,
-                );
-            }
-        } else {
-            // Not an inquiry: polite appreciation comment reply
-            if (empty($publicCommentReply)) {
-                $publicCommentReply = "شكراً جزيلاً لك يا {$senderName}! يسعدنا تواصلك ونتشرف بك دائماً ❤️";
-            }
-
-            $commentSent = $this->replyToInstagramComment(
-                accessToken: $instagramItem->access_token,
-                commentId: $commentId,
-                message: $publicCommentReply,
-                item: $instagramItem,
-            );
-        }
 
         // Deduct 1 message from quota upon successful processing
         if ($commentSent || $privateSent) {
@@ -3091,6 +2874,11 @@ class HomeController extends Controller
                 'input' => $userMessage,
             ]);
 
+            $totalTokens = (int) ($response->usage?->totalTokens ?? 0);
+            if ($totalTokens > 0) {
+                DailyToken::recordForInstagram($instagramItem->id, $totalTokens);
+            }
+
             $reply = trim((string) ($response->outputText ?? ''));
 
             if (! empty($reply) && $this->isOrderIntent($userMessage)) {
@@ -3176,6 +2964,11 @@ class HomeController extends Controller
                 'instructions' => $instructions,
                 'input' => $userMessage,
             ]);
+
+            $totalTokens = (int) ($response->usage?->totalTokens ?? 0);
+            if ($totalTokens > 0 && $whatsItem) {
+                DailyToken::recordForWhats($whatsItem->id, $totalTokens);
+            }
 
             $reply = trim((string) ($response->outputText ?? ''));
 
@@ -3341,6 +3134,11 @@ class HomeController extends Controller
                 'instructions' => $instructions,
                 'input' => $userMessage,
             ]);
+
+            $totalTokens = (int) ($response->usage?->totalTokens ?? 0);
+            if ($totalTokens > 0) {
+                DailyToken::recordForMessenger($messengerAccount->id, $totalTokens);
+            }
 
             $reply = trim((string) ($response->outputText ?? ''));
 

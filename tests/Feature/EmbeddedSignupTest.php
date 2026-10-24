@@ -10,7 +10,7 @@ uses(RefreshDatabase::class);
 // ── Set required Meta config for all tests ────────────────────────────────────
 beforeEach(function () {
     config([
-        'services.meta.app_id'     => 'TEST_APP_ID',
+        'services.meta.app_id' => 'TEST_APP_ID',
         'services.meta.app_secret' => 'TEST_APP_SECRET',
     ]);
 });
@@ -20,7 +20,7 @@ beforeEach(function () {
 function makeUser(): User
 {
     return User::factory()->create([
-        'role'            => 'user',
+        'role' => 'user',
         'restuarant_name' => 'Test Restaurant',
     ]);
 }
@@ -28,16 +28,16 @@ function makeUser(): User
 function makeWhatsItem(User $user, array $overrides = []): WhatsItem
 {
     return WhatsItem::factory()->create(array_merge([
-        'user_id'         => $user->id,
-        'phone'           => '+201001234567',
+        'user_id' => $user->id,
+        'phone' => '+201001234567',
         'phone_number_id' => 'pnid_test_123',
-        'waba_id'         => 'waba_test_456',
-        'access_token'    => 'TOKEN_SYSTEM',
-        'token_type'      => 'system',
-        'phone_status'    => 'active',
-        'msg_number'      => 100,
-        'start_date'      => now()->subDay(),
-        'end_date'        => now()->addMonth(),
+        'waba_id' => 'waba_test_456',
+        'access_token' => 'TOKEN_SYSTEM',
+        'token_type' => 'system',
+        'phone_status' => 'active',
+        'msg_number' => 100,
+        'start_date' => now()->subDay(),
+        'end_date' => now()->addMonth(),
     ], $overrides));
 }
 
@@ -96,20 +96,20 @@ test('embedded signup creates WhatsItem and subscribes webhook on success', func
     $response->assertStatus(201)
         ->assertJson([
             'status' => true,
-            'meta'   => [
-                'waba_id'            => 'WABA_ID_999',
-                'phone_number_id'    => 'PNID_888',
+            'meta' => [
+                'waba_id' => 'WABA_ID_999',
+                'phone_number_id' => 'PNID_888',
                 'webhook_subscribed' => true,
             ],
         ]);
 
     $this->assertDatabaseHas('whats_items', [
-        'user_id'          => $user->id,
-        'phone_number_id'  => 'PNID_888',
-        'waba_id'          => 'WABA_ID_999',
+        'user_id' => $user->id,
+        'phone_number_id' => 'PNID_888',
+        'waba_id' => 'WABA_ID_999',
         'customer_waba_id' => 'WABA_ID_999',
-        'token_type'       => 'customer',
-        'phone_status'     => 'active',
+        'token_type' => 'customer',
+        'phone_status' => 'active',
     ]);
 });
 
@@ -117,9 +117,9 @@ test('embedded signup updates existing WhatsItem when phone already exists', fun
     $user = makeUser();
 
     $existing = makeWhatsItem($user, [
-        'phone'           => '+20100999888',
+        'phone' => '+20100999888',
         'phone_number_id' => 'PNID_OLD',
-        'token_type'      => 'system',
+        'token_type' => 'system',
     ]);
 
     // Sequence: token exchange → debug_token → phone_numbers → phone details → subscribed_apps
@@ -141,8 +141,8 @@ test('embedded signup updates existing WhatsItem when phone already exists', fun
     $this->assertDatabaseCount('whats_items', 1);
 
     $this->assertDatabaseHas('whats_items', [
-        'id'              => $existing->id,
-        'token_type'      => 'customer',
+        'id' => $existing->id,
+        'token_type' => 'customer',
         'phone_number_id' => 'PNID_888',
     ]);
 });
@@ -153,9 +153,9 @@ test('resubscribe webhook succeeds for customer token items', function () {
     $user = makeUser();
 
     $whatsItem = makeWhatsItem($user, [
-        'token_type'       => 'customer',
+        'token_type' => 'customer',
         'customer_waba_id' => 'WABA_ID_999',
-        'access_token'     => 'CUSTOMER_TOKEN',
+        'access_token' => 'CUSTOMER_TOKEN',
     ]);
 
     Http::fake(['graph.facebook.com/*' => Http::response(['success' => true], 200)]);
@@ -182,37 +182,37 @@ test('webhook uses customer token for embedded signup numbers', function () {
     $user = makeUser();
 
     $whatsItem = makeWhatsItem($user, [
-        'phone'            => '201001234567',
-        'phone_number_id'  => 'PNID_CUSTOMER',
-        'waba_id'          => 'WABA_CUSTOMER',
+        'phone' => '201001234567',
+        'phone_number_id' => 'PNID_CUSTOMER',
+        'waba_id' => 'WABA_CUSTOMER',
         'customer_waba_id' => 'WABA_CUSTOMER',
-        'access_token'     => 'CUSTOMER_OWN_TOKEN',
-        'token_type'       => 'customer',
+        'access_token' => 'CUSTOMER_OWN_TOKEN',
+        'token_type' => 'customer',
     ]);
 
     Http::fake([
-        "https://graph.facebook.com/*/PNID_CUSTOMER/messages" => Http::response(['messages' => [['id' => 'wamid.test']]], 200),
+        'https://graph.facebook.com/*/PNID_CUSTOMER/messages' => Http::response(['messages' => [['id' => 'wamid.test']]], 200),
         'graph.facebook.com/*' => Http::response([], 200),
     ]);
 
     $payload = [
         'object' => 'whatsapp_business_account',
-        'entry'  => [[
-            'id'      => 'WABA_CUSTOMER',
+        'entry' => [[
+            'id' => 'WABA_CUSTOMER',
             'changes' => [[
                 'value' => [
                     'messaging_product' => 'whatsapp',
-                    'metadata'          => [
+                    'metadata' => [
                         'display_phone_number' => '201001234567',
-                        'phone_number_id'      => 'PNID_CUSTOMER',
+                        'phone_number_id' => 'PNID_CUSTOMER',
                     ],
                     'contacts' => [['profile' => ['name' => 'Ahmed'], 'wa_id' => '201009876543']],
                     'messages' => [[
-                        'from'      => '201009876543',
-                        'id'        => 'wamid.in.1',
+                        'from' => '201009876543',
+                        'id' => 'wamid.in.1',
                         'timestamp' => (string) time(),
-                        'type'      => 'text',
-                        'text'      => ['body' => 'مرحبا'],
+                        'type' => 'text',
+                        'text' => ['body' => 'مرحبا'],
                     ]],
                 ],
                 'field' => 'messages',

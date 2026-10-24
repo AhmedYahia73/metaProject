@@ -107,6 +107,16 @@ class InstagramItem extends Model
     }
 
     /**
+     * Get the daily tokens consumed by this Instagram item.
+     *
+     * @return HasMany<DailyToken, $this>
+     */
+    public function dailyTokens(): HasMany
+    {
+        return $this->hasMany(DailyToken::class, 'instagram_item_id');
+    }
+
+    /**
      * Get active subscription details and available message count for this Instagram account.
      *
      * @return array{subscription_status: bool, available_msgs: int, start_date: ?string, end_date: ?string, total_msgs: int, used_msgs: int}

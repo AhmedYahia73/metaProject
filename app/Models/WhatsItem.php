@@ -117,6 +117,16 @@ class WhatsItem extends Model
     }
 
     /**
+     * Get the daily tokens consumed by this WhatsApp item.
+     *
+     * @return HasMany<DailyToken, $this>
+     */
+    public function dailyTokens(): HasMany
+    {
+        return $this->hasMany(DailyToken::class, 'whats_item_id');
+    }
+
+    /**
      * Get active subscription details and available message count for this WhatsApp item.
      *
      * @return array{subscription_status: bool, available_msgs: int, start_date: ?string, end_date: ?string, total_msgs: int, used_msgs: int}
