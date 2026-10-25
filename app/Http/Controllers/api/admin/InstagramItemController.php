@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\InstagramItem;
 use App\Models\User;
 use App\Services\MetaPageTokenService;
+use App\trait\FiltersDailyTokens;
 use App\trait\image;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -14,13 +15,16 @@ use Symfony\Component\HttpFoundation\Response;
 
 class InstagramItemController extends Controller
 {
+    use FiltersDailyTokens;
     use image;
 
     /**
      * List all Instagram accounts linked to a user (restaurant).
      */
-    public function index(User $user): JsonResponse
+    public function index(Request $request, User $user): JsonResponse
     {
+        [$startDate, $endDate] = $this->resolveDateRange($request);
+
         $items = $user->instagramItems()
             ->select(
                 'id',
@@ -41,8 +45,15 @@ class InstagramItemController extends Controller
                 'created_at',
                 'updated_at'
             )
+            ->withSum(['dailyTokens as total_tokens' => function ($q) use ($startDate, $endDate) {
+                $this->filterDailyTokensDate($q, $startDate, $endDate);
+            }], 'tokens')
             ->latest()
             ->get();
+
+        $items->each(function ($item) {
+            $item->total_tokens = (int) ($item->total_tokens ?? 0);
+        });
 
         return response()->json([
             'status' => true,

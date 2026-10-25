@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\WhatsItem;
 use App\Services\MetaWhatsAppService;
+use App\trait\FiltersDailyTokens;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -15,6 +16,8 @@ use Symfony\Component\HttpFoundation\Response;
 
 class UserController extends Controller
 {
+    use FiltersDailyTokens;
+
     public function __construct(
         protected MetaWhatsAppService $metaService
     ) {}
@@ -37,9 +40,33 @@ class UserController extends Controller
             'phone_status' => 'sometimes|string|max:50',
             'search' => 'sometimes|string|max:255',
             'paginate' => 'sometimes|boolean',
+            'from' => 'sometimes|date',
+            'to' => 'sometimes|date',
         ]);
 
-        $query = User::with('whatsItems')->where('role', 'user');
+        [$startDate, $endDate] = $this->resolveDateRange($request);
+
+        $query = User::select('users.*')
+            ->selectSub(function ($sub) use ($startDate, $endDate) {
+                $sub->from('daily_tokens')
+                    ->selectRaw('COALESCE(SUM(tokens), 0)');
+                $this->filterDailyTokensDate($sub, $startDate, $endDate);
+                $sub->where(function ($q) {
+                    $q->whereIn('whats_item_id', function ($w) {
+                        $w->select('id')->from('whats_items')->whereColumn('whats_items.user_id', 'users.id');
+                    })->orWhereIn('messenger_account_id', function ($m) {
+                        $m->select('id')->from('messenger_accounts')->whereColumn('messenger_accounts.user_id', 'users.id');
+                    })->orWhereIn('instagram_item_id', function ($i) {
+                        $i->select('id')->from('instagram_items')->whereColumn('instagram_items.user_id', 'users.id');
+                    });
+                });
+            }, 'total_tokens')
+            ->with(['whatsItems' => function ($q) use ($startDate, $endDate) {
+                $q->withSum(['dailyTokens as total_tokens' => function ($d) use ($startDate, $endDate) {
+                    $this->filterDailyTokensDate($d, $startDate, $endDate);
+                }], 'tokens');
+            }])
+            ->where('role', 'user');
 
         // Optional filter by phone status (e.g., ?phone_status=active)
         if ($request->filled('phone_status')) {
@@ -65,6 +92,21 @@ class UserController extends Controller
         $users = $isPaginated
             ? $query->paginate($perPage)
             : $query->get();
+
+        $formatter = function ($u) {
+            $u->total_tokens = (int) ($u->total_tokens ?? 0);
+            if ($u->relationLoaded('whatsItems')) {
+                $u->whatsItems->each(function ($item) {
+                    $item->total_tokens = (int) ($item->total_tokens ?? 0);
+                });
+            }
+        };
+
+        if ($users instanceof LengthAwarePaginator) {
+            $users->getCollection()->each($formatter);
+        } else {
+            $users->each($formatter);
+        }
 
         $response = [
             'status' => true,

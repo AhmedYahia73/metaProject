@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\WhatsItem;
 use App\Services\MetaWhatsAppService;
+use App\trait\FiltersDailyTokens;
 use App\trait\image;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -13,6 +14,7 @@ use Symfony\Component\HttpFoundation\Response;
 
 class WhatsItemController extends Controller
 {
+    use FiltersDailyTokens;
     use image;
 
     public function __construct(
@@ -22,9 +24,20 @@ class WhatsItemController extends Controller
     /**
      * List all WhatsApp numbers for a user.
      */
-    public function index(User $user): JsonResponse
+    public function index(Request $request, User $user): JsonResponse
     {
-        $items = $user->whatsItems()->latest()->get();
+        [$startDate, $endDate] = $this->resolveDateRange($request);
+
+        $items = $user->whatsItems()
+            ->withSum(['dailyTokens as total_tokens' => function ($q) use ($startDate, $endDate) {
+                $this->filterDailyTokensDate($q, $startDate, $endDate);
+            }], 'tokens')
+            ->latest()
+            ->get();
+
+        $items->each(function ($item) {
+            $item->total_tokens = (int) ($item->total_tokens ?? 0);
+        });
 
         return response()->json([
             'status' => true,
