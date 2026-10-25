@@ -6,11 +6,16 @@ use App\Http\Controllers\Controller;
 use App\Models\MsgSend;
 use App\Models\Order;
 use App\Models\User;
+use App\Services\OpenAiTokenService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class DashboardController extends Controller
 {
+    public function __construct(
+        public OpenAiTokenService $openAiTokenService
+    ) {}
+
     /**
      * Display dashboard statistics (message consumption, active subscriptions, and overview).
      */
@@ -89,6 +94,7 @@ class DashboardController extends Controller
 
         $used = $msgSendQuery->count();
         $remaining = max(0, $totalAllocatedMsgs - $used);
+        $aiRemainingTokens = $this->openAiTokenService->getRemainingTokens();
 
         // 3. Optional overview metrics for general admin dashboard (when user_id is not specified)
         $overview = [];
@@ -117,6 +123,7 @@ class DashboardController extends Controller
                 'active_order' => $totalAllocatedMsgs,
                 'used' => $used,
                 'remaining' => $remaining,
+                'ai_remaining_tokens' => $aiRemainingTokens,
                 'period' => [
                     'from' => $periodFrom,
                     'to' => $periodTo,
