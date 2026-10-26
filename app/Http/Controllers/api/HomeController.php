@@ -3421,12 +3421,24 @@ class HomeController extends Controller
         string $incomingMessageId,
     ): void {
         try {
-            Http::withToken($accessToken)
+            $response = Http::withToken($accessToken)
                 ->post(self::GRAPH_API_BASE."/{$phoneNumberId}/messages", [
                     'messaging_product' => 'whatsapp',
                     'status' => 'read',
                     'message_id' => $incomingMessageId,
                 ]);
+
+            if (! $response->successful()) {
+                $systemToken = (string) config('services.meta.system_user_token');
+                if (! empty($systemToken) && $accessToken !== $systemToken) {
+                    Http::withToken($systemToken)
+                        ->post(self::GRAPH_API_BASE."/{$phoneNumberId}/messages", [
+                            'messaging_product' => 'whatsapp',
+                            'status' => 'read',
+                            'message_id' => $incomingMessageId,
+                        ]);
+                }
+            }
         } catch (\Throwable $e) {
             Log::warning('WhatsApp mark-as-read failed: '.$e->getMessage());
         }
@@ -3501,6 +3513,33 @@ class HomeController extends Controller
 
         if ($response->successful()) {
             return true;
+        }
+
+        // Fallback: If customer token failed (e.g. Paid Message Account permission error #10),
+        // retry with system user token if configured
+        $systemToken = (string) config('services.meta.system_user_token');
+        if (! empty($systemToken) && $accessToken !== $systemToken) {
+            $fallbackResponse = Http::withToken($systemToken)
+                ->post(self::GRAPH_API_BASE."/{$phoneNumberId}/messages", [
+                    'messaging_product' => 'whatsapp',
+                    'recipient_type' => 'individual',
+                    'to' => $cleanTo,
+                    'type' => 'text',
+                    'text' => ['body' => $body],
+                ]);
+
+            if ($fallbackResponse->successful()) {
+                Log::info("WhatsApp sendTextMessage: fallback to system_user_token succeeded for {$phoneNumberId}");
+
+                return true;
+            }
+
+            Log::error('WhatsApp API fallback error', [
+                'phone_number_id' => $phoneNumberId,
+                'to' => $to,
+                'status' => $fallbackResponse->status(),
+                'body' => $fallbackResponse->json(),
+            ]);
         }
 
         Log::error('WhatsApp API error', [
