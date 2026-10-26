@@ -16,6 +16,7 @@ class Chat extends Model
         'messenger_account_id',
         'whats_item_id',
         'instagram_item_id',
+        'telegram_account_id',
         'name',
         'phone',
         'message',
@@ -26,6 +27,7 @@ class Chat extends Model
         'channel',
         'messenger_sender_id',
         'instagram_sender_id',
+        'telegram_sender_id',
         'sender_type',
         'meta_message_id',
     ];
@@ -87,6 +89,16 @@ class Chat extends Model
     public function instagramItem(): BelongsTo
     {
         return $this->belongsTo(InstagramItem::class);
+    }
+
+    /**
+     * Get the Telegram account associated with this message.
+     *
+     * @return BelongsTo<TelegramAccount, $this>
+     */
+    public function telegramAccount(): BelongsTo
+    {
+        return $this->belongsTo(TelegramAccount::class);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

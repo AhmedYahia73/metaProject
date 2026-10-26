@@ -109,6 +109,16 @@ class User extends Authenticatable
     }
 
     /**
+     * Get all Telegram accounts (bots) for this user (restaurant).
+     *
+     * @return HasMany<TelegramAccount, $this>
+     */
+    public function telegramAccounts(): HasMany
+    {
+        return $this->hasMany(TelegramAccount::class);
+    }
+
+    /**
      * Get all chats for this user (restaurant).
      *
      * @return HasMany<Chat, $this>

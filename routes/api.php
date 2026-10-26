@@ -13,16 +13,20 @@ use App\Http\Controllers\api\admin\ReportController;
 use App\Http\Controllers\api\admin\SettingController;
 use App\Http\Controllers\api\admin\SubscriperController;
 use App\Http\Controllers\api\admin\TaxController;
+use App\Http\Controllers\api\admin\TelegramAccountController as AdminTelegramAccountController;
 use App\Http\Controllers\api\admin\UserController;
 use App\Http\Controllers\api\admin\WhatsItemController as AdminWhatsItemController;
 use App\Http\Controllers\api\auth\LoginController;
 use App\Http\Controllers\api\HomeController;
 use App\Http\Controllers\api\PaymobCallbackController;
+use App\Http\Controllers\api\TelegramWebhookController;
 use App\Http\Controllers\api\user\ChatController;
 use App\Http\Controllers\api\user\EmbeddedSignupController;
 use App\Http\Controllers\api\user\HomeController as UserHomeController;
 use App\Http\Controllers\api\user\InstagramPagesController;
 use App\Http\Controllers\api\user\MessengerPagesController;
+use App\Http\Controllers\api\user\TelegramAccountController as UserTelegramAccountController;
+use App\Http\Controllers\api\user\TelegramChatController;
 use App\Http\Controllers\api\user\UserOrderController;
 use App\Http\Controllers\api\user\WhatsPagesController;
 use Illuminate\Http\Request;
@@ -62,6 +66,9 @@ Route::post('/instagram-webhook/subscribe-page', [HomeController::class, 'instag
 Route::get('/instagram-webhook/set-active-id', [HomeController::class, 'instagram_set_active_id']);
 Route::post('/instagram-webhook/set-active-id', [HomeController::class, 'instagram_set_active_id']);
 
+// Telegram Webhook (public — Telegram sends POST with message updates)
+Route::post('/telegram-webhook/{telegramAccount}', [TelegramWebhookController::class, 'handleWebhook']);
+
 // Paymob Webhook / Redirection Callback (public)
 Route::match(['get', 'post'], '/paymob/callback', [PaymobCallbackController::class, 'callback']);
 
@@ -93,6 +100,13 @@ Route::prefix('auth')->group(function () {
 | User Routes (Protected by auth:sanctum & user middleware)
 |--------------------------------------------------------------------------
 */
+Route::middleware(['auth:sanctum', 'user'])->group(function () {   
+        // WhatsApp Embedded Signup — connect customer's own WABA (no 20-number limit)
+        Route::post('whats/embedded-signup', [EmbeddedSignupController::class, 'completeSignup']);
+        Route::post('whats/embedded-signup/inspect', [EmbeddedSignupController::class, 'inspectCode']);
+        Route::post('whats/items/{whatsItem}/resubscribe-webhook', [EmbeddedSignupController::class, 'resubscribeWebhook']);
+});
+
 Route::prefix('user')->group(function () {
     // Public user routes
     Route::get('packages', [UserHomeController::class, 'packages']);
@@ -156,6 +170,20 @@ Route::prefix('user')->group(function () {
         Route::get('chat/instagram/conversations', [ChatController::class, 'instagramConversations']);
         Route::get('chat/instagram/messages', [ChatController::class, 'instagramMessages']);
         Route::post('chat/instagram/send', [ChatController::class, 'sendInstagramMessage']);
+
+        // Telegram Self-Service — connect bot, manage AI data & status
+        Route::get('telegram/accounts', [UserTelegramAccountController::class, 'index']);
+        Route::post('telegram/connect', [UserTelegramAccountController::class, 'connect']);
+        Route::get('telegram/accounts/{telegramAccount}', [UserTelegramAccountController::class, 'show']);
+        Route::post('telegram/accounts/{telegramAccount}', [UserTelegramAccountController::class, 'update']);
+        Route::put('telegram/accounts/{telegramAccount}', [UserTelegramAccountController::class, 'update']);
+        Route::delete('telegram/accounts/{telegramAccount}', [UserTelegramAccountController::class, 'destroy']);
+
+        // Live Chat / Inbox (Telegram)
+        Route::get('chat/telegram/accounts', [TelegramChatController::class, 'accounts']);
+        Route::get('chat/telegram/conversations', [TelegramChatController::class, 'conversations']);
+        Route::get('chat/telegram/messages', [TelegramChatController::class, 'messages']);
+        Route::post('chat/telegram/send', [TelegramChatController::class, 'sendMessage']);
 
         Route::post('chat/mark-as-read', [ChatController::class, 'markAsRead']);
 
@@ -251,4 +279,7 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
         [AdminInstagramItemController::class, 'regenerateVerifyToken']
     );
     Route::apiResource('users/{user}/instagram-items', AdminInstagramItemController::class);
+
+    // Telegram Accounts Management (Admin manual control)
+    Route::apiResource('users/{user}/telegram-accounts', AdminTelegramAccountController::class);
 });
