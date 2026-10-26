@@ -366,6 +366,63 @@ class MetaWhatsAppService
     }
 
     /**
+     * Deregister a phone number from Meta WhatsApp Cloud API.
+     * Removes the number from the Meta-hosted system, freeing it up for regular WhatsApp or re-registration.
+     *
+     * POST /{phone-number-id}/deregister
+     */
+    public function deregisterNumber(string $phoneNumberId, ?string $token = null): array
+    {
+        $accessToken = ! empty($token) ? $token : $this->systemUserToken;
+
+        if (empty($accessToken)) {
+            return [
+                'success' => false,
+                'message' => 'Meta credentials are not configured in .env.',
+            ];
+        }
+
+        try {
+            $response = Http::withToken($accessToken)
+                ->timeout(15)
+                ->post("{$this->baseUrl}/{$phoneNumberId}/deregister");
+
+            if ($response->successful()) {
+                Log::info('MetaWhatsApp: Phone number deregistered from Meta successfully', [
+                    'phone_number_id' => $phoneNumberId,
+                ]);
+
+                return [
+                    'success' => true,
+                    'message' => 'Phone number deregistered from Meta successfully.',
+                    'data' => $response->json(),
+                ];
+            }
+
+            $error = $response->json()['error'] ?? [];
+            Log::warning('MetaWhatsApp: Deregister number failed on Meta', [
+                'phone_number_id' => $phoneNumberId,
+                'error' => $error,
+            ]);
+
+            return [
+                'success' => false,
+                'message' => $error['message'] ?? 'Failed to deregister phone number from Meta.',
+                'raw' => $response->json(),
+            ];
+        } catch (\Throwable $e) {
+            Log::error('MetaWhatsApp: Exception while deregistering phone number: '.$e->getMessage(), [
+                'phone_number_id' => $phoneNumberId,
+            ]);
+
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
      * Fetch phone numbers under a WABA.
      */
     public function getWabaPhoneNumbers(?string $wabaId = null): array

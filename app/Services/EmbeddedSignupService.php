@@ -189,6 +189,47 @@ class EmbeddedSignupService
     }
 
     /**
+     * Unsubscribe the app from the customer's WABA webhook notifications.
+     *
+     * DELETE /{waba-id}/subscribed_apps
+     */
+    public function unsubscribeAppFromWaba(string $wabaId, string $accessToken): array
+    {
+        try {
+            $response = Http::withToken($accessToken)
+                ->timeout(15)
+                ->delete("{$this->baseUrl}/{$wabaId}/subscribed_apps");
+
+            if ($response->successful()) {
+                Log::info('EmbeddedSignup: App unsubscribed from WABA webhook', ['waba_id' => $wabaId]);
+
+                return ['success' => true];
+            }
+
+            $error = $response->json('error', []);
+            Log::warning('EmbeddedSignup: Failed to unsubscribe app from WABA', [
+                'waba_id' => $wabaId,
+                'error' => $error,
+            ]);
+
+            return [
+                'success' => false,
+                'message' => $error['message'] ?? 'Failed to unsubscribe app from WABA.',
+                'raw' => $response->json(),
+            ];
+        } catch (\Throwable $e) {
+            Log::error('EmbeddedSignup: Exception while unsubscribing app from WABA: '.$e->getMessage(), [
+                'waba_id' => $wabaId,
+            ]);
+
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
      * Register a phone number on the WhatsApp Cloud API using the customer's token.
      * Required only if the number hasn't been registered yet.
      *

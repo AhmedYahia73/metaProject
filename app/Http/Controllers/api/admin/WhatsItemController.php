@@ -5,11 +5,13 @@ namespace App\Http\Controllers\api\admin;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\WhatsItem;
+use App\Services\EmbeddedSignupService;
 use App\Services\MetaWhatsAppService;
 use App\trait\FiltersDailyTokens;
 use App\trait\image;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Symfony\Component\HttpFoundation\Response;
 
 class WhatsItemController extends Controller
@@ -189,20 +191,48 @@ class WhatsItemController extends Controller
 
     /**
      * Delete a WhatsApp item.
+     * Also deregisters the phone number from Meta Cloud API and unsubscribes the WABA webhook if applicable.
      */
     public function destroy(User $user, WhatsItem $whatsItem): JsonResponse
     {
         $this->authorizeItem($user, $whatsItem);
 
+        // 1. Deregister phone number from Meta Cloud API if registered
+        if (! empty($whatsItem->phone_number_id)) {
+            $token = ($whatsItem->token_type === 'customer' && ! empty($whatsItem->access_token))
+                ? $whatsItem->access_token
+                : null;
+
+            $this->metaService->deregisterNumber($whatsItem->phone_number_id, $token);
+        }
+
+        // 2. If it is an Embedded Signup WABA and no other numbers use this WABA, unsubscribe app webhook
+        if (! empty($whatsItem->customer_waba_id)) {
+            $hasOtherNumbers = WhatsItem::where('customer_waba_id', $whatsItem->customer_waba_id)
+                ->where('id', '!=', $whatsItem->id)
+                ->exists();
+
+            if (! $hasOtherNumbers && ! empty($whatsItem->access_token)) {
+                app(EmbeddedSignupService::class)->unsubscribeAppFromWaba(
+                    $whatsItem->customer_waba_id,
+                    $whatsItem->access_token
+                );
+            }
+        }
+
+        // 3. Clear avatar cache & local files
+        Cache::forget("whats_item_avatar_{$whatsItem->id}_{$whatsItem->phone_number_id}");
+
         if ($whatsItem->ai_file) {
             $this->deleteImage($whatsItem->ai_file);
         }
 
+        // 4. Delete database record
         $whatsItem->delete();
 
         return response()->json([
             'status' => true,
-            'message' => 'WhatsApp item deleted successfully.',
+            'message' => 'WhatsApp item deleted and deregistered from Meta successfully.',
         ]);
     }
 
