@@ -52,7 +52,7 @@ class TelegramWebhookController extends Controller
 
         $messageText = trim((string) ($message['text'] ?? ''));
         if (empty($messageText)) {
-            Log::channel('stack')->info("[TELEGRAM] Non-text message ignored (attachment/sticker/etc.)");
+            Log::channel('stack')->info('[TELEGRAM] Non-text message ignored (attachment/sticker/etc.)');
 
             return response()->json(['status' => 'non_text_ignored'], Response::HTTP_OK);
         }

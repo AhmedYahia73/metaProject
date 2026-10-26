@@ -14,6 +14,7 @@
    - [1. إتمام عملية الربط (Complete Signup)](#1-إتمام-عملية-الربط-complete-signup)
    - [2. فحص الأرقام المتاحة (Inspect Code)](#2-فحص-الأرقام-المتاحة-inspect-code)
    - [3. إعادة تفعيل الويب هوك (Resubscribe Webhook)](#3-إعادة-تفعيل-الويب-هوك-resubscribe-webhook)
+   - [4. تسجيل وتفعيل الرقم على واتساب (Register Phone with PIN)](#4-تسجيل-وتفعيل-الرقم-على-واتساب-register-phone-with-pin)
 4. [سيناريوهات الاستخدام ودورة العمل (Workflows)](#سيناريوهات-الاستخدام)
    - [السيناريو الأول: الربط المباشر بخطوة واحدة](#السيناريو-الأول-الربط-المباشر-بخطوة-واحدة)
    - [السيناريو الثاني: الفحص واختيار الرقم من قائمة](#السيناريو-الثاني-الفحص-واختيار-الرقم-من-قائمة)
@@ -190,11 +191,43 @@ Accept: application/json
 }
 ```
 
-#### نموذج الاستجابة عند الفشل (400 Bad Request):
+---
+
+### 4. تسجيل وتفعيل الرقم على واتساب (Register Phone with PIN)
+
+يُستخدم هذا الـ Endpoint لتسجيل الرقم الموثق على WhatsApp Cloud API باستخدام كود PIN مكون من 6 أرقام (Two-Step Verification). وهو الذي ينقل حالة الرقم في سيرفرات Meta من **`PENDING`** إلى **`CONNECTED`**، ويقوم تلقائياً بتفعيل الرقم في النظام وإعطائه:
+- `phone_status: active`
+- `start_date: اليوم (now)`
+- `end_date: بعد شهر (now + 1 month)`
+- `msg_number: 1000 رسالة`
+
+* **المسار للمستخدم:** `POST /api/whats/items/{whatsItem}/register`
+* **المسار للأدمن:** `POST /api/admin/users/{user}/whats-items/{whatsItem}/register`
+* **نوع المحتوى:** `application/json`
+
+#### المدخلات (Request Payload):
 ```json
 {
-  "status": false,
-  "message": "This number was not connected via Embedded Signup. Only Embedded Signup numbers support webhook re-subscription."
+  "pin": "123456"
+}
+```
+
+#### نموذج الاستجابة بنجاح (200 OK):
+```json
+{
+  "status": true,
+  "message": "Phone number registered and connected to WhatsApp successfully!",
+  "data": {
+    "id": 14,
+    "user_id": 4,
+    "phone": "+20 11 43469626",
+    "phone_number_id": "1409267442271757",
+    "phone_status": "active",
+    "phone_verified_at": "2026-10-26T14:26:00.000000Z",
+    "start_date": "2026-10-26",
+    "end_date": "2026-11-26",
+    "msg_number": 1000
+  }
 }
 ```
 

@@ -7,6 +7,7 @@ use App\Models\InstagramItem;
 use App\Models\MessengerAccount;
 use App\Models\Order;
 use App\Models\Package;
+use App\Models\TelegramAccount;
 use App\Models\User;
 use App\Services\MetaPageTokenService;
 use App\trait\image;
@@ -40,11 +41,11 @@ class OrderController extends Controller
             'search' => 'sometimes|string|max:255',
             'paginate' => 'sometimes|boolean',
             'status' => 'sometimes|in:pending,approved,rejected',
-            'channel' => 'sometimes|in:whatsapp,messenger,instagram',
+            'channel' => 'sometimes|in:whatsapp,messenger,instagram,telegram',
         ]);
 
         $query = Order::with(['package:id,name', 'user:id,name,phone',
-            'whatsItem:id,phone', 'messengerAccount:id,page_name', 'instagramItem:id,username,name'])->latest();
+            'whatsItem:id,phone', 'messengerAccount:id,page_name', 'instagramItem:id,username,name', 'telegramAccount:id,bot_name,bot_username'])->latest();
 
         if ($request->filled('user_id')) {
             $query->where('user_id', $request->user_id);
@@ -105,6 +106,11 @@ class OrderController extends Controller
                     'id' => $order->instagramItem->id,
                     'username' => $order->instagramItem->username,
                     'name' => $order->instagramItem->name,
+                ] : null,
+                'telegram_account' => $order->telegramAccount ? [
+                    'id' => $order->telegramAccount->id,
+                    'bot_name' => $order->telegramAccount->bot_name,
+                    'bot_username' => $order->telegramAccount->bot_username,
                 ] : null,
             ];
         };
@@ -311,6 +317,11 @@ class OrderController extends Controller
                     'username' => $order->instagramItem->username,
                     'name' => $order->instagramItem->name,
                 ] : null,
+                'telegram_account' => $order->telegramAccount ? [
+                    'id' => $order->telegramAccount->id,
+                    'bot_name' => $order->telegramAccount->bot_name,
+                    'bot_username' => $order->telegramAccount->bot_username,
+                ] : null,
                 'created_at' => $order->created_at,
             ],
         ]);
@@ -459,6 +470,50 @@ class OrderController extends Controller
                     'ai_context' => $instagramItem->fresh()->ai_context,
                     'ai_file' => $instagramItem->fresh()->ai_file,
                     'website_url' => $instagramItem->fresh()->website_url,
+                ];
+            }
+        } elseif ($order->isTelegram()) {
+            /** @var TelegramAccount|null $telegramAccount */
+            $telegramAccount = $order->telegramAccount;
+
+            if ($telegramAccount) {
+                $accountUpdate = ['status' => 'active'];
+
+                if ($request->has('ai_context')) {
+                    $accountUpdate['ai_context'] = $validated['ai_context'] ?? null;
+                }
+
+                if ($request->has('website_url')) {
+                    $accountUpdate['website_url'] = $validated['website_url'] ?? null;
+                }
+
+                if ($request->hasFile('ai_file')) {
+                    $uploadedPath = $this->upload($request, 'ai_file', 'telegram/ai_files');
+                    if ($uploadedPath) {
+                        $accountUpdate['ai_file'] = $uploadedPath;
+                    }
+                } elseif ($request->has('ai_file') && is_string($request->input('ai_file'))) {
+                    $accountUpdate['ai_file'] = $request->input('ai_file');
+                }
+
+                $msgsToAdd = $order->msgs ?: (int) $package->msg_number;
+                $accountUpdate['msg_number'] = ((int) $telegramAccount->msg_number) + $msgsToAdd;
+                $accountUpdate['start_date'] = $fromDate->toDateString();
+                $accountUpdate['end_date'] = $toDate->toDateString();
+
+                $telegramAccount->update($accountUpdate);
+
+                $activationResult = [
+                    'telegram_account_id' => $telegramAccount->id,
+                    'bot_id' => $telegramAccount->bot_id,
+                    'bot_username' => $telegramAccount->bot_username,
+                    'webhook_url' => url("/api/telegram-webhook/{$telegramAccount->id}"),
+                    'msg_number' => $telegramAccount->fresh()->msg_number,
+                    'start_date' => $telegramAccount->fresh()->start_date?->toDateString(),
+                    'end_date' => $telegramAccount->fresh()->end_date?->toDateString(),
+                    'ai_context' => $telegramAccount->fresh()->ai_context,
+                    'ai_file' => $telegramAccount->fresh()->ai_file,
+                    'website_url' => $telegramAccount->fresh()->website_url,
                 ];
             }
         } else {

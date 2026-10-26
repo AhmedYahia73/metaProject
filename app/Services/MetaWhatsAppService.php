@@ -327,16 +327,18 @@ class MetaWhatsAppService
      *
      * @param  string  $pin  6-digit two-step verification PIN
      */
-    public function registerNumber(string $phoneNumberId, string $pin): array
+    public function registerNumber(string $phoneNumberId, string $pin, ?string $token = null): array
     {
-        if (! $this->isConfigured()) {
+        $accessToken = ! empty($token) ? $token : $this->systemUserToken;
+
+        if (empty($accessToken)) {
             return [
                 'success' => false,
                 'message' => 'Meta credentials are not configured in .env.',
             ];
         }
 
-        $response = Http::withToken($this->systemUserToken)
+        $response = Http::withToken($accessToken)
             ->post("{$this->baseUrl}/{$phoneNumberId}/register", [
                 'messaging_product' => 'whatsapp',
                 'pin' => trim($pin),

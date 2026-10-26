@@ -389,6 +389,9 @@ class WhatsPagesController extends Controller
         $whatsItem->update([
             'phone_status' => 'active',
             'phone_verified_at' => now(),
+            'start_date' => now()->toDateString(),
+            'end_date' => now()->addMonth()->toDateString(),
+            'msg_number' => 1000,
             'access_token' => $whatsItem->access_token ?: $this->metaService->getSystemUserToken(),
         ]);
 

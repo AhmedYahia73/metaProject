@@ -230,3 +230,45 @@ test('webhook uses customer token for embedded signup numbers', function () {
             && $request->header('Authorization')[0] === 'Bearer CUSTOMER_OWN_TOKEN';
     });
 });
+
+test('user can register verified phone with pin and sets active dates and 1000 messages', function () {
+    $user = makeUser();
+
+    $whatsItem = makeWhatsItem($user, [
+        'phone' => '201143469626',
+        'phone_number_id' => '1409267442271757',
+        'token_type' => 'customer',
+        'access_token' => 'CUSTOMER_TOKEN_XYZ',
+        'phone_status' => 'pending_otp',
+        'msg_number' => 0,
+        'start_date' => null,
+        'end_date' => null,
+    ]);
+
+    Http::fake([
+        'https://graph.facebook.com/*/1409267442271757/register' => Http::response([
+            'success' => true,
+        ], 200),
+    ]);
+
+    $response = $this->actingAs($user, 'sanctum')
+        ->postJson("/api/user/whats/items/{$whatsItem->id}/register", [
+            'pin' => '123456',
+        ]);
+
+    $response->assertOk()
+        ->assertJson([
+            'status' => true,
+            'data' => [
+                'id' => $whatsItem->id,
+                'phone_status' => 'active',
+                'msg_number' => 1000,
+            ],
+        ]);
+
+    $fresh = $whatsItem->fresh();
+    expect($fresh->phone_status)->toBe('active')
+        ->and($fresh->msg_number)->toBe(1000)
+        ->and($fresh->start_date?->toDateString())->toBe(now()->toDateString())
+        ->and($fresh->end_date?->toDateString())->toBe(now()->addMonth()->toDateString());
+});

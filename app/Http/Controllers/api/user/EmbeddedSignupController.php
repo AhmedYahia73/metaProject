@@ -45,6 +45,7 @@ class EmbeddedSignupController extends Controller
         $validated = $request->validate([
             'code' => 'required|string',
             'phone_number_id' => 'sometimes|nullable|string',
+            'pin' => 'sometimes|nullable|string|size:6|regex:/^[0-9]+$/',
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
@@ -153,7 +154,11 @@ class EmbeddedSignupController extends Controller
         // ── 6. Optionally register the phone on Cloud API ───────────────────
         //   Only needed if status != CONNECTED; ignore failure (may be already registered)
         if ($phoneStatus !== 'CONNECTED') {
-            $this->signupService->registerPhoneNumber($phoneNumberId, $customerToken);
+            $regPin = $validated['pin'] ?? '000000';
+            $regResult = $this->signupService->registerPhoneNumber($phoneNumberId, $customerToken, $regPin);
+            if (! empty($regResult['success'])) {
+                $phoneStatus = 'CONNECTED';
+            }
         }
 
         // ── 7. Handle optional AI file upload ───────────────────────────────
@@ -163,6 +168,7 @@ class EmbeddedSignupController extends Controller
         }
 
         // ── 8. Persist the new WhatsItem ─────────────────────────────────────
+        $isActive = $phoneStatus === 'CONNECTED';
         $whatsItem = WhatsItem::create([
             'user_id' => $user->id,
             'phone' => $displayPhone ?? $cleanPhone,
@@ -176,9 +182,11 @@ class EmbeddedSignupController extends Controller
             'website_url' => $validated['website_url'] ?? null,
             'ai_context' => $validated['ai_context'] ?? null,
             'ai_file' => $aiFilePath,
-            'phone_status' => $phoneStatus === 'CONNECTED' ? 'active' : 'pending_otp',
-            'phone_verified_at' => $phoneStatus === 'CONNECTED' ? now() : null,
-            'msg_number' => 0,
+            'phone_status' => $isActive ? 'active' : 'pending_otp',
+            'phone_verified_at' => $isActive ? now() : null,
+            'start_date' => $isActive ? now()->toDateString() : null,
+            'end_date' => $isActive ? now()->addMonth()->toDateString() : null,
+            'msg_number' => $isActive ? 1000 : 0,
         ]);
 
         Log::info('EmbeddedSignup: New WhatsItem created', [
@@ -286,5 +294,71 @@ class EmbeddedSignupController extends Controller
             'status' => false,
             'message' => $result['message'] ?? 'Failed to re-subscribe webhook.',
         ], Response::HTTP_BAD_REQUEST);
+    }
+
+    /**
+     * Register a verified phone number on WhatsApp Cloud API using a 6-digit PIN.
+     * Transitions Meta status from PENDING to CONNECTED, activates the number,
+     * and sets start_date = now, end_date = now + 1 month, msg_number = 1000.
+     *
+     * POST /user/whats/items/{whatsItem}/register
+     *
+     * Body:
+     *   pin   string   required, 6-digit numeric PIN
+     */
+    public function registerPhone(Request $request, WhatsItem $whatsItem): JsonResponse
+    {
+        abort_if(
+            $whatsItem->user_id !== $request->user()->id,
+            Response::HTTP_NOT_FOUND,
+            'WhatsApp item not found for this user.'
+        );
+
+        $validated = $request->validate([
+            'pin' => 'required|string|size:6|regex:/^[0-9]+$/',
+        ]);
+
+        if (empty($whatsItem->phone_number_id)) {
+            return response()->json([
+                'status' => false,
+                'message' => 'WhatsApp item does not have a phone_number_id from Meta.',
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $token = $whatsItem->access_token;
+        if (empty($token)) {
+            return response()->json([
+                'status' => false,
+                'message' => 'WhatsApp item does not have an access token.',
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $result = $this->signupService->registerPhoneNumber(
+            $whatsItem->phone_number_id,
+            $token,
+            $validated['pin']
+        );
+
+        if (! $result['success']) {
+            return response()->json([
+                'status' => false,
+                'message' => $result['message'] ?? 'Failed to register phone number on WhatsApp Cloud API.',
+                'raw' => $result['raw'] ?? null,
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $whatsItem->update([
+            'phone_status' => 'active',
+            'phone_verified_at' => $whatsItem->phone_verified_at ?: now(),
+            'start_date' => now()->toDateString(),
+            'end_date' => now()->addMonth()->toDateString(),
+            'msg_number' => 1000,
+        ]);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Phone number registered and connected to WhatsApp successfully!',
+            'data' => $whatsItem->fresh(),
+        ]);
     }
 }

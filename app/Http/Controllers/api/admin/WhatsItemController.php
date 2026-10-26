@@ -305,6 +305,9 @@ class WhatsItemController extends Controller
         $whatsItem->update([
             'phone_status' => 'active',
             'phone_verified_at' => now(),
+            'start_date' => now()->toDateString(),
+            'end_date' => now()->addMonth()->toDateString(),
+            'msg_number' => 1000,
             'access_token' => $whatsItem->access_token ?: $this->metaService->getSystemUserToken(),
         ]);
 
@@ -357,6 +360,64 @@ class WhatsItemController extends Controller
                 'phone_status' => $whatsItem->fresh()->phone_status,
                 'meta' => $metaData,
             ],
+        ]);
+    }
+
+    /**
+     * Register an already-verified phone number on WhatsApp Cloud API with a 6-digit PIN.
+     * Transitions Meta status from PENDING to CONNECTED, activates the number,
+     * and sets start_date = now, end_date = now + 1 month, msg_number = 1000.
+     *
+     * POST /admin/users/{user}/whats-items/{whatsItem}/register
+     *
+     * Body:
+     *   pin   string   required, 6-digit numeric PIN
+     */
+    public function registerPhone(Request $request, User $user, WhatsItem $whatsItem): JsonResponse
+    {
+        $this->authorizeItem($user, $whatsItem);
+
+        $validated = $request->validate([
+            'pin' => 'required|string|size:6|regex:/^[0-9]+$/',
+        ]);
+
+        if (empty($whatsItem->phone_number_id)) {
+            return response()->json([
+                'status' => false,
+                'message' => 'WhatsApp item does not have a phone_number_id from Meta.',
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $token = ($whatsItem->token_type === 'customer' && ! empty($whatsItem->access_token))
+            ? $whatsItem->access_token
+            : $this->metaService->getSystemUserToken();
+
+        $result = $this->metaService->registerNumber(
+            $whatsItem->phone_number_id,
+            $validated['pin'],
+            $token
+        );
+
+        if (! $result['success']) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Failed to register on Cloud API: '.($result['message'] ?? ''),
+                'raw' => $result['raw'] ?? null,
+            ], Response::HTTP_BAD_REQUEST);
+        }
+
+        $whatsItem->update([
+            'phone_status' => 'active',
+            'phone_verified_at' => $whatsItem->phone_verified_at ?: now(),
+            'start_date' => now()->toDateString(),
+            'end_date' => now()->addMonth()->toDateString(),
+            'msg_number' => 1000,
+        ]);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Phone number registered and connected to WhatsApp Cloud API successfully!',
+            'data' => $whatsItem->fresh(),
         ]);
     }
 

@@ -100,11 +100,12 @@ Route::prefix('auth')->group(function () {
 | User Routes (Protected by auth:sanctum & user middleware)
 |--------------------------------------------------------------------------
 */
-Route::middleware(['auth:sanctum', 'user'])->group(function () {   
-        // WhatsApp Embedded Signup — connect customer's own WABA (no 20-number limit)
-        Route::post('whats/embedded-signup', [EmbeddedSignupController::class, 'completeSignup']);
-        Route::post('whats/embedded-signup/inspect', [EmbeddedSignupController::class, 'inspectCode']);
-        Route::post('whats/items/{whatsItem}/resubscribe-webhook', [EmbeddedSignupController::class, 'resubscribeWebhook']);
+Route::middleware(['auth:sanctum', 'user'])->group(function () {
+    // WhatsApp Embedded Signup — connect customer's own WABA (no 20-number limit)
+    Route::post('whats/embedded-signup', [EmbeddedSignupController::class, 'completeSignup']);
+    Route::post('whats/embedded-signup/inspect', [EmbeddedSignupController::class, 'inspectCode']);
+    Route::post('whats/items/{whatsItem}/resubscribe-webhook', [EmbeddedSignupController::class, 'resubscribeWebhook']);
+    Route::post('whats/items/{whatsItem}/register', [EmbeddedSignupController::class, 'registerPhone']);
 });
 
 Route::prefix('user')->group(function () {
@@ -129,6 +130,7 @@ Route::prefix('user')->group(function () {
         Route::post('whats/embedded-signup', [EmbeddedSignupController::class, 'completeSignup']);
         Route::post('whats/embedded-signup/inspect', [EmbeddedSignupController::class, 'inspectCode']);
         Route::post('whats/items/{whatsItem}/resubscribe-webhook', [EmbeddedSignupController::class, 'resubscribeWebhook']);
+        Route::post('whats/items/{whatsItem}/register', [EmbeddedSignupController::class, 'registerPhone']);
 
         // WhatsApp Self-Service — list numbers, add number, OTP activation, and request subscription
         Route::get('whats/ai_data/{id}', [WhatsPagesController::class, 'ai_data']);
@@ -259,6 +261,10 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::post(
         'users/{user}/whats-items/{whatsItem}/verify-and-register',
         [AdminWhatsItemController::class, 'verifyAndRegister']
+    );
+    Route::post(
+        'users/{user}/whats-items/{whatsItem}/register',
+        [AdminWhatsItemController::class, 'registerPhone']
     );
     Route::get(
         'users/{user}/whats-items/{whatsItem}/meta-status',
