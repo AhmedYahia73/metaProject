@@ -45,7 +45,8 @@ class OrderController extends Controller
         ]);
 
         $query = Order::with(['package:id,name', 'user:id,name,phone',
-            'whatsItem:id,phone', 'messengerAccount:id,page_name', 'instagramItem:id,username,name', 'telegramAccount:id,bot_name,bot_username'])->latest();
+            'whatsItem:id,phone', 'messengerAccount:id,page_name', 'instagramItem:id,username,name', 
+            'telegramAccount:id,bot_name,bot_username', 'tiktokAccount:id,username'])->latest();
 
         if ($request->filled('user_id')) {
             $query->where('user_id', $request->user_id);
@@ -321,6 +322,10 @@ class OrderController extends Controller
                     'id' => $order->telegramAccount->id,
                     'bot_name' => $order->telegramAccount->bot_name,
                     'bot_username' => $order->telegramAccount->bot_username,
+                ] : null, 
+                'tiktok_account' => $order->tiktokAccount ? [
+                    'id' => $order->tiktokAccount->id,
+                    'username' => $order->tiktokAccount->username,
                 ] : null,
                 'created_at' => $order->created_at,
             ],
@@ -516,7 +521,52 @@ class OrderController extends Controller
                     'website_url' => $telegramAccount->fresh()->website_url,
                 ];
             }
-        } else {
+        } elseif($order->isTikTok()) {
+            /** @var TikTokAccount|null $tiktokAccount */
+            $tiktokAccount = $order->tiktokAccount;
+
+            if ($tiktokAccount) {
+                $accountUpdate = ['status' => 'active'];
+
+                if ($request->has('ai_context')) {
+                    $accountUpdate['ai_context'] = $validated['ai_context'] ?? null;
+                }
+
+                if ($request->has('website_url')) {
+                    $accountUpdate['website_url'] = $validated['website_url'] ?? null;
+                }
+
+                if ($request->hasFile('ai_file')) {
+                    $uploadedPath = $this->upload($request, 'ai_file', 'tiktok/ai_files');
+                    if ($uploadedPath) {
+                        $accountUpdate['ai_file'] = $uploadedPath;
+                    }
+                } elseif ($request->has('ai_file') && is_string($request->input('ai_file'))) {
+                    $accountUpdate['ai_file'] = $request->input('ai_file');
+                }
+
+                $msgsToAdd = $order->msgs ?: (int) $package->msg_number;
+                $accountUpdate['msg_number'] = ((int) $tiktokAccount->msg_number) + $msgsToAdd;
+                $accountUpdate['start_date'] = $fromDate->toDateString();
+                $accountUpdate['end_date'] = $toDate->toDateString();
+
+                $tiktokAccount->update($accountUpdate);
+
+                $activationResult = [
+                    'tiktok_account_id' => $tiktokAccount->id,
+                    'username' => $tiktokAccount->username,
+                    'webhook_url' => url("/api/tiktok-webhook/{$tiktokAccount->id}"),
+                    'msg_number' => $tiktokAccount->fresh()->msg_number,
+                    'start_date' => $tiktokAccount->fresh()->start_date?->toDateString(),
+                    'end_date' => $tiktokAccount->fresh()->end_date?->toDateString(),
+                    'ai_context' => $tiktokAccount->fresh()->ai_context,
+                    'ai_file' => $tiktokAccount->fresh()->ai_file,
+                    'website_url' => $tiktokAccount->fresh()->website_url,
+                ];
+            }
+
+        }
+        else {
             // WhatsApp: message quota and optional ai_context / ai_file / website_url
             $whatsItem = $order->whatsItem;
             $msgsToAdd = $order->msgs ?: (int) $package->msg_number;

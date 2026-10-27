@@ -18,7 +18,7 @@ class UserOrderController extends Controller
             'user_id' => 'sometimes|exists:users,id',
             'package_id' => 'sometimes|exists:packages,id',
             'search' => 'sometimes|string|max:255',
-            'channel' => 'sometimes|in:whatsapp,messenger,instagram',
+            'channel' => 'sometimes|in:whatsapp,messenger,instagram,telegram,tiktok',
         ]);
 
         $query = Order::with(['package:id,name', 'user:id,name,phone',
@@ -130,7 +130,7 @@ class UserOrderController extends Controller
             'package_id' => 'sometimes|exists:packages,id',
             'search' => 'sometimes|string|max:255',
             'status' => 'sometimes|in:approved,rejected',
-            'channel' => 'sometimes|in:whatsapp,messenger,instagram',
+            'channel' => 'sometimes|in:whatsapp,messenger,instagram,telegram,tiktok',
         ]);
 
         $query = Order::with(['package:id,name', 'user:id,name,phone',

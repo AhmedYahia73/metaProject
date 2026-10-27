@@ -290,4 +290,9 @@ class Order extends Model
     {
         return $this->channel === 'telegram';
     }
+
+    public function isTikTok(): bool
+    {
+        return $this->channel === 'tiktok';
+    }
 }
