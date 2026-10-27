@@ -253,7 +253,9 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     // Packages CRUD
     Route::apiResource('packages', PackageController::class);
 
-    // Templates CRUD
+    // Templates CRUD & AI Markdown File Generation
+    Route::get('templates/accounts', [TemplateController::class, 'accounts']);
+    Route::post('templates/generate-ai-file', [TemplateController::class, 'generateAiFile']);
     Route::apiResource('templates', TemplateController::class);
 
     // Orders Management — list, create (WhatsApp), show, approve, reject
