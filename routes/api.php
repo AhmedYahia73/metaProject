@@ -14,6 +14,7 @@ use App\Http\Controllers\api\admin\SettingController;
 use App\Http\Controllers\api\admin\SubscriperController;
 use App\Http\Controllers\api\admin\TaxController;
 use App\Http\Controllers\api\admin\TelegramAccountController as AdminTelegramAccountController;
+use App\Http\Controllers\api\admin\TemplateController;
 use App\Http\Controllers\api\admin\TikTokAccountController as AdminTikTokAccountController;
 use App\Http\Controllers\api\admin\UserController;
 use App\Http\Controllers\api\admin\WhatsItemController as AdminWhatsItemController;
@@ -251,6 +252,9 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
 
     // Packages CRUD
     Route::apiResource('packages', PackageController::class);
+
+    // Templates CRUD
+    Route::apiResource('templates', TemplateController::class);
 
     // Orders Management — list, create (WhatsApp), show, approve, reject
     Route::get('orders/lists', [OrderController::class, 'lists']);

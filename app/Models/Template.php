@@ -25,4 +25,3 @@ class Template extends Model
         ];
     }
 }
-
