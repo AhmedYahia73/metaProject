@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\DailyToken;
 use App\Models\Setting;
 use App\Models\TikTokAccount;
+use App\trait\FormatsChatLinks;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -12,6 +13,8 @@ use OpenAI\Laravel\Facades\OpenAI;
 
 class TikTokService
 {
+    use FormatsChatLinks;
+
     protected string $clientKey;
 
     protected string $clientSecret;
@@ -322,19 +325,13 @@ class TikTokService
             $fileDataSection = "\n\nبيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة:\n".$fileContent;
         }
 
-        $linksSection = '';
-        if ($account->android_link || $account->ios_link || $account->website_url) {
-            $linksSection = "\n\nروابط وتفاصيل الطلب المتاحة:";
-            if ($account->website_url) {
-                $linksSection .= "\n- الموقع الإلكتروني: {$account->website_url}";
-            }
-            if ($account->android_link) {
-                $linksSection .= "\n- تطبيق أندرويد (Android): {$account->android_link}";
-            }
-            if ($account->ios_link) {
-                $linksSection .= "\n- تطبيق آيفون (iOS): {$account->ios_link}";
-            }
-        }
+        $linksSection = $this->buildLinksPromptSection(
+            $account->website_url,
+            $account->android_link,
+            $account->ios_link
+        );
+
+        $linkInstructions = $this->getLinkPromptInstructions();
 
         $instructions = <<<PROMPT
         {$aiContext}
@@ -345,8 +342,9 @@ class TikTokService
         - الرد باللغة العربية فقط بأسلوب مهذب ومساعد وموجز ومحترم ومناسب لمنصة تيك توك.
         - اعتمد على البيانات المذكورة أعلاه في الرد على استفسارات العميل ولا تخترع أي معلومات أو أسعار غير موجودة.
         - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، أخبره بلباقة أنه غير متوفر حالياً.
-        - أول ما يطلب العميل (عندما يريد طلب، يسأل كيف يطلب، يريد عمل أوردر، أو يطلب أي صنف أو وجبة): يجب الرد عليه بأسلوب مهذب ومحترم وإخباره: «تقدر تطلب من هنا» مع إرسال روابط الطلب المتوفرة (الموقع الإلكتروني، تطبيق أندرويد، وتطبيق iOS) المذكورة أعلاه.
+        - أول ما يطلب العميل (عندما يريد طلب، يسأل كيف يطلب، يريد عمل أوردر، أو يطلب أي صنف أو وجبة): يجب الرد عليه بأسلوب مهذب ومحترم وإخباره: «تقدر تطلب من هنا» مع إرسال روابط الطلب المباشرة المذكورة أعلاه.
         - في حال عدم توفر روابط طلب أعلاه، أخبر العميل بلباقة أنه يمكنه كتابة طلبه وتفاصيله هنا لمساعدته.
+        {$linkInstructions}
         PROMPT;
 
         try {
@@ -378,7 +376,7 @@ class TikTokService
                 }
             }
 
-            return $reply ?: null;
+            return $reply ? $this->cleanChatLinks($reply) : null;
         } catch (\Throwable $e) {
             Log::warning('OpenAI generateAiReply for TikTok fallback triggered: '.$e->getMessage());
 
@@ -390,7 +388,7 @@ class TikTokService
                 $fallback .= ' يمكنك طرح استفسارك أو طلبك مباشرة، وسنكون سعداء بمساعدتك.';
             }
 
-            return $fallback;
+            return $this->cleanChatLinks($fallback);
         }
     }
 
@@ -471,29 +469,5 @@ class TikTokService
         }
 
         return false;
-    }
-
-    /**
-     * Format a polite ordering message with the available links.
-     */
-    public function formatOrderingLinksMessage(?string $websiteUrl, ?string $androidLink, ?string $iosLink): ?string
-    {
-        if (! $websiteUrl && ! $androidLink && ! $iosLink) {
-            return null;
-        }
-
-        $lines = ['تقدر تطلب من هنا:'];
-
-        if ($websiteUrl) {
-            $lines[] = "الموقع الإلكتروني: {$websiteUrl}";
-        }
-        if ($androidLink) {
-            $lines[] = "تطبيق أندرويد (Android): {$androidLink}";
-        }
-        if ($iosLink) {
-            $lines[] = "تطبيق آيفون (iOS): {$iosLink}";
-        }
-
-        return implode("\n", $lines);
     }
 }

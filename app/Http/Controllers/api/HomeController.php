@@ -18,6 +18,7 @@ use App\Models\Setting;
 use App\Models\User;
 use App\Models\WhatsItem;
 use App\Services\MetaPageTokenService;
+use App\trait\FormatsChatLinks;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -31,6 +32,8 @@ use OpenAI\Laravel\Facades\OpenAI;
 
 class HomeController extends Controller
 {
+    use FormatsChatLinks;
+
     /**
      * Base WhatsApp Graph API URL.
      */
@@ -1095,19 +1098,13 @@ class HomeController extends Controller
             $fileDataSection = "\n\nبيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة:\n".$fileContent;
         }
 
-        $linksSection = '';
-        if ($messengerAccount->android_link || $messengerAccount->ios_link || $messengerAccount->website_url) {
-            $linksSection = "\n\nروابط وتفاصيل الطلب المتاحة:";
-            if ($messengerAccount->website_url) {
-                $linksSection .= "\n- الموقع الإلكتروني: {$messengerAccount->website_url}";
-            }
-            if ($messengerAccount->android_link) {
-                $linksSection .= "\n- تطبيق أندرويد (Android): {$messengerAccount->android_link}";
-            }
-            if ($messengerAccount->ios_link) {
-                $linksSection .= "\n- تطبيق آيفون (iOS): {$messengerAccount->ios_link}";
-            }
-        }
+        $linksSection = $this->buildLinksPromptSection(
+            $messengerAccount->website_url,
+            $messengerAccount->android_link,
+            $messengerAccount->ios_link
+        );
+
+        $linkInstructions = $this->getLinkPromptInstructions();
 
         $instructions = <<<PROMPT
         {$aiContext}
@@ -1122,6 +1119,7 @@ class HomeController extends Controller
         - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، اعتذر له بلباقة وأخبره أنه غير متوفر حالياً.
         - إذا طلب العميل أو سأل عن كيفية الطلب، وضح له بلباقة روابط الطلب المتوفرة أعلاه.
         - اختم الرسالة الخاصة دائماً بعبارة ترحيبية راقية مثل: «نسعد دائماً بخدمتك، ولو عندك أي استفسار آخر لا تتردد في مراسلتنا في أي وقت! 😊».
+        {$linkInstructions}
 
         يجب أن تعيد الناتج بتنسيق JSON فقط بدون أي علامات markdown:
         {
@@ -1190,9 +1188,9 @@ class HomeController extends Controller
             if (is_array($parsed) && isset($parsed['is_inquiry'])) {
                 return [
                     'is_inquiry' => (bool) $parsed['is_inquiry'],
-                    'public_comment_reply' => (string) ($parsed['public_comment_reply'] ?? ''),
+                    'public_comment_reply' => $this->cleanChatLinks((string) ($parsed['public_comment_reply'] ?? '')),
                     'private_messenger_reply' => ! empty($parsed['private_messenger_reply'])
-                        ? (string) $parsed['private_messenger_reply']
+                        ? $this->cleanChatLinks((string) $parsed['private_messenger_reply'])
                         : null,
                 ];
             }
@@ -1212,7 +1210,7 @@ class HomeController extends Controller
                 'public_comment_reply' => $isInquiry
                     ? "أهلاً بك يا {$senderName}! تم الرد على الخاص بالتفاصيل، تفقد رسائلك 😊"
                     : "شكراً جزيلاً لك يا {$senderName}! يسعدنا تواصلك دائماً ❤️",
-                'private_messenger_reply' => $isInquiry ? (string) $cleanJson : null,
+                'private_messenger_reply' => $isInquiry ? $this->cleanChatLinks((string) $cleanJson) : null,
             ];
         } catch (\Throwable $e) {
             Log::warning('[FB_COMMENTS] OpenAI getFacebookCommentAiDecision exception: '.$e->getMessage());
@@ -2248,19 +2246,13 @@ class HomeController extends Controller
             $fileDataSection = "\n\nبيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة:\n".$fileContent;
         }
 
-        $linksSection = '';
-        if ($instagramItem->android_link || $instagramItem->ios_link || $instagramItem->website_url) {
-            $linksSection = "\n\nروابط وتفاصيل الطلب المتاحة:";
-            if ($instagramItem->website_url) {
-                $linksSection .= "\n- الموقع الإلكتروني: {$instagramItem->website_url}";
-            }
-            if ($instagramItem->android_link) {
-                $linksSection .= "\n- تطبيق أندرويد (Android): {$instagramItem->android_link}";
-            }
-            if ($instagramItem->ios_link) {
-                $linksSection .= "\n- تطبيق آيفون (iOS): {$instagramItem->ios_link}";
-            }
-        }
+        $linksSection = $this->buildLinksPromptSection(
+            $instagramItem->website_url,
+            $instagramItem->android_link,
+            $instagramItem->ios_link
+        );
+
+        $linkInstructions = $this->getLinkPromptInstructions();
 
         $instructions = <<<PROMPT
         {$aiContext}
@@ -2275,6 +2267,7 @@ class HomeController extends Controller
         - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، اعتذر له بلباقة وأخبره أنه غير متوفر حالياً.
         - إذا طلب العميل أو سأل عن كيفية الطلب، وضح له بلباقة روابط الطلب المتوفرة أعلاه.
         - اختم الرسالة الخاصة دائماً بعبارة ترحيبية راقية مثل: «نسعد دائماً بخدمتك، ولو عندك أي استفسار آخر لا تتردد في مراسلتنا في أي وقت! 😊».
+        {$linkInstructions}
 
         يجب أن تعيد الناتج بتنسيق JSON فقط بدون أي علامات markdown:
         {
@@ -2343,10 +2336,10 @@ class HomeController extends Controller
             if (is_array($parsed) && isset($parsed['is_inquiry'])) {
                 return [
                     'is_inquiry' => (bool) $parsed['is_inquiry'],
-                    'public_comment_reply' => (string) ($parsed['public_comment_reply'] ?? ''),
+                    'public_comment_reply' => $this->cleanChatLinks((string) ($parsed['public_comment_reply'] ?? '')),
                     'private_reply' => ! empty($parsed['private_reply'])
-                        ? (string) $parsed['private_reply']
-                        : (! empty($parsed['private_messenger_reply']) ? (string) $parsed['private_messenger_reply'] : null),
+                        ? $this->cleanChatLinks((string) $parsed['private_reply'])
+                        : (! empty($parsed['private_messenger_reply']) ? $this->cleanChatLinks((string) $parsed['private_messenger_reply']) : null),
                 ];
             }
 
@@ -2365,7 +2358,7 @@ class HomeController extends Controller
                 'public_comment_reply' => $isInquiry
                     ? "أهلاً بك يا {$senderName}! تم الرد على الخاص بالتفاصيل كاملة، يسعدنا تواصلك دائماً 😊"
                     : "شكراً جزيلاً لك يا {$senderName}! يسعدنا تواصلك ونتشرف بك دائماً ❤️",
-                'private_reply' => $isInquiry ? $rawOutput : null,
+                'private_reply' => $isInquiry ? $this->cleanChatLinks($rawOutput) : null,
             ];
         } catch (\Throwable $e) {
             Log::warning('[IG_COMMENTS] OpenAI getInstagramCommentAiDecision exception: '.$e->getMessage());
@@ -2894,19 +2887,13 @@ class HomeController extends Controller
             $fileDataSection = "\n\nبيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة:\n".$fileContent;
         }
 
-        $linksSection = '';
-        if ($instagramItem->android_link || $instagramItem->ios_link || $instagramItem->website_url) {
-            $linksSection = "\n\nروابط وتفاصيل الطلب المتاحة:";
-            if ($instagramItem->website_url) {
-                $linksSection .= "\n- الموقع الإلكتروني: {$instagramItem->website_url}";
-            }
-            if ($instagramItem->android_link) {
-                $linksSection .= "\n- تطبيق أندرويد (Android): {$instagramItem->android_link}";
-            }
-            if ($instagramItem->ios_link) {
-                $linksSection .= "\n- تطبيق آيفون (iOS): {$instagramItem->ios_link}";
-            }
-        }
+        $linksSection = $this->buildLinksPromptSection(
+            $instagramItem->website_url,
+            $instagramItem->android_link,
+            $instagramItem->ios_link
+        );
+
+        $linkInstructions = $this->getLinkPromptInstructions();
 
         $instructions = <<<PROMPT
         {$aiContext}
@@ -2917,8 +2904,9 @@ class HomeController extends Controller
         - الرد باللغة العربية فقط بأسلوب مهذب ومساعد وموجز ومحترم.
         - اعتمد على البيانات المذكورة أعلاه في الرد على استفسارات العميل ولا تخترع أي معلومات أو أسعار غير موجودة.
         - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، أخبره بلباقة أنه غير متوفر حالياً.
-        - أول ما يطلب العميل (عندما يريد طلب، يسأل كيف يطلب، يريد عمل أوردر، أو يطلب أي صنف أو وجبة): يجب الرد عليه بأسلوب مهذب ومحترم وإخباره: «تقدر تطلب من هنا» مع إرسال روابط الطلب المتوفرة (الموقع الإلكتروني، تطبيق أندرويد، وتطبيق iOS) المذكورة أعلاه.
+        - أول ما يطلب العميل (عندما يريد طلب، يسأل كيف يطلب، يريد عمل أوردر، أو يطلب أي صنف أو وجبة): يجب الرد عليه بأسلوب مهذب ومحترم وإخباره: «تقدر تطلب من هنا» مع إرسال روابط الطلب المباشرة المذكورة أعلاه.
         - في حال عدم توفر روابط طلب أعلاه، أخبر العميل بلباقة أنه يمكنه كتابة طلبه وتفاصيله هنا لمساعدته.
+        {$linkInstructions}
         PROMPT;
 
         try {
@@ -2950,7 +2938,7 @@ class HomeController extends Controller
                 }
             }
 
-            return $reply ?: null;
+            return $reply ? $this->cleanChatLinks($reply) : null;
         } catch (\Throwable $e) {
             Log::warning('OpenAI getInstagramAiReply fallback triggered: '.$e->getMessage());
 
@@ -2960,7 +2948,7 @@ class HomeController extends Controller
                 $fallback .= "\n\n{$orderLinksMsg}";
             }
 
-            return $fallback;
+            return $this->cleanChatLinks($fallback);
         }
     }
 
@@ -2985,19 +2973,13 @@ class HomeController extends Controller
         }
 
         // 3. App links and website
-        $linksSection = '';
-        if ($whatsItem && ($whatsItem->android_link || $whatsItem->ios_link || $whatsItem->website_url)) {
-            $linksSection = "\n\nروابط وتفاصيل الطلب المتاحة:";
-            if ($whatsItem->website_url) {
-                $linksSection .= "\n- الموقع الإلكتروني: {$whatsItem->website_url}";
-            }
-            if ($whatsItem->android_link) {
-                $linksSection .= "\n- تطبيق أندرويد (Android): {$whatsItem->android_link}";
-            }
-            if ($whatsItem->ios_link) {
-                $linksSection .= "\n- تطبيق آيفون (iOS): {$whatsItem->ios_link}";
-            }
-        }
+        $linksSection = $this->buildLinksPromptSection(
+            $whatsItem?->website_url,
+            $whatsItem?->android_link,
+            $whatsItem?->ios_link
+        );
+
+        $linkInstructions = $this->getLinkPromptInstructions();
 
         $instructions = <<<PROMPT
         {$aiContext}
@@ -3008,8 +2990,9 @@ class HomeController extends Controller
         - الرد باللغة العربية فقط بأسلوب مهذب ومساعد وموجز ومحترم.
         - اعتمد على البيانات المذكورة أعلاه في الرد على استفسارات العميل ولا تخترع أي معلومات أو أسعار غير موجودة.
         - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، أخبره بلباقة أنه غير متوفر حالياً.
-        - أول ما يطلب العميل (عندما يريد طلب، يسأل كيف يطلب، يريد عمل أوردر، أو يطلب أي صنف أو وجبة): يجب الرد عليه بأسلوب مهذب ومحترم وإخباره: «تقدر تطلب من هنا» مع إرسال روابط الطلب المتوفرة (الموقع الإلكتروني، تطبيق أندرويد، وتطبيق iOS) المذكورة أعلاه.
+        - أول ما يطلب العميل (عندما يريد طلب، يسأل كيف يطلب، يريد عمل أوردر، أو يطلب أي صنف أو وجبة): يجب الرد عليه بأسلوب مهذب ومحترم وإخباره: «تقدر تطلب من هنا» مع إرسال روابط الطلب المباشرة المذكورة أعلاه.
         - في حال عدم توفر روابط طلب أعلاه، أخبر العميل بلباقة أنه يمكنه كتابة طلبه وتفاصيله هنا لمساعدته.
+        {$linkInstructions}
         PROMPT;
 
         try {
@@ -3041,7 +3024,7 @@ class HomeController extends Controller
                 }
             }
 
-            return $reply ?: null;
+            return $reply ? $this->cleanChatLinks($reply) : null;
         } catch (\Throwable $e) {
             Log::warning('OpenAI getAiReply fallback triggered: '.$e->getMessage());
 
@@ -3053,7 +3036,7 @@ class HomeController extends Controller
                 $fallback .= ' يمكنك طرح استفسارك أو طلبك مباشرة، وسنكون سعداء بمساعدتك.';
             }
 
-            return $fallback;
+            return $this->cleanChatLinks($fallback);
         }
     }
 
@@ -3155,19 +3138,13 @@ class HomeController extends Controller
             $fileDataSection = "\n\nبيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة:\n".$fileContent;
         }
 
-        $linksSection = '';
-        if ($messengerAccount->android_link || $messengerAccount->ios_link || $messengerAccount->website_url) {
-            $linksSection = "\n\nروابط وتفاصيل الطلب المتاحة:";
-            if ($messengerAccount->website_url) {
-                $linksSection .= "\n- الموقع الإلكتروني: {$messengerAccount->website_url}";
-            }
-            if ($messengerAccount->android_link) {
-                $linksSection .= "\n- تطبيق أندرويد (Android): {$messengerAccount->android_link}";
-            }
-            if ($messengerAccount->ios_link) {
-                $linksSection .= "\n- تطبيق آيفون (iOS): {$messengerAccount->ios_link}";
-            }
-        }
+        $linksSection = $this->buildLinksPromptSection(
+            $messengerAccount->website_url,
+            $messengerAccount->android_link,
+            $messengerAccount->ios_link
+        );
+
+        $linkInstructions = $this->getLinkPromptInstructions();
 
         $instructions = <<<PROMPT
         {$aiContext}
@@ -3178,8 +3155,9 @@ class HomeController extends Controller
         - الرد باللغة العربية فقط بأسلوب مهذب ومساعد وموجز ومحترم.
         - اعتمد على البيانات المذكورة أعلاه في الرد على استفسارات العميل ولا تخترع أي معلومات أو أسعار غير موجودة.
         - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، أخبره بلباقة أنه غير متوفر حالياً.
-        - أول ما يطلب العميل (عندما يريد طلب، يسأل كيف يطلب، يريد عمل أوردر، أو يطلب أي صنف أو وجبة): يجب الرد عليه بأسلوب مهذب ومحترم وإخباره: «تقدر تطلب من هنا» مع إرسال روابط الطلب المتوفرة (الموقع الإلكتروني، تطبيق أندرويد، وتطبيق iOS) المذكورة أعلاه.
+        - أول ما يطلب العميل (عندما يريد طلب، يسأل كيف يطلب، يريد عمل أوردر، أو يطلب أي صنف أو وجبة): يجب الرد عليه بأسلوب مهذب ومحترم وإخباره: «تقدر تطلب من هنا» مع إرسال روابط الطلب المباشرة المذكورة أعلاه.
         - في حال عدم توفر روابط طلب أعلاه، أخبر العميل بلباقة أنه يمكنه كتابة طلبه وتفاصيله هنا لمساعدته.
+        {$linkInstructions}
         PROMPT;
 
         try {
@@ -3211,7 +3189,7 @@ class HomeController extends Controller
                 }
             }
 
-            return $reply ?: null;
+            return $reply ? $this->cleanChatLinks($reply) : null;
         } catch (\Throwable $e) {
             Log::warning('OpenAI getMessengerAiReply fallback triggered: '.$e->getMessage());
 
@@ -3223,7 +3201,7 @@ class HomeController extends Controller
                 $fallback .= ' يمكنك طرح استفسارك أو طلبك مباشرة، وسنكون سعداء بمساعدتك.';
             }
 
-            return $fallback;
+            return $this->cleanChatLinks($fallback);
         }
     }
 
@@ -3246,30 +3224,6 @@ class HomeController extends Controller
         }
 
         return false;
-    }
-
-    /**
-     * Format a polite ordering message with the available links.
-     */
-    private function formatOrderingLinksMessage(?string $websiteUrl, ?string $androidLink, ?string $iosLink): ?string
-    {
-        if (! $websiteUrl && ! $androidLink && ! $iosLink) {
-            return null;
-        }
-
-        $lines = ['تقدر تطلب من هنا:'];
-
-        if ($websiteUrl) {
-            $lines[] = "الموقع الإلكتروني: {$websiteUrl}";
-        }
-        if ($androidLink) {
-            $lines[] = "تطبيق أندرويد: {$androidLink}";
-        }
-        if ($iosLink) {
-            $lines[] = "تطبيق iOS: {$iosLink}";
-        }
-
-        return implode("\n", $lines);
     }
 
     /**

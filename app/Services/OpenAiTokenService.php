@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\DailyToken;
 use App\Models\Setting;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -10,34 +11,164 @@ use Illuminate\Support\Facades\Log;
 class OpenAiTokenService
 {
     /**
-     * Cache duration in seconds (1 minute matches the OpenAI rate limit window).
+     * Cache duration in seconds for live OpenAI API checks.
      */
     public const CACHE_TTL_SECONDS = 60;
 
     /**
      * Get the remaining tokens for the integrated OpenAI service.
+     * Decrements dynamically based on actual token consumption in DailyToken.
      */
-    public function getRemainingTokens(): int
+    public function getRemainingTokens(?int $userId = null): int
     {
-        // 1. Check if manually configured via settings table or env
-        $configuredOverride = config('services.openai.remaining_tokens', env('OPENAI_REMAINING_TOKENS'));
-        if ($configuredOverride !== null && is_numeric($configuredOverride)) {
-            return (int) $configuredOverride;
+        $stats = $this->getTokenStats($userId);
+
+        return $stats['remaining_tokens'];
+    }
+
+    /**
+     * Get full token statistics: total allocated, used, and remaining.
+     *
+     * @return array{total_tokens: int, used_tokens: int, remaining_tokens: int}
+     */
+    public function getTokenStats(?int $userId = null, ?string $from = null, ?string $to = null): array
+    {
+        $totalTokens = $this->getTotalAllocatedTokens();
+        $usedTokens = $this->getConsumedTokens($userId, $from, $to);
+
+        // If OpenAI quota is 0 (exhausted from API) or explicitly 0
+        if ($totalTokens === 0) {
+            return [
+                'total_tokens' => 0,
+                'used_tokens' => $usedTokens,
+                'remaining_tokens' => 0,
+            ];
         }
 
-        $settingOverride = Setting::where('name', 'ai_remaining_tokens')->value('value');
-        if ($settingOverride !== null && is_numeric($settingOverride)) {
-            return (int) $settingOverride;
+        // Calculate remaining tokens
+        $remainingTokens = max(0, $totalTokens - $usedTokens);
+
+        return [
+            'total_tokens' => $totalTokens,
+            'used_tokens' => $usedTokens,
+            'remaining_tokens' => $remainingTokens,
+        ];
+    }
+
+    /**
+     * Check if a manual setting or environment variable is explicitly defining the token pool.
+     */
+    public function hasExplicitTokenSetting(): bool
+    {
+        $hasTotal = Setting::where('name', 'ai_total_tokens')->exists();
+        $hasRemaining = Setting::where('name', 'ai_remaining_tokens')->exists();
+        $hasEnvTotal = config('services.openai.total_tokens', env('OPENAI_TOTAL_TOKENS')) !== null;
+        $hasEnvRemaining = config('services.openai.remaining_tokens', env('OPENAI_REMAINING_TOKENS')) !== null;
+
+        return $hasTotal || $hasRemaining || $hasEnvTotal || $hasEnvRemaining;
+    }
+
+    /**
+     * Set remaining tokens directly by calculating the required total tokens.
+     */
+    public function setRemainingTokens(int $remaining): void
+    {
+        $used = $this->getConsumedTokens();
+        $total = $used + max(0, $remaining);
+
+        Setting::updateOrCreate(['name' => 'ai_total_tokens'], ['value' => (string) $total]);
+        Setting::updateOrCreate(['name' => 'ai_remaining_tokens'], ['value' => (string) max(0, $remaining)]);
+
+        Cache::forget('openai_remaining_tokens');
+        Cache::forget('openai_initial_tokens_pool');
+    }
+
+    /**
+     * Set total tokens budget.
+     */
+    public function setTotalTokens(int $total): void
+    {
+        Setting::updateOrCreate(['name' => 'ai_total_tokens'], ['value' => (string) max(0, $total)]);
+
+        Cache::forget('openai_remaining_tokens');
+        Cache::forget('openai_initial_tokens_pool');
+    }
+
+    /**
+     * Add additional tokens to the current budget.
+     */
+    public function addTokens(int $additional): void
+    {
+        $currentTotal = $this->getTotalAllocatedTokens();
+        $newTotal = $currentTotal + max(0, $additional);
+
+        $this->setTotalTokens($newTotal);
+    }
+
+    /**
+     * Get the total allocated token pool from settings, env, or OpenAI rate-limit baseline.
+     */
+    public function getTotalAllocatedTokens(): int
+    {
+        // Priority 1: explicitly configured total tokens in settings
+        $totalSetting = Setting::where('name', 'ai_total_tokens')->value('value');
+        if ($totalSetting !== null && is_numeric($totalSetting)) {
+            return (int) $totalSetting;
         }
 
-        // 2. Return cached value if available
-        return (int) Cache::remember('openai_remaining_tokens', self::CACHE_TTL_SECONDS, function (): int {
+        // Priority 2: config or env variable for total tokens
+        $totalEnv = config('services.openai.total_tokens', env('OPENAI_TOTAL_TOKENS'));
+        if ($totalEnv !== null && is_numeric($totalEnv)) {
+            return (int) $totalEnv;
+        }
+
+        // Priority 3: legacy remaining_tokens setting or env (treated as baseline quota)
+        $legacySetting = Setting::where('name', 'ai_remaining_tokens')->value('value');
+        if ($legacySetting !== null && is_numeric($legacySetting)) {
+            return (int) $legacySetting;
+        }
+
+        $legacyEnv = config('services.openai.remaining_tokens', env('OPENAI_REMAINING_TOKENS'));
+        if ($legacyEnv !== null && is_numeric($legacyEnv)) {
+            return (int) $legacyEnv;
+        }
+
+        // Priority 4: fetch baseline capacity from OpenAI API or default to 1,000,000
+        return (int) Cache::remember('openai_initial_tokens_pool', self::CACHE_TTL_SECONDS, function (): int {
             return $this->fetchFromOpenAi();
         });
     }
 
     /**
-     * Make a lightweight call to OpenAI API to inspect rate limit headers and quota.
+     * Calculate tokens consumed across all channels from DailyToken.
+     */
+    public function getConsumedTokens(?int $userId = null, ?string $from = null, ?string $to = null): int
+    {
+        $query = DailyToken::query();
+
+        if ($from) {
+            $query->whereDate('date', '>=', $from);
+        }
+
+        if ($to) {
+            $query->whereDate('date', '<=', $to);
+        }
+
+        if ($userId !== null) {
+            $query->where(function ($q) use ($userId) {
+                $q->whereHas('whatsItem', fn ($sq) => $sq->where('user_id', $userId))
+                    ->orWhereHas('messengerAccount', fn ($sq) => $sq->where('user_id', $userId))
+                    ->orWhereHas('instagramItem', fn ($sq) => $sq->where('user_id', $userId))
+                    ->orWhereHas('telegramAccount', fn ($sq) => $sq->where('user_id', $userId))
+                    ->orWhereHas('tiktokAccount', fn ($sq) => $sq->where('user_id', $userId));
+            });
+        }
+
+        return (int) $query->sum('tokens');
+    }
+
+    /**
+     * Make a lightweight call to OpenAI API to inspect rate limit headers.
      */
     public function fetchFromOpenAi(): int
     {
@@ -62,7 +193,6 @@ class OpenAiTokenService
                     'max_tokens' => 1,
                 ]);
 
-            // Quota / credit balance exhausted
             if ($response->status() === 429) {
                 $error = $response->json('error');
                 $errorCode = is_array($error) ? ($error['code'] ?? null) : null;
@@ -73,7 +203,6 @@ class OpenAiTokenService
                 }
             }
 
-            // Check rate-limit remaining tokens headers
             $remainingHeader = $response->header('x-ratelimit-remaining-tokens')
                 ?? $response->header('x-ratelimit-remaining-project-tokens');
 

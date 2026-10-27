@@ -94,7 +94,9 @@ class DashboardController extends Controller
 
         $used = $msgSendQuery->count();
         $remaining = max(0, $totalAllocatedMsgs - $used);
-        $aiRemainingTokens = $this->openAiTokenService->getRemainingTokens();
+
+        $userId = $request->filled('user_id') ? (int) $request->user_id : null;
+        $tokenStats = $this->openAiTokenService->getTokenStats($userId, $periodFrom, $periodTo);
 
         // 3. Optional overview metrics for general admin dashboard (when user_id is not specified)
         $overview = [];
@@ -123,7 +125,9 @@ class DashboardController extends Controller
                 'active_order' => $totalAllocatedMsgs,
                 'used' => $used,
                 'remaining' => $remaining,
-                'ai_remaining_tokens' => $aiRemainingTokens,
+                'ai_remaining_tokens' => $tokenStats['remaining_tokens'],
+                'ai_total_tokens' => $tokenStats['total_tokens'],
+                'ai_used_tokens' => $tokenStats['used_tokens'],
                 'period' => [
                     'from' => $periodFrom,
                     'to' => $periodTo,

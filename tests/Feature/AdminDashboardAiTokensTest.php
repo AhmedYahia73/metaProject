@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\DailyToken;
 use App\Models\Setting;
 use App\Models\User;
 use Illuminate\Support\Facades\Cache;
@@ -78,4 +79,58 @@ test('admin dashboard respects setting override for ai_remaining_tokens', functi
 
     $response->assertOk()
         ->assertJsonPath('data.ai_remaining_tokens', 9999);
+});
+
+test('admin dashboard dynamically decrements ai_remaining_tokens when tokens are consumed', function () {
+    Setting::create([
+        'name' => 'ai_total_tokens',
+        'value' => '50000',
+    ]);
+
+    // Simulate consumed tokens in daily_tokens
+    DailyToken::create([
+        'date' => now()->toDateString(),
+        'tokens' => 12500,
+    ]);
+
+    $admin = User::factory()->create(['role' => 'admin']);
+    Sanctum::actingAs($admin);
+
+    $response = $this->getJson('/api/admin/dashboard');
+
+    $response->assertOk()
+        ->assertJsonPath('data.ai_remaining_tokens', 37500)
+        ->assertJsonPath('data.ai_total_tokens', 50000)
+        ->assertJsonPath('data.ai_used_tokens', 12500);
+});
+
+test('admin can view and update ai token budget via settings endpoints', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+    Sanctum::actingAs($admin);
+
+    // 1. Set total tokens
+    $postResponse = $this->postJson('/api/admin/settings/ai-tokens', [
+        'total_tokens' => 100000,
+    ]);
+
+    $postResponse->assertOk()
+        ->assertJson([
+            'status' => true,
+            'data' => [
+                'total_tokens' => 100000,
+                'remaining_tokens' => 100000,
+            ],
+        ]);
+
+    // 2. Get tokens
+    $getResponse = $this->getJson('/api/admin/settings/ai-tokens');
+
+    $getResponse->assertOk()
+        ->assertJson([
+            'status' => true,
+            'data' => [
+                'total_tokens' => 100000,
+                'remaining_tokens' => 100000,
+            ],
+        ]);
 });

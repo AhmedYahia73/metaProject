@@ -264,6 +264,8 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     // Settings (AI Context)
     Route::get('settings/ai-context', [SettingController::class, 'getAiContext']);
     Route::post('settings/ai-context', [SettingController::class, 'setAiContext']);
+    Route::get('settings/ai-tokens', [SettingController::class, 'getAiTokens']);
+    Route::post('settings/ai-tokens', [SettingController::class, 'setAiTokens']);
 
     // Paymob Settings (View & Update/Create)
     Route::get('paymob', [PaymobController::class, 'view']);

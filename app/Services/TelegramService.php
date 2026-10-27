@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\DailyToken;
 use App\Models\Setting;
 use App\Models\TelegramAccount;
+use App\trait\FormatsChatLinks;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -12,6 +13,8 @@ use OpenAI\Laravel\Facades\OpenAI;
 
 class TelegramService
 {
+    use FormatsChatLinks;
+
     protected string $apiBase = 'https://api.telegram.org';
 
     /**
@@ -224,19 +227,13 @@ class TelegramService
             $fileDataSection = "\n\nبيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة:\n".$fileContent;
         }
 
-        $linksSection = '';
-        if ($telegramAccount->android_link || $telegramAccount->ios_link || $telegramAccount->website_url) {
-            $linksSection = "\n\nروابط وتفاصيل الطلب المتاحة:";
-            if ($telegramAccount->website_url) {
-                $linksSection .= "\n- الموقع الإلكتروني: {$telegramAccount->website_url}";
-            }
-            if ($telegramAccount->android_link) {
-                $linksSection .= "\n- تطبيق أندرويد (Android): {$telegramAccount->android_link}";
-            }
-            if ($telegramAccount->ios_link) {
-                $linksSection .= "\n- تطبيق آيفون (iOS): {$telegramAccount->ios_link}";
-            }
-        }
+        $linksSection = $this->buildLinksPromptSection(
+            $telegramAccount->website_url,
+            $telegramAccount->android_link,
+            $telegramAccount->ios_link
+        );
+
+        $linkInstructions = $this->getLinkPromptInstructions();
 
         $instructions = <<<PROMPT
         {$aiContext}
@@ -247,8 +244,9 @@ class TelegramService
         - الرد باللغة العربية فقط بأسلوب مهذب ومساعد وموجز ومحترم.
         - اعتمد على البيانات المذكورة أعلاه في الرد على استفسارات العميل ولا تخترع أي معلومات أو أسعار غير موجودة.
         - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، أخبره بلباقة أنه غير متوفر حالياً.
-        - أول ما يطلب العميل (عندما يريد طلب، يسأل كيف يطلب، يريد عمل أوردر، أو يطلب أي صنف أو وجبة): يجب الرد عليه بأسلوب مهذب ومحترم وإخباره: «تقدر تطلب من هنا» مع إرسال روابط الطلب المتوفرة (الموقع الإلكتروني، تطبيق أندرويد، وتطبيق iOS) المذكورة أعلاه.
+        - أول ما يطلب العميل (عندما يريد طلب، يسأل كيف يطلب، يريد عمل أوردر، أو يطلب أي صنف أو وجبة): يجب الرد عليه بأسلوب مهذب ومحترم وإخباره: «تقدر تطلب من هنا» مع إرسال روابط الطلب المباشرة المذكورة أعلاه.
         - في حال عدم توفر روابط طلب أعلاه، أخبر العميل بلباقة أنه يمكنه كتابة طلبه وتفاصيله هنا لمساعدته.
+        {$linkInstructions}
         PROMPT;
 
         try {
@@ -280,7 +278,7 @@ class TelegramService
                 }
             }
 
-            return $reply ?: null;
+            return $reply ? $this->cleanChatLinks($reply) : null;
         } catch (\Throwable $e) {
             Log::warning('OpenAI generateAiReply for Telegram fallback triggered: '.$e->getMessage());
 
@@ -292,7 +290,7 @@ class TelegramService
                 $fallback .= ' يمكنك طرح استفسارك أو طلبك مباشرة، وسنكون سعداء بمساعدتك.';
             }
 
-            return $fallback;
+            return $this->cleanChatLinks($fallback);
         }
     }
 
@@ -373,29 +371,5 @@ class TelegramService
         }
 
         return false;
-    }
-
-    /**
-     * Format a polite ordering message with the available links.
-     */
-    public function formatOrderingLinksMessage(?string $websiteUrl, ?string $androidLink, ?string $iosLink): ?string
-    {
-        if (! $websiteUrl && ! $androidLink && ! $iosLink) {
-            return null;
-        }
-
-        $lines = ['تقدر تطلب من هنا:'];
-
-        if ($websiteUrl) {
-            $lines[] = "الموقع الإلكتروني: {$websiteUrl}";
-        }
-        if ($androidLink) {
-            $lines[] = "تطبيق أندرويد: {$androidLink}";
-        }
-        if ($iosLink) {
-            $lines[] = "تطبيق iOS: {$iosLink}";
-        }
-
-        return implode("\n", $lines);
     }
 }
