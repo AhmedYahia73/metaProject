@@ -173,7 +173,7 @@ class TikTokAccountController extends Controller
 
         // Give new account trial quota (50 msgs, 30 days) like Telegram
         if (! $existing) {
-            $accountData['msg_number'] = 50;
+            $accountData['msg_number'] = 500;
             $accountData['start_date'] = now()->toDateString();
             $accountData['end_date'] = now()->addDays(30)->toDateString();
         }

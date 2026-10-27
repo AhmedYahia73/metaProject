@@ -126,7 +126,7 @@ class TelegramAccountController extends Controller
 
         // Give new bots an initial trial quota (50 msgs, 30 days) so auto-reply works immediately
         if (! $existing) {
-            $accountData['msg_number'] = 50;
+            $accountData['msg_number'] = 500;
             $accountData['start_date'] = now()->toDateString();
             $accountData['end_date'] = now()->addDays(30)->toDateString();
         }
@@ -321,7 +321,18 @@ class TelegramAccountController extends Controller
 
         $verifyToken = $telegramAccount->verify_token ?: (string) Str::uuid();
         if (empty($telegramAccount->verify_token)) {
-            $telegramAccount->update(['verify_token' => $verifyToken]);
+        // Give new bots an initial trial quota (50 msgs, 30 days) so auto-reply works immediately
+        if (! $existing) {
+            $accountData['msg_number'] = 500;
+            $accountData['start_date'] = now()->toDateString();
+            $accountData['end_date'] = now()->addDays(30)->toDateString();
+        }
+            $telegramAccount->update([
+                'verify_token' => $verifyToken,
+                'msg_number' => 500,
+                'start_date' => now()->toDateString(),
+                'end_date' => now()->addDays(30)->toDateString(),
+            ]);
         }
 
         $webhookUrl = $this->resolveWebhookUrl($telegramAccount, $request);

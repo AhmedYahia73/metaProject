@@ -145,9 +145,6 @@ class TemplateController extends Controller
         ]);
     }
 
-    /**
-     * Generate an AI Markdown file from groups data and associate it with the selected account.
-     */
     public function generateAiFile(GenerateAiFileRequest $request): JsonResponse
     {
         [$targetModel, $accountType] = $this->resolveTargetAccount($request);
