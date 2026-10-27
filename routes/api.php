@@ -180,6 +180,8 @@ Route::prefix('user')->group(function () {
         Route::post('telegram/accounts/{telegramAccount}', [UserTelegramAccountController::class, 'update']);
         Route::put('telegram/accounts/{telegramAccount}', [UserTelegramAccountController::class, 'update']);
         Route::delete('telegram/accounts/{telegramAccount}', [UserTelegramAccountController::class, 'destroy']);
+        Route::get('telegram/accounts/{telegramAccount}/webhook-info', [UserTelegramAccountController::class, 'webhookInfo']);
+        Route::post('telegram/accounts/{telegramAccount}/resubscribe-webhook', [UserTelegramAccountController::class, 'resubscribeWebhook']);
 
         // Live Chat / Inbox (Telegram)
         Route::get('chat/telegram/accounts', [TelegramChatController::class, 'accounts']);

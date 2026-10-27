@@ -25,7 +25,7 @@ class InstagramItem extends Model
         'verify_token',
         'status',
         'ai_context',
-        
+
         'ai_file',
         'android_link',
         'ios_link',

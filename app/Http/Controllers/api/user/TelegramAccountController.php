@@ -124,14 +124,21 @@ class TelegramAccountController extends Controller
             $accountData['ai_file'] = $validated['ai_file'];
         }
 
+        // Give new bots an initial trial quota (50 msgs, 30 days) so auto-reply works immediately
+        if (! $existing) {
+            $accountData['msg_number'] = 50;
+            $accountData['start_date'] = now()->toDateString();
+            $accountData['end_date'] = now()->addDays(30)->toDateString();
+        }
+
         /** @var TelegramAccount $account */
         $account = TelegramAccount::updateOrCreate(
             ['bot_id' => $botId],
             $accountData
         );
 
-        // 3. Register Webhook on Telegram
-        $webhookUrl = url("/api/telegram-webhook/{$account->id}");
+        // 3. Register Webhook on Telegram (always with public HTTPS URL)
+        $webhookUrl = $this->resolveWebhookUrl($account, $request);
         $webhookResult = $this->telegramService->setWebhook($botToken, $webhookUrl, $verifyToken);
 
         $subInfo = $account->getSubscriptionInfo();
@@ -155,7 +162,9 @@ class TelegramAccountController extends Controller
                 'website_url' => $account->website_url,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
+                'webhook_url' => $webhookUrl,
                 'webhook_registered' => $webhookResult['success'],
+                'webhook_message' => $webhookResult['message'] ?? null,
             ],
         ], Response::HTTP_CREATED);
     }
@@ -285,6 +294,64 @@ class TelegramAccountController extends Controller
             'status' => true,
             'message' => 'Telegram bot disconnected successfully.',
         ]);
+    }
+
+    /**
+     * Get webhook info directly from Telegram (registered URL, pending updates, last error).
+     */
+    public function webhookInfo(Request $request, TelegramAccount $telegramAccount): JsonResponse
+    {
+        $this->authorizeAccount($request->user()->id, $telegramAccount);
+
+        $info = $this->telegramService->getWebhookInfo($telegramAccount->bot_token);
+
+        return response()->json([
+            'status' => $info['success'],
+            'data' => $info['data'] ?? [],
+            'message' => $info['message'] ?? null,
+        ]);
+    }
+
+    /**
+     * Re-subscribe / re-register webhook with Telegram for this bot.
+     */
+    public function resubscribeWebhook(Request $request, TelegramAccount $telegramAccount): JsonResponse
+    {
+        $this->authorizeAccount($request->user()->id, $telegramAccount);
+
+        $verifyToken = $telegramAccount->verify_token ?: (string) Str::uuid();
+        if (empty($telegramAccount->verify_token)) {
+            $telegramAccount->update(['verify_token' => $verifyToken]);
+        }
+
+        $webhookUrl = $this->resolveWebhookUrl($telegramAccount, $request);
+        $result = $this->telegramService->setWebhook($telegramAccount->bot_token, $webhookUrl, $verifyToken);
+
+        return response()->json([
+            'status' => $result['success'],
+            'message' => $result['message'] ?? 'Webhook update attempted.',
+            'webhook_url' => $webhookUrl,
+        ]);
+    }
+
+    /**
+     * Helper to resolve the correct public HTTPS webhook URL.
+     */
+    public function resolveWebhookUrl(TelegramAccount $account, Request $request): string
+    {
+        $host = $request->getHost();
+        if ($host && ! in_array($host, ['localhost', '127.0.0.1'], true)) {
+            return "https://{$host}/api/telegram-webhook/{$account->id}";
+        }
+
+        $appUrl = (string) config('app.url', 'https://bcknd.smartego.org');
+        if (str_contains($appUrl, 'localhost') || str_contains($appUrl, '127.0.0.1')) {
+            $appUrl = 'https://bcknd.smartego.org';
+        }
+
+        $appUrl = preg_replace('/^http:/i', 'https:', $appUrl);
+
+        return rtrim($appUrl, '/')."/api/telegram-webhook/{$account->id}";
     }
 
     /**

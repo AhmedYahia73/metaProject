@@ -81,17 +81,22 @@ class TelegramService
 
             if (! $response->successful() || ! $response->json('ok')) {
                 $description = $response->json('description', 'Failed to set webhook.');
-                Log::warning("TelegramService: setWebhook failed for bot: {$description}");
+                Log::warning("TelegramService: setWebhook failed for bot: {$description}", [
+                    'url' => $webhookUrl,
+                    'response' => $response->json(),
+                ]);
 
                 return [
                     'success' => false,
                     'message' => $description,
+                    'raw' => $response->json(),
                 ];
             }
 
             return [
                 'success' => true,
                 'message' => $response->json('description', 'Webhook set successfully.'),
+                'url' => $webhookUrl,
             ];
         } catch (\Throwable $e) {
             Log::error('TelegramService: setWebhook error: '.$e->getMessage());
@@ -99,6 +104,39 @@ class TelegramService
             return [
                 'success' => false,
                 'message' => 'Failed to set Telegram webhook: '.$e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Get webhook info from Telegram to inspect the current status and errors.
+     *
+     * @return array{success: bool, data?: array<string, mixed>, message?: string, raw?: array<string, mixed>}
+     */
+    public function getWebhookInfo(string $botToken): array
+    {
+        try {
+            $response = Http::timeout(10)
+                ->get("{$this->apiBase}/bot{$botToken}/getWebhookInfo");
+
+            if (! $response->successful() || ! $response->json('ok')) {
+                return [
+                    'success' => false,
+                    'message' => $response->json('description', 'Failed to get webhook info.'),
+                    'raw' => $response->json(),
+                ];
+            }
+
+            return [
+                'success' => true,
+                'data' => $response->json('result', []),
+            ];
+        } catch (\Throwable $e) {
+            Log::error('TelegramService: getWebhookInfo error: '.$e->getMessage());
+
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
             ];
         }
     }

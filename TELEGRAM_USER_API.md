@@ -19,6 +19,8 @@
    - [3. تفاصيل بوت محدد (Show Account)](#3-تفاصيل-بوت-محدد-show-account)
    - [4. تحديث بيانات الـ AI والروابط (Update Account)](#4-تحديث-بيانات-الـ-ai-والروابط-update-account)
    - [5. فصل وحذف البوت (Disconnect Bot)](#5-فصل-وحذف-البوت-disconnect-bot)
+   - [6. فحص حالة الـ Webhook مباشرة من تيليجرام (Get Webhook Info)](#6-فحص-حالة-الـ-webhook-مباشرة-من-تيليجرام-get-webhook-info)
+   - [7. إعادة ربط وتسجيل الـ Webhook (Resubscribe Webhook)](#7-إعادة-ربط-وتسجيل-الـ-webhook-resubscribe-webhook)
 4. [واجهات المحادثات والـ Inbox (Live Chat APIs)](#4-واجهات-المحادثات-والـ-inbox-live-chat-apis)
    - [1. جلب الحسابات مع عداد غير المقروء (Chat Accounts)](#1-جلب-الحسابات-مع-عداد-غير-المقروء-chat-accounts)
    - [2. جلب قائمة محادثات العملاء (Conversations List)](#2-جلب-قائمة-محادثات-العملاء-conversations-list)
@@ -254,6 +256,58 @@ flowchart TD
 {
   "status": true,
   "message": "Telegram bot disconnected successfully."
+}
+```
+
+---
+
+### 6. فحص حالة الـ Webhook مباشرة من تيليجرام (Get Webhook Info)
+
+يُستخدم للتشخيص وتأكيد أن تيليجرام يعرف رابط الـ Webhook بنجاح، ومعرفة ما إذا كان هناك رسائل معلقة أو أي خطأ في الاتصال.
+
+* **المسار:** `GET /api/user/telegram/accounts/{id}/webhook-info`
+
+#### الاستجابة الناجحة (200 OK):
+```json
+{
+  "status": true,
+  "data": {
+    "account_id": 1,
+    "bot_username": "smartego_bot",
+    "webhook_info": {
+      "url": "https://bcknd.smartego.org/api/telegram-webhook/1",
+      "has_custom_certificate": false,
+      "pending_update_count": 0,
+      "last_error_date": null,
+      "last_error_message": null,
+      "max_connections": 40,
+      "ip_address": "..."
+    }
+  }
+}
+```
+
+---
+
+### 7. إعادة ربط وتسجيل الـ Webhook (Resubscribe Webhook)
+
+في حال حدوث أي خطأ بالاتصال في تيليجرام أو تغيير دومين السيرفر، يمكن استدعاء هذا المسار لإعادة تسجيل رابط الـ Webhook رسمياً وفرض HTTPS.
+
+* **المسار:** `POST /api/user/telegram/accounts/{id}/resubscribe-webhook`
+
+#### الاستجابة الناجحة (200 OK):
+```json
+{
+  "status": true,
+  "message": "Webhook resubscribed successfully.",
+  "data": {
+    "webhook_url": "https://bcknd.smartego.org/api/telegram-webhook/1",
+    "telegram_response": {
+      "ok": true,
+      "result": true,
+      "description": "Webhook was set"
+    }
+  }
 }
 ```
 
