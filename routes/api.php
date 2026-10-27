@@ -14,12 +14,14 @@ use App\Http\Controllers\api\admin\SettingController;
 use App\Http\Controllers\api\admin\SubscriperController;
 use App\Http\Controllers\api\admin\TaxController;
 use App\Http\Controllers\api\admin\TelegramAccountController as AdminTelegramAccountController;
+use App\Http\Controllers\api\admin\TikTokAccountController as AdminTikTokAccountController;
 use App\Http\Controllers\api\admin\UserController;
 use App\Http\Controllers\api\admin\WhatsItemController as AdminWhatsItemController;
 use App\Http\Controllers\api\auth\LoginController;
 use App\Http\Controllers\api\HomeController;
 use App\Http\Controllers\api\PaymobCallbackController;
 use App\Http\Controllers\api\TelegramWebhookController;
+use App\Http\Controllers\api\TikTokWebhookController;
 use App\Http\Controllers\api\user\ChatController;
 use App\Http\Controllers\api\user\EmbeddedSignupController;
 use App\Http\Controllers\api\user\HomeController as UserHomeController;
@@ -27,6 +29,8 @@ use App\Http\Controllers\api\user\InstagramPagesController;
 use App\Http\Controllers\api\user\MessengerPagesController;
 use App\Http\Controllers\api\user\TelegramAccountController as UserTelegramAccountController;
 use App\Http\Controllers\api\user\TelegramChatController;
+use App\Http\Controllers\api\user\TikTokAccountController as UserTikTokAccountController;
+use App\Http\Controllers\api\user\TikTokChatController;
 use App\Http\Controllers\api\user\UserOrderController;
 use App\Http\Controllers\api\user\WhatsPagesController;
 use Illuminate\Http\Request;
@@ -68,6 +72,9 @@ Route::post('/instagram-webhook/set-active-id', [HomeController::class, 'instagr
 
 // Telegram Webhook (public — Telegram sends POST with message updates)
 Route::post('/telegram-webhook/{telegramAccount}', [TelegramWebhookController::class, 'handleWebhook']);
+
+// TikTok Webhook (public — handles GET verification & POST for comments and DMs)
+Route::match(['get', 'post'], '/tiktok-webhook', [TikTokWebhookController::class, 'handleWebhook']);
 
 // Paymob Webhook / Redirection Callback (public)
 Route::match(['get', 'post'], '/paymob/callback', [PaymobCallbackController::class, 'callback']);
@@ -189,6 +196,22 @@ Route::prefix('user')->group(function () {
         Route::get('chat/telegram/messages', [TelegramChatController::class, 'messages']);
         Route::post('chat/telegram/send', [TelegramChatController::class, 'sendMessage']);
 
+        // TikTok Self-Service — connect account, manage AI data & status
+        Route::get('tiktok/accounts', [UserTikTokAccountController::class, 'index']);
+        Route::get('tiktok/auth-url', [UserTikTokAccountController::class, 'getAuthUrl']);
+        Route::post('tiktok/connect', [UserTikTokAccountController::class, 'connect']);
+        Route::get('tiktok/accounts/{tiktokAccount}', [UserTikTokAccountController::class, 'show']);
+        Route::post('tiktok/accounts/{tiktokAccount}', [UserTikTokAccountController::class, 'update']);
+        Route::put('tiktok/accounts/{tiktokAccount}', [UserTikTokAccountController::class, 'update']);
+        Route::delete('tiktok/accounts/{tiktokAccount}', [UserTikTokAccountController::class, 'destroy']);
+        Route::post('tiktok/accounts/{tiktokAccount}/refresh-token', [UserTikTokAccountController::class, 'refreshToken']);
+
+        // Live Chat / Inbox (TikTok)
+        Route::get('chat/tiktok/accounts', [TikTokChatController::class, 'accounts']);
+        Route::get('chat/tiktok/conversations', [TikTokChatController::class, 'conversations']);
+        Route::get('chat/tiktok/messages', [TikTokChatController::class, 'messages']);
+        Route::post('chat/tiktok/send', [TikTokChatController::class, 'sendMessage']);
+
         Route::post('chat/mark-as-read', [ChatController::class, 'markAsRead']);
 
         Route::get('pending_orders', [UserOrderController::class, 'pending_orders']);
@@ -290,4 +313,11 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
 
     // Telegram Accounts Management (Admin manual control)
     Route::apiResource('users/{user}/telegram-accounts', AdminTelegramAccountController::class);
+
+    // TikTok Accounts Management (Admin manual control)
+    Route::post(
+        'users/{user}/tiktok-accounts/{tiktokAccount}/regenerate-token',
+        [AdminTikTokAccountController::class, 'regenerateVerifyToken']
+    );
+    Route::apiResource('users/{user}/tiktok-accounts', AdminTikTokAccountController::class);
 });

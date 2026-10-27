@@ -17,6 +17,7 @@ class Chat extends Model
         'whats_item_id',
         'instagram_item_id',
         'telegram_account_id',
+        'tiktok_account_id',
         'name',
         'phone',
         'message',
@@ -28,6 +29,7 @@ class Chat extends Model
         'messenger_sender_id',
         'instagram_sender_id',
         'telegram_sender_id',
+        'tiktok_sender_id',
         'sender_type',
         'meta_message_id',
     ];
@@ -99,6 +101,16 @@ class Chat extends Model
     public function telegramAccount(): BelongsTo
     {
         return $this->belongsTo(TelegramAccount::class);
+    }
+
+    /**
+     * Get the TikTok account associated with this message.
+     *
+     * @return BelongsTo<TikTokAccount, $this>
+     */
+    public function tiktokAccount(): BelongsTo
+    {
+        return $this->belongsTo(TikTokAccount::class);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

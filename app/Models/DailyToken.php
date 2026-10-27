@@ -19,6 +19,7 @@ class DailyToken extends Model
         'messenger_account_id',
         'instagram_item_id',
         'telegram_account_id',
+        'tiktok_account_id',
     ];
 
     /**
@@ -72,6 +73,16 @@ class DailyToken extends Model
     public function telegramAccount(): BelongsTo
     {
         return $this->belongsTo(TelegramAccount::class);
+    }
+
+    /**
+     * Get the TikTok account associated with this daily token record.
+     *
+     * @return BelongsTo<TikTokAccount, $this>
+     */
+    public function tiktokAccount(): BelongsTo
+    {
+        return $this->belongsTo(TikTokAccount::class);
     }
 
     /**
@@ -167,6 +178,32 @@ class DailyToken extends Model
             $record = self::create([
                 'date' => $today,
                 'telegram_account_id' => $telegramAccountId,
+                'tokens' => 0,
+            ]);
+        }
+
+        if ($tokens > 0) {
+            $record->increment('tokens', $tokens);
+        }
+
+        return $record;
+    }
+
+    /**
+     * Record daily consumed tokens for a TikTok account.
+     */
+    public static function recordForTikTok(int $tiktokAccountId, int $tokens): self
+    {
+        $today = now()->toDateString();
+
+        $record = self::where('tiktok_account_id', $tiktokAccountId)
+            ->whereDate('date', $today)
+            ->first();
+
+        if (! $record) {
+            $record = self::create([
+                'date' => $today,
+                'tiktok_account_id' => $tiktokAccountId,
                 'tokens' => 0,
             ]);
         }

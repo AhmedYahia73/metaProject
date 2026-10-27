@@ -28,6 +28,7 @@ class Order extends Model
         'whats_item_id',
         'instagram_item_id',
         'telegram_account_id',
+        'tiktok_account_id',
     ];
 
     protected static function booted(): void
@@ -35,7 +36,7 @@ class Order extends Model
         static::created(function (Order $order) {
             $hasActiveDates = ! empty($order->from) && ! empty($order->to);
             if ($order->status === 'approved' || $hasActiveDates) {
-                $target = $order->messengerAccount ?: ($order->whatsItem ?: ($order->instagramItem ?: $order->telegramAccount));
+                $target = $order->messengerAccount ?: ($order->whatsItem ?: ($order->instagramItem ?: ($order->telegramAccount ?: $order->tiktokAccount)));
 
                 if (! $target) {
                     if ($order->messenger_account_id) {
@@ -46,6 +47,8 @@ class Order extends Model
                         $target = $order->whatsItem;
                     } elseif ($order->telegram_account_id) {
                         $target = $order->telegramAccount;
+                    } elseif ($order->tiktok_account_id) {
+                        $target = $order->tiktokAccount;
                     } elseif ($order->channel === 'messenger') {
                         $accounts = MessengerAccount::where('user_id', $order->user_id)->get();
                         if ($accounts->count() === 1) {
@@ -66,14 +69,20 @@ class Order extends Model
                         if ($accounts->count() === 1) {
                             $target = $accounts->first();
                         }
+                    } elseif ($order->channel === 'tiktok') {
+                        $accounts = TikTokAccount::where('user_id', $order->user_id)->get();
+                        if ($accounts->count() === 1) {
+                            $target = $accounts->first();
+                        }
                     } else {
                         $mAccounts = MessengerAccount::where('user_id', $order->user_id)->get();
                         $wItems = WhatsItem::where('user_id', $order->user_id)->get();
                         $iItems = InstagramItem::where('user_id', $order->user_id)->get();
                         $tAccounts = TelegramAccount::where('user_id', $order->user_id)->get();
-                        $total = $mAccounts->count() + $wItems->count() + $iItems->count() + $tAccounts->count();
+                        $tkAccounts = TikTokAccount::where('user_id', $order->user_id)->get();
+                        $total = $mAccounts->count() + $wItems->count() + $iItems->count() + $tAccounts->count() + $tkAccounts->count();
                         if ($total === 1) {
-                            $target = $mAccounts->first() ?: ($wItems->first() ?: ($iItems->first() ?: $tAccounts->first()));
+                            $target = $mAccounts->first() ?: ($wItems->first() ?: ($iItems->first() ?: ($tAccounts->first() ?: $tkAccounts->first())));
                         }
                     }
                 }
@@ -177,6 +186,16 @@ class Order extends Model
     public function telegramAccount(): BelongsTo
     {
         return $this->belongsTo(TelegramAccount::class);
+    }
+
+    /**
+     * Get the TikTok account this order activates.
+     *
+     * @return BelongsTo<TikTokAccount, $this>
+     */
+    public function tiktokAccount(): BelongsTo
+    {
+        return $this->belongsTo(TikTokAccount::class);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

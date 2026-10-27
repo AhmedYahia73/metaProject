@@ -119,6 +119,16 @@ class User extends Authenticatable
     }
 
     /**
+     * Get all TikTok accounts for this user (restaurant).
+     *
+     * @return HasMany<TikTokAccount, $this>
+     */
+    public function tiktokAccounts(): HasMany
+    {
+        return $this->hasMany(TikTokAccount::class);
+    }
+
+    /**
      * Get all chats for this user (restaurant).
      *
      * @return HasMany<Chat, $this>

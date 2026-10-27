@@ -18,6 +18,7 @@ class MsgSend extends Model
         'whats_item_id',
         'instagram_item_id',
         'telegram_account_id',
+        'tiktok_account_id',
         'channel',
     ];
 
@@ -69,5 +70,15 @@ class MsgSend extends Model
     public function telegramAccount(): BelongsTo
     {
         return $this->belongsTo(TelegramAccount::class);
+    }
+
+    /**
+     * Get the TikTok account that sent the message.
+     *
+     * @return BelongsTo<TikTokAccount, $this>
+     */
+    public function tiktokAccount(): BelongsTo
+    {
+        return $this->belongsTo(TikTokAccount::class);
     }
 }

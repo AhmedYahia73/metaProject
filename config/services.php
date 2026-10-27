@@ -51,4 +51,11 @@ return [
         'messenger_verify_token' => env('MESSENGER_VERIFY_TOKEN', env('WHATSAPP_VERIFY_TOKEN')),
     ],
 
+    'tiktok' => [
+        'client_key' => env('TIKTOK_CLIENT_KEY'),
+        'client_secret' => env('TIKTOK_CLIENT_SECRET'),
+        'redirect_uri' => env('TIKTOK_REDIRECT_URI'),
+        'verify_token' => env('TIKTOK_VERIFY_TOKEN'),
+    ],
+
 ];
