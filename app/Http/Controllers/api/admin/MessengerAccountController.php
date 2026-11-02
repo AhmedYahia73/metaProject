@@ -37,7 +37,8 @@ class MessengerAccountController extends Controller
                 'ai_file',
                 'android_link',
                 'ios_link',
-                'website_url'
+                'website_url',
+                'api_link'
             )
             ->withSum(['dailyTokens as total_tokens' => function ($q) use ($startDate, $endDate) {
                 $this->filterDailyTokensDate($q, $startDate, $endDate);
@@ -70,6 +71,7 @@ class MessengerAccountController extends Controller
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
+            'api_link' => 'sometimes|nullable|string|max:500',
         ]);
 
         unset($validated['msg_number']);
@@ -124,6 +126,7 @@ class MessengerAccountController extends Controller
                 'android_link' => $messengerAccount->android_link,
                 'ios_link' => $messengerAccount->ios_link,
                 'website_url' => $messengerAccount->website_url,
+                'api_link' => $messengerAccount->api_link,
             ],
         ]);
     }
@@ -144,6 +147,7 @@ class MessengerAccountController extends Controller
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
+            'api_link' => 'sometimes|nullable|string|max:500',
         ]);
 
         unset($validated['msg_number']);

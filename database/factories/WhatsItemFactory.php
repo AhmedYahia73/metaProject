@@ -30,6 +30,8 @@ class WhatsItemFactory extends Factory
             'phone_verified_at' => now(),
             'android_link' => fake()->optional()->url(),
             'ios_link' => fake()->optional()->url(),
+            'website_url' => fake()->optional()->url(),
+            'api_link' => null,
             'msg_number' => 0,
         ];
     }

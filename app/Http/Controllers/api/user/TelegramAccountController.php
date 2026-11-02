@@ -46,6 +46,8 @@ class TelegramAccountController extends Controller
                     'android_link' => $account->android_link,
                     'ios_link' => $account->ios_link,
                     'website_url' => $account->website_url,
+                'api_link' => $account->api_link,
+                    'api_link' => $account->api_link,
                     'subscription_status' => $subInfo['subscription_status'],
                     'available_msgs' => $subInfo['available_msgs'],
                     'created_at' => $account->created_at?->toDateTimeString(),
@@ -73,6 +75,7 @@ class TelegramAccountController extends Controller
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
+            'api_link' => 'sometimes|nullable|string|max:500',
         ]);
 
         $botToken = trim($validated['bot_token']);
@@ -113,6 +116,7 @@ class TelegramAccountController extends Controller
             'android_link' => $validated['android_link'] ?? null,
             'ios_link' => $validated['ios_link'] ?? null,
             'website_url' => $validated['website_url'] ?? null,
+            'api_link' => $validated['api_link'] ?? null,
         ];
 
         if ($request->hasFile('ai_file')) {
@@ -160,6 +164,7 @@ class TelegramAccountController extends Controller
                 'android_link' => $account->android_link,
                 'ios_link' => $account->ios_link,
                 'website_url' => $account->website_url,
+                'api_link' => $account->api_link,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
                 'webhook_url' => $webhookUrl,
@@ -194,6 +199,7 @@ class TelegramAccountController extends Controller
                 'android_link' => $telegramAccount->android_link,
                 'ios_link' => $telegramAccount->ios_link,
                 'website_url' => $telegramAccount->website_url,
+                'api_link' => $telegramAccount->api_link,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
                 'created_at' => $telegramAccount->created_at?->toDateTimeString(),
@@ -214,6 +220,7 @@ class TelegramAccountController extends Controller
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
+            'api_link' => 'sometimes|nullable|string|max:500',
             'status' => 'sometimes|in:active,disabled',
         ]);
 
@@ -244,6 +251,10 @@ class TelegramAccountController extends Controller
             $updateFields['website_url'] = $validated['website_url'];
         }
 
+        if ($request->has('api_link')) {
+            $updateFields['api_link'] = $validated['api_link'];
+        }
+
         if ($request->has('status')) {
             $updateFields['status'] = $validated['status'];
         }
@@ -272,6 +283,7 @@ class TelegramAccountController extends Controller
                 'android_link' => $telegramAccount->android_link,
                 'ios_link' => $telegramAccount->ios_link,
                 'website_url' => $telegramAccount->website_url,
+                'api_link' => $telegramAccount->api_link,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
             ],

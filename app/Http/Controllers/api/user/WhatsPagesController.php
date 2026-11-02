@@ -95,6 +95,7 @@ class WhatsPagesController extends Controller
                     'android_link' => $item->android_link,
                     'ios_link' => $item->ios_link,
                     'website_url' => $item->website_url,
+                    'api_link' => $item->api_link,
                     'msg_number' => $item->msg_number,
                     'ai_context' => $item->ai_context,
                     'ai_file' => $item->ai_file,
@@ -118,6 +119,7 @@ class WhatsPagesController extends Controller
         return response()->json([
             'ai_context' => $data->ai_context,
             'ai_file' => $data->ai_file,
+            'api_link' => $data->api_link,
         ]);
     }
 
@@ -142,6 +144,7 @@ class WhatsPagesController extends Controller
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
+            'api_link' => 'sometimes|nullable|string|max:500',
             'auto_request_code' => 'sometimes|boolean',
             'code_method' => 'sometimes|in:SMS,VOICE',
             'ai_context' => 'sometimes|nullable|string',
@@ -209,6 +212,7 @@ class WhatsPagesController extends Controller
             'android_link' => $validated['android_link'] ?? null,
             'ios_link' => $validated['ios_link'] ?? null,
             'website_url' => $validated['website_url'] ?? null,
+            'api_link' => $validated['api_link'] ?? null,
             'ai_context' => $validated['ai_context'] ?? null,
             'ai_file' => $aiFilePath,
             'phone_status' => 'pending_otp',
@@ -247,6 +251,7 @@ class WhatsPagesController extends Controller
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
+            'api_link' => 'sometimes|nullable|string|max:500',
             'ai_context' => 'sometimes|nullable|string',
             'ai_file' => 'sometimes|nullable||file|mimes:txt,text,md|extensions:md|max:2048',
         ]);
@@ -495,6 +500,7 @@ class WhatsPagesController extends Controller
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
+            'api_link' => 'sometimes|nullable|string|max:500',
             'ai_context' => 'sometimes|nullable|string',
             'ai_file' => 'sometimes|nullable||file|mimes:txt,text,md|extensions:md|max:2048',
         ], [

@@ -24,6 +24,7 @@ class MessengerAccount extends Model
         'android_link',
         'ios_link',
         'website_url',
+        'api_link',
         'msg_number',
         'start_date',
         'end_date',

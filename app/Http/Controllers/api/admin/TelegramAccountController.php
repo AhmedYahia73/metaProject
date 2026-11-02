@@ -46,6 +46,7 @@ class TelegramAccountController extends Controller
                 'android_link',
                 'ios_link',
                 'website_url',
+                'api_link',
                 'created_at'
             )
             ->withSum(['dailyTokens as total_tokens' => function ($q) use ($startDate, $endDate) {
@@ -80,6 +81,7 @@ class TelegramAccountController extends Controller
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
+            'api_link' => 'sometimes|nullable|string|max:500',
             'msg_number' => 'sometimes|integer|min:0',
             'start_date' => 'sometimes|nullable|date',
             'end_date' => 'sometimes|nullable|date|after_or_equal:start_date',
@@ -122,6 +124,7 @@ class TelegramAccountController extends Controller
             'android_link' => $validated['android_link'] ?? null,
             'ios_link' => $validated['ios_link'] ?? null,
             'website_url' => $validated['website_url'] ?? null,
+            'api_link' => $validated['api_link'] ?? null,
             'msg_number' => $validated['msg_number'] ?? 0,
             'start_date' => $validated['start_date'] ?? null,
             'end_date' => $validated['end_date'] ?? null,
@@ -179,6 +182,7 @@ class TelegramAccountController extends Controller
                 'android_link' => $telegramAccount->android_link,
                 'ios_link' => $telegramAccount->ios_link,
                 'website_url' => $telegramAccount->website_url,
+                'api_link' => $telegramAccount->api_link,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
                 'created_at' => $telegramAccount->created_at?->toDateTimeString(),
@@ -199,6 +203,7 @@ class TelegramAccountController extends Controller
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
+            'api_link' => 'sometimes|nullable|string|max:500',
             'status' => 'sometimes|in:active,disabled',
             'msg_number' => 'sometimes|integer|min:0',
             'start_date' => 'sometimes|nullable|date',
@@ -230,6 +235,10 @@ class TelegramAccountController extends Controller
 
         if ($request->has('website_url')) {
             $updateFields['website_url'] = $validated['website_url'];
+        }
+
+        if ($request->has('api_link')) {
+            $updateFields['api_link'] = $validated['api_link'];
         }
 
         if ($request->has('status')) {
@@ -273,6 +282,7 @@ class TelegramAccountController extends Controller
                 'android_link' => $telegramAccount->android_link,
                 'ios_link' => $telegramAccount->ios_link,
                 'website_url' => $telegramAccount->website_url,
+                'api_link' => $telegramAccount->api_link,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
             ],

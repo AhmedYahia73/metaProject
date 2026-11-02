@@ -189,6 +189,7 @@ class MessengerPagesController extends Controller
             'android_link' => 'sometimes',
             'ios_link' => 'sometimes',
             'website_url' => 'sometimes',
+            'api_link' => 'sometimes',
         ]);
 
         $data = MessengerAccount::where('page_id', $request->page_id)
@@ -216,6 +217,9 @@ class MessengerPagesController extends Controller
         if ($request->has('website_url')) {
             $updateFields['website_url'] = $request->website_url;
         }
+        if ($request->has('api_link')) {
+            $updateFields['api_link'] = $request->api_link;
+        }
 
         if (! empty($updateFields)) {
             $data->update($updateFields);
@@ -228,6 +232,7 @@ class MessengerPagesController extends Controller
             'android_link' => $data->android_link,
             'ios_link' => $data->ios_link,
             'website_url' => $data->website_url,
+            'api_link' => $data->api_link,
         ]);
     }
 

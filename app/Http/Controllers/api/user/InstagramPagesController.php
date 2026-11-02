@@ -475,6 +475,7 @@ class InstagramPagesController extends Controller
             'android_link' => 'sometimes',
             'ios_link' => 'sometimes',
             'website_url' => 'sometimes',
+            'api_link' => 'sometimes',
         ]);
 
         $query = InstagramItem::query();
@@ -514,6 +515,9 @@ class InstagramPagesController extends Controller
         if ($request->has('website_url')) {
             $updateFields['website_url'] = $request->website_url;
         }
+        if ($request->has('api_link')) {
+            $updateFields['api_link'] = $request->api_link;
+        }
 
         if (! empty($updateFields)) {
             $data->update($updateFields);
@@ -525,12 +529,14 @@ class InstagramPagesController extends Controller
             'ai_context' => $data->ai_context,
             'ai_file' => $data->ai_file,
             'website_url' => $data->website_url,
+            'api_link' => $data->api_link,
             'data' => [
                 'ai_context' => $data->ai_context,
                 'ai_file' => $data->ai_file,
                 'android_link' => $data->android_link,
                 'ios_link' => $data->ios_link,
                 'website_url' => $data->website_url,
+                'api_link' => $data->api_link,
             ],
         ]);
     }
@@ -555,6 +561,7 @@ class InstagramPagesController extends Controller
                     'ai_context' => $item->ai_context,
                     'ai_file' => $item->ai_file,
                     'website_url' => $item->website_url,
+                    'api_link' => $item->api_link,
                 ];
             });
 

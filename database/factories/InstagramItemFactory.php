@@ -36,6 +36,7 @@ class InstagramItemFactory extends Factory
             'android_link' => null,
             'ios_link' => null,
             'website_url' => null,
+            'api_link' => null,
             'msg_number' => 0,
         ];
     }

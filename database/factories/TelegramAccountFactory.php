@@ -29,6 +29,7 @@ class TelegramAccountFactory extends Factory
             'android_link' => 'https://play.google.com/store/apps/details?id=com.smartego.app',
             'ios_link' => 'https://apps.apple.com/app/smartego/id123456789',
             'website_url' => 'https://smartego.org',
+            'api_link' => null,
             'msg_number' => 100,
             'start_date' => now()->toDateString(),
             'end_date' => now()->addMonth()->toDateString(),

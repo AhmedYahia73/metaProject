@@ -47,6 +47,7 @@ class TikTokAccountController extends Controller
                 'android_link',
                 'ios_link',
                 'website_url',
+                'api_link',
                 'created_at'
             )
             ->withSum(['dailyTokens as total_tokens' => function ($q) use ($startDate, $endDate) {
@@ -85,6 +86,7 @@ class TikTokAccountController extends Controller
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
+            'api_link' => 'sometimes|nullable|string|max:500',
             'msg_number' => 'sometimes|integer|min:0',
             'start_date' => 'sometimes|nullable|date',
             'end_date' => 'sometimes|nullable|date|after_or_equal:start_date',
@@ -116,6 +118,7 @@ class TikTokAccountController extends Controller
             'android_link' => $validated['android_link'] ?? null,
             'ios_link' => $validated['ios_link'] ?? null,
             'website_url' => $validated['website_url'] ?? null,
+            'api_link' => $validated['api_link'] ?? null,
             'msg_number' => $validated['msg_number'] ?? 0,
             'start_date' => $validated['start_date'] ?? null,
             'end_date' => $validated['end_date'] ?? null,
@@ -171,6 +174,7 @@ class TikTokAccountController extends Controller
                 'android_link' => $tiktokAccount->android_link,
                 'ios_link' => $tiktokAccount->ios_link,
                 'website_url' => $tiktokAccount->website_url,
+                'api_link' => $tiktokAccount->api_link,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
                 'created_at' => $tiktokAccount->created_at?->toDateTimeString(),
@@ -195,6 +199,7 @@ class TikTokAccountController extends Controller
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
+            'api_link' => 'sometimes|nullable|string|max:500',
             'username' => 'sometimes|nullable|string|max:255',
             'display_name' => 'sometimes|nullable|string|max:255',
             'access_token' => 'sometimes|nullable|string',
@@ -203,7 +208,7 @@ class TikTokAccountController extends Controller
 
         $updateFields = [];
 
-        foreach (['status', 'msg_number', 'start_date', 'end_date', 'ai_context', 'android_link', 'ios_link', 'website_url', 'username', 'display_name', 'access_token', 'refresh_token'] as $field) {
+        foreach (['status', 'msg_number', 'start_date', 'end_date', 'ai_context', 'android_link', 'ios_link', 'website_url', 'api_link', 'username', 'display_name', 'access_token', 'refresh_token'] as $field) {
             if ($request->has($field)) {
                 $updateFields[$field] = $validated[$field];
             }
