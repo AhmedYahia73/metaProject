@@ -32,7 +32,18 @@ use OpenAI\Laravel\Facades\OpenAI;
 
 class HomeController extends Controller
 {
-    use FormatsChatLinks;
+    use FormatsChatLinks {
+        fetchProductsFromApiLink as private fetchProductsFromApiLinkTrait;
+    }
+
+    /**
+     * Fetch products from external api_link if configured.
+     * Calls item->api_link . "/api/public/products"
+     */
+    private function fetchProductsFromApiLink(object|string|null $itemOrLink): ?string
+    {
+        return $this->fetchProductsFromApiLinkTrait($itemOrLink);
+    }
 
     /**
      * Base WhatsApp Graph API URL.
@@ -1098,6 +1109,8 @@ class HomeController extends Controller
             $fileDataSection = "\n\nبيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة:\n".$fileContent;
         }
 
+        $apiProductsSection = $this->buildApiProductsPromptSection($messengerAccount);
+
         $linksSection = $this->buildLinksPromptSection(
             $messengerAccount->website_url,
             $messengerAccount->android_link,
@@ -1109,13 +1122,14 @@ class HomeController extends Controller
         $instructions = <<<PROMPT
         {$aiContext}
         {$fileDataSection}
+        {$apiProductsSection}
         {$linksSection}
 
         التعليمات الصارمة للرد:
         - أنت ممثل خدمة عملاء محترف ومؤدب جداً. استخدم لغة عربية ودودة، راقية، ومحترمة ومهذبة للغاية.
         - رحب بالعميل باسمه دائماً في بداية الرد (مثال: أهلاً وسهلاً بك يا {$senderName} 🌸).
         - العميل قام بكتابة تعليق على منشور لنا، لذا يجب أن يكون الرد الخاص على ماسنجر متصلاً بسياق البوست وسؤاله في التعليق.
-        - أجب بدقة على استفساره بالاعتماد الحصري على "بيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة" المذكورة أعلاه، ولا تخترع أي معلومات أو أسعار غير موجودة.
+        - أجب بدقة على استفساره بالاعتماد الحصري على "بيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة" وقائمة المنتجات المذكورة أعلاه، ولا تخترع أي معلومات أو أسعار غير موجودة.
         - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، اعتذر له بلباقة وأخبره أنه غير متوفر حالياً.
         - إذا طلب العميل أو سأل عن كيفية الطلب، وضح له بلباقة روابط الطلب المتوفرة أعلاه.
         - اختم الرسالة الخاصة دائماً بعبارة ترحيبية راقية مثل: «نسعد دائماً بخدمتك، ولو عندك أي استفسار آخر لا تتردد في مراسلتنا في أي وقت! 😊».
@@ -2246,6 +2260,8 @@ class HomeController extends Controller
             $fileDataSection = "\n\nبيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة:\n".$fileContent;
         }
 
+        $apiProductsSection = $this->buildApiProductsPromptSection($instagramItem);
+
         $linksSection = $this->buildLinksPromptSection(
             $instagramItem->website_url,
             $instagramItem->android_link,
@@ -2257,13 +2273,14 @@ class HomeController extends Controller
         $instructions = <<<PROMPT
         {$aiContext}
         {$fileDataSection}
+        {$apiProductsSection}
         {$linksSection}
 
         التعليمات الصارمة للرد على تعليقات انستجرام:
         - أنت ممثل خدمة عملاء محترف ومؤدب جداً على انستجرام. استخدم لغة عربية ودودة، راقية، ومحترمة ومهذبة للغاية.
         - رحب بالعميل باسمه أو حسابه دائماً في بداية الرد (مثال: أهلاً وسهلاً بك يا {$senderName} 🌸).
         - العميل قام بكتابة تعليق على منشور لنا على انستجرام، لذا يجب أن يكون الرد الخاص على الدايركت (Direct) متصلاً بسياق البوست وسؤاله في التعليق.
-        - أجب بدقة على استفساره بالاعتماد الحصري على "بيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة" المذكورة أعلاه، ولا تخترع أي معلومات أو أسعار غير موجودة.
+        - أجب بدقة على استفساره بالاعتماد الحصري على "بيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة" وقائمة المنتجات المذكورة أعلاه، ولا تخترع أي معلومات أو أسعار غير موجودة.
         - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، اعتذر له بلباقة وأخبره أنه غير متوفر حالياً.
         - إذا طلب العميل أو سأل عن كيفية الطلب، وضح له بلباقة روابط الطلب المتوفرة أعلاه.
         - اختم الرسالة الخاصة دائماً بعبارة ترحيبية راقية مثل: «نسعد دائماً بخدمتك، ولو عندك أي استفسار آخر لا تتردد في مراسلتنا في أي وقت! 😊».
@@ -2887,6 +2904,8 @@ class HomeController extends Controller
             $fileDataSection = "\n\nبيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة:\n".$fileContent;
         }
 
+        $apiProductsSection = $this->buildApiProductsPromptSection($instagramItem);
+
         $linksSection = $this->buildLinksPromptSection(
             $instagramItem->website_url,
             $instagramItem->android_link,
@@ -2898,11 +2917,12 @@ class HomeController extends Controller
         $instructions = <<<PROMPT
         {$aiContext}
         {$fileDataSection}
+        {$apiProductsSection}
         {$linksSection}
 
         التعليمات:
         - الرد باللغة العربية فقط بأسلوب مهذب ومساعد وموجز ومحترم.
-        - اعتمد على البيانات المذكورة أعلاه في الرد على استفسارات العميل ولا تخترع أي معلومات أو أسعار غير موجودة.
+        - اعتمد على البيانات المذكورة أعلاه وقائمة المنتجات في الرد على استفسارات العميل ولا تخترع أي معلومات أو أسعار غير موجودة.
         - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، أخبره بلباقة أنه غير متوفر حالياً.
         - أول ما يطلب العميل (عندما يريد طلب، يسأل كيف يطلب، يريد عمل أوردر، أو يطلب أي صنف أو وجبة): يجب الرد عليه بأسلوب مهذب ومحترم وإخباره: «تقدر تطلب من هنا» مع إرسال روابط الطلب المباشرة المذكورة أعلاه.
         - في حال عدم توفر روابط طلب أعلاه، أخبر العميل بلباقة أنه يمكنه كتابة طلبه وتفاصيله هنا لمساعدته.
@@ -2972,7 +2992,10 @@ class HomeController extends Controller
             }
         }
 
-        // 3. App links and website
+        // 3. API Products: fetch from whatsItem->api_link if configured
+        $apiProductsSection = $this->buildApiProductsPromptSection($whatsItem);
+
+        // 4. App links and website
         $linksSection = $this->buildLinksPromptSection(
             $whatsItem?->website_url,
             $whatsItem?->android_link,
@@ -2984,11 +3007,12 @@ class HomeController extends Controller
         $instructions = <<<PROMPT
         {$aiContext}
         {$fileDataSection}
+        {$apiProductsSection}
         {$linksSection}
 
         التعليمات:
         - الرد باللغة العربية فقط بأسلوب مهذب ومساعد وموجز ومحترم.
-        - اعتمد على البيانات المذكورة أعلاه في الرد على استفسارات العميل ولا تخترع أي معلومات أو أسعار غير موجودة.
+        - اعتمد على البيانات المذكورة أعلاه وقائمة المنتجات في الرد على استفسارات العميل ولا تخترع أي معلومات أو أسعار غير موجودة.
         - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، أخبره بلباقة أنه غير متوفر حالياً.
         - أول ما يطلب العميل (عندما يريد طلب، يسأل كيف يطلب، يريد عمل أوردر، أو يطلب أي صنف أو وجبة): يجب الرد عليه بأسلوب مهذب ومحترم وإخباره: «تقدر تطلب من هنا» مع إرسال روابط الطلب المباشرة المذكورة أعلاه.
         - في حال عدم توفر روابط طلب أعلاه، أخبر العميل بلباقة أنه يمكنه كتابة طلبه وتفاصيله هنا لمساعدته.
@@ -3138,6 +3162,9 @@ class HomeController extends Controller
             $fileDataSection = "\n\nبيانات وقائمة المنتجات / الخدمات والمعلومات المتاحة:\n".$fileContent;
         }
 
+        // Fetch API products from messengerAccount->api_link if configured
+        $apiProductsSection = $this->buildApiProductsPromptSection($messengerAccount);
+
         $linksSection = $this->buildLinksPromptSection(
             $messengerAccount->website_url,
             $messengerAccount->android_link,
@@ -3149,11 +3176,12 @@ class HomeController extends Controller
         $instructions = <<<PROMPT
         {$aiContext}
         {$fileDataSection}
+        {$apiProductsSection}
         {$linksSection}
 
         التعليمات:
         - الرد باللغة العربية فقط بأسلوب مهذب ومساعد وموجز ومحترم.
-        - اعتمد على البيانات المذكورة أعلاه في الرد على استفسارات العميل ولا تخترع أي معلومات أو أسعار غير موجودة.
+        - اعتمد على البيانات المذكورة أعلاه وقائمة المنتجات في الرد على استفسارات العميل ولا تخترع أي معلومات أو أسعار غير موجودة.
         - إذا سأل العميل عن شيء غير مذكور في البيانات أو غير متاح، أخبره بلباقة أنه غير متوفر حالياً.
         - أول ما يطلب العميل (عندما يريد طلب، يسأل كيف يطلب، يريد عمل أوردر، أو يطلب أي صنف أو وجبة): يجب الرد عليه بأسلوب مهذب ومحترم وإخباره: «تقدر تطلب من هنا» مع إرسال روابط الطلب المباشرة المذكورة أعلاه.
         - في حال عدم توفر روابط طلب أعلاه، أخبر العميل بلباقة أنه يمكنه كتابة طلبه وتفاصيله هنا لمساعدته.

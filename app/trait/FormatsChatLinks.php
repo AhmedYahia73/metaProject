@@ -2,6 +2,10 @@
 
 namespace App\trait;
 
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+
 trait FormatsChatLinks
 {
     /**
@@ -124,5 +128,81 @@ INSTRUCTIONS;
         $text = preg_replace('/([^\s\n:\/])(https?:\/\/)/u', "$1\n$2", $text);
 
         return trim($text);
+    }
+
+    /**
+     * Fetch public products from the configured api_link.
+     * Appends /api/public/products to the api_link.
+     *
+     * @param  object|string|null  $itemOrLink  Model with api_link attribute or raw URL string
+     * @return string|null  Formatted string containing products for AI, or null
+     */
+    public function fetchProductsFromApiLink(object|string|null $itemOrLink): ?string
+    {
+        $apiLink = is_object($itemOrLink) ? ($itemOrLink->api_link ?? null) : $itemOrLink;
+
+        if (empty($apiLink) || ! is_string($apiLink)) {
+            return null;
+        }
+
+        $trimmed = trim($apiLink);
+        if (empty($trimmed)) {
+            return null;
+        }
+
+        // Ensure proper scheme
+        if (! preg_match('~^https?://~i', $trimmed)) {
+            $trimmed = 'https://'.$trimmed;
+        }
+
+        $url = rtrim($trimmed, '/').'/api/public/products';
+        $cacheKey = 'products_api_data_'.md5($url);
+
+        if (Cache::has($cacheKey)) {
+            return Cache::get($cacheKey);
+        }
+
+        try {
+            $response = Http::timeout(8)
+                ->withOptions([
+                    'curl' => [
+                        CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+                    ],
+                ])
+                ->retry(2, 200, throw: false)
+                ->get($url);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                $formatted = ! empty($data)
+                    ? (is_array($data) ? json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT) : (string) $data)
+                    : trim((string) $response->body());
+
+                if (! empty($formatted)) {
+                    Cache::put($cacheKey, $formatted, 60);
+
+                    return $formatted;
+                }
+            } else {
+                Log::warning("Products API returned non-200 status [{$response->status()}] for URL [{$url}]");
+            }
+        } catch (\Throwable $e) {
+            Log::warning("Failed to fetch products from api_link [{$url}]: ".$e->getMessage());
+        }
+
+        return null;
+    }
+
+    /**
+     * Build the API products section for the AI prompt.
+     */
+    public function buildApiProductsPromptSection(object|string|null $itemOrLink): string
+    {
+        $products = $this->fetchProductsFromApiLink($itemOrLink);
+        if (empty($products)) {
+            return '';
+        }
+
+        return "\n\nقائمة وبيانات المنتجات المتاحة من النظام (Products API):\n".$products."\n\nتنبيه هام جداً: هذه هي المنتجات والأسعار والتفاصيل المعتمدة والحالية، أجب منها والتزم بها بدقة في الرد على استفسارات العميل بخصوص الأصناف والمنتجات والأسعار المتاحة، ولا تخترع أي أسعار أو أصناف غير موجودة.";
     }
 }
