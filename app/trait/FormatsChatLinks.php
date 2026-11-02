@@ -132,7 +132,7 @@ INSTRUCTIONS;
 
     /**
      * Fetch public products from the configured api_link.
-     * Appends /api/public/products to the api_link.
+     * Appends /api/public/products to the api_link if not already present.
      *
      * @param  object|string|null  $itemOrLink  Model with api_link attribute or raw URL string
      * @return string|null Formatted string containing products for AI, or null
@@ -146,6 +146,10 @@ INSTRUCTIONS;
         }
 
         $trimmed = trim($apiLink);
+        // Strip leading "api " prefix or colons if user typed e.g. "api https://..."
+        $trimmed = preg_replace('/^api[:\s]+/i', '', $trimmed);
+        $trimmed = trim($trimmed, "<>\"' \t\n\r\0\x0B");
+
         if (empty($trimmed)) {
             return null;
         }
@@ -155,11 +159,26 @@ INSTRUCTIONS;
             $trimmed = 'https://'.$trimmed;
         }
 
-        $url = rtrim($trimmed, '/').'/api/public/products';
+        // Check if the URL already has the /api/public/products path
+        $parsed = parse_url($trimmed);
+        $path = rtrim($parsed['path'] ?? '', '/');
+
+        if (str_ends_with($path, '/api/public/products') || str_ends_with($path, '/public/products')) {
+            $url = $trimmed;
+        } elseif (str_ends_with($path, '/api')) {
+            $url = rtrim($trimmed, '/').'/public/products';
+        } else {
+            $url = rtrim($trimmed, '/').'/api/public/products';
+        }
+
         $cacheKey = 'products_api_data_'.md5($url);
 
-        if (Cache::has($cacheKey)) {
-            return Cache::get($cacheKey);
+        try {
+            if (Cache::has($cacheKey)) {
+                return Cache::get($cacheKey);
+            }
+        } catch (\Throwable) {
+            // Ignore cache read failures and proceed with HTTP request
         }
 
         try {
@@ -174,14 +193,23 @@ INSTRUCTIONS;
 
             if ($response->successful()) {
                 $data = $response->json();
-                $formatted = ! empty($data)
-                    ? (is_array($data) ? json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT) : (string) $data)
+                $formattedCatalog = is_array($data) ? $this->formatProductsCatalog($data) : null;
+                $rawJson = is_array($data)
+                    ? json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)
                     : trim((string) $response->body());
 
-                if (! empty($formatted)) {
-                    Cache::put($cacheKey, $formatted, 60);
+                $content = ! empty($formattedCatalog)
+                    ? "{$formattedCatalog}\n\nبيانات تفصيلية إضافية (JSON):\n{$rawJson}"
+                    : $rawJson;
 
-                    return $formatted;
+                if (! empty($content)) {
+                    try {
+                        Cache::put($cacheKey, $content, 60);
+                    } catch (\Throwable) {
+                        // Ignore cache write failures
+                    }
+
+                    return $content;
                 }
             } else {
                 Log::warning("Products API returned non-200 status [{$response->status()}] for URL [{$url}]");
@@ -194,6 +222,64 @@ INSTRUCTIONS;
     }
 
     /**
+     * Format raw products API data into a human-readable Arabic list for AI.
+     */
+    public function formatProductsCatalog(array $data): string
+    {
+        $rawItems = $data['data']['data'] ?? $data['data'] ?? $data['products'] ?? (array_is_list($data) ? $data : []);
+
+        if (! is_array($rawItems) || empty($rawItems)) {
+            return '';
+        }
+
+        $lines = ['قائمة المنتجات والأسعار المتاحة:'];
+
+        foreach ($rawItems as $index => $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+
+            $name = $item['ar_name'] ?? $item['name'] ?? $item['title'] ?? ('منتج '.($index + 1));
+            $desc = $item['ar_description'] ?? $item['description'] ?? $item['desc'] ?? null;
+            $price = $item['price'] ?? null;
+
+            $line = "- اسم المنتج: {$name}";
+
+            if ($price !== null && $price !== '') {
+                $formattedPrice = is_numeric($price) ? number_format((float) $price, 0, '.', ',') : $price;
+                $line .= " | السعر: {$formattedPrice}";
+            }
+
+            if (! empty($desc)) {
+                $line .= " | الوصف: {$desc}";
+            }
+
+            if (! empty($item['options']) && is_array($item['options'])) {
+                $optionsList = [];
+                foreach ($item['options'] as $opt) {
+                    if (is_array($opt)) {
+                        $optName = $opt['option_name'] ?? $opt['name'] ?? '';
+                        $optPrice = $opt['price'] ?? null;
+                        if ($optPrice !== null) {
+                            $formattedOptPrice = is_numeric($optPrice) ? number_format((float) $optPrice, 0, '.', ',') : $optPrice;
+                            $optionsList[] = "{$optName} (بسعر {$formattedOptPrice})";
+                        } elseif ($optName) {
+                            $optionsList[] = $optName;
+                        }
+                    }
+                }
+                if (! empty($optionsList)) {
+                    $line .= ' | الخيارات/الألوان المتاحة: '.implode('، ', $optionsList);
+                }
+            }
+
+            $lines[] = $line;
+        }
+
+        return count($lines) > 1 ? implode("\n", $lines) : '';
+    }
+
+    /**
      * Build the API products section for the AI prompt.
      */
     public function buildApiProductsPromptSection(object|string|null $itemOrLink): string
@@ -203,6 +289,16 @@ INSTRUCTIONS;
             return '';
         }
 
-        return "\n\nقائمة وبيانات المنتجات المتاحة من النظام (Products API):\n".$products."\n\nتنبيه هام جداً: هذه هي المنتجات والأسعار والتفاصيل المعتمدة والحالية، أجب منها والتزم بها بدقة في الرد على استفسارات العميل بخصوص الأصناف والمنتجات والأسعار المتاحة، ولا تخترع أي أسعار أو أصناف غير موجودة.";
+        return <<<SECTION
+
+
+بيانات وقائمة المنتجات والخدمات المتاحة حالياً للطلب والبيع:
+{$products}
+
+تعليمات صارمة بخصوص المنتجات أعلاه:
+- المنتجات المذكورة أعلاه هي المنتجات والخدمات المتوفرة والمعتمدة للطلب والبيع من خلال هذا الحساب.
+- إذا سأل العميل عن المنتجات المتوفرة، الأصناف، الأسعار، أو تفاصيل أي منتج، يجب أن تعرض له المنتجات المذكورة أعلاه بأسعارها وتفاصيلها وخياراتها المتاحة فوراً وبأسلوب مهذب ومساعد.
+- ممنوع منعاً باتاً أن تخبر العميل أنه "لا توجد منتجات" أو أنها "غير متوفرة حالياً" لأي صنف أو منتج مذكور في هذه القائمة، بل أجب بأنه متوفر واذكر له سعره وتفاصيله الموضحة أعلاه.
+SECTION;
     }
 }

@@ -279,5 +279,50 @@ test('buildApiProductsPromptSection injects product guidance into AI prompt', fu
     $section = $controller->buildApiProductsPromptSection($whatsItem);
 
     expect($section)->toContain('Shawarma');
-    expect($section)->toContain('Products API');
+    expect($section)->toContain('بيانات وقائمة المنتجات والخدمات المتاحة حالياً للطلب والبيع');
+    expect($section)->toContain('ممنوع منعاً باتاً أن تخبر العميل أنه "لا توجد منتجات"');
+});
+
+test('fetchProductsFromApiLink formats Systego style nested payload with options properly', function () {
+    Http::fake([
+        'https://bcknd.systego.net/api/public/products' => Http::response([
+            'success' => true,
+            'data' => [
+                'message' => 'Products retrieved successfully',
+                'total' => 3,
+                'data' => [
+                    [
+                        '_id' => '6ab3b78ec2a4141a12055e32',
+                        'ar_name' => 'موديل أ22',
+                        'ar_description' => 'سياره حديثه نيو',
+                        'price' => 5900000,
+                        'options' => [
+                            ['option_name' => 'Red', 'price' => 6000000],
+                            ['option_name' => 'Blue', 'price' => 5900000],
+                        ],
+                    ],
+                    [
+                        '_id' => '6ac49f32c6a6142d8d5f171f',
+                        'ar_name' => 'كرة',
+                        'ar_description' => 'صشبصبص',
+                        'price' => 100,
+                        'options' => [],
+                    ],
+                ],
+            ],
+        ], 200),
+    ]);
+
+    $controller = app(HomeController::class);
+
+    // Test with base url (which user enters in DB)
+    $section = $controller->buildApiProductsPromptSection('https://bcknd.systego.net');
+    expect($section)->toContain('موديل أ22');
+    expect($section)->toContain('سياره حديثه نيو');
+    expect($section)->toContain('Red (بسعر 6,000,000)');
+    expect($section)->toContain('كرة');
+
+    // Test with full endpoint as well
+    $section2 = $controller->buildApiProductsPromptSection('https://bcknd.systego.net/api/public/products');
+    expect($section2)->toContain('موديل أ22');
 });
