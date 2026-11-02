@@ -131,13 +131,9 @@ INSTRUCTIONS;
     }
 
     /**
-     * Fetch public products from the configured api_link.
-     * Appends /api/public/products to the api_link if not already present.
-     *
-     * @param  object|string|null  $itemOrLink  Model with api_link attribute or raw URL string
-     * @return string|null Formatted string containing products for AI, or null
+     * Resolve the full /api/public/products endpoint URL from an api_link.
      */
-    public function fetchProductsFromApiLink(object|string|null $itemOrLink): ?string
+    public function resolveProductsApiUrl(object|string|null $itemOrLink): ?string
     {
         $apiLink = is_object($itemOrLink) ? ($itemOrLink->api_link ?? null) : $itemOrLink;
 
@@ -164,11 +160,26 @@ INSTRUCTIONS;
         $path = rtrim($parsed['path'] ?? '', '/');
 
         if (str_ends_with($path, '/api/public/products') || str_ends_with($path, '/public/products')) {
-            $url = $trimmed;
+            return $trimmed;
         } elseif (str_ends_with($path, '/api')) {
-            $url = rtrim($trimmed, '/').'/public/products';
-        } else {
-            $url = rtrim($trimmed, '/').'/api/public/products';
+            return rtrim($trimmed, '/').'/public/products';
+        }
+
+        return rtrim($trimmed, '/').'/api/public/products';
+    }
+
+    /**
+     * Fetch public products from the configured api_link.
+     * Appends /api/public/products to the api_link if not already present.
+     *
+     * @param  object|string|null  $itemOrLink  Model with api_link attribute or raw URL string
+     * @return string|null Formatted string containing products for AI, or null
+     */
+    public function fetchProductsFromApiLink(object|string|null $itemOrLink): ?string
+    {
+        $url = $this->resolveProductsApiUrl($itemOrLink);
+        if (empty($url)) {
+            return null;
         }
 
         $cacheKey = 'products_api_data_'.md5($url);
@@ -281,10 +292,26 @@ INSTRUCTIONS;
 
     /**
      * Build the API products section for the AI prompt.
+     * Prefers cached user_data from DB to eliminate HTTP latency inside webhooks.
      */
     public function buildApiProductsPromptSection(object|string|null $itemOrLink): string
     {
-        $products = $this->fetchProductsFromApiLink($itemOrLink);
+        $products = null;
+
+        // 1. Prefer user_data cached from DB (zero HTTP overhead during webhook processing)
+        if (is_object($itemOrLink) && ! empty($itemOrLink->user_data) && is_array($itemOrLink->user_data)) {
+            $formattedCatalog = $this->formatProductsCatalog($itemOrLink->user_data);
+            $rawJson = json_encode($itemOrLink->user_data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+            $products = ! empty($formattedCatalog)
+                ? "{$formattedCatalog}\n\nبيانات تفصيلية إضافية (JSON):\n{$rawJson}"
+                : $rawJson;
+        }
+
+        // 2. Fallback to direct HTTP fetch if user_data is empty but api_link is present
+        if (empty($products)) {
+            $products = $this->fetchProductsFromApiLink($itemOrLink);
+        }
+
         if (empty($products)) {
             return '';
         }

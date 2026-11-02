@@ -326,3 +326,128 @@ test('fetchProductsFromApiLink formats Systego style nested payload with options
     $section2 = $controller->buildApiProductsPromptSection('https://bcknd.systego.net/api/public/products');
     expect($section2)->toContain('موديل أ22');
 });
+
+test('all channel tables have user_data column and is hidden in serialization', function () {
+    expect(Schema::hasColumn('messenger_accounts', 'user_data'))->toBeTrue();
+    expect(Schema::hasColumn('whats_items', 'user_data'))->toBeTrue();
+    expect(Schema::hasColumn('instagram_items', 'user_data'))->toBeTrue();
+    expect(Schema::hasColumn('telegram_accounts', 'user_data'))->toBeTrue();
+    expect(Schema::hasColumn('tiktok_accounts', 'user_data'))->toBeTrue();
+
+    $user = User::factory()->create();
+    $sampleData = ['products' => [['name' => 'Test Product', 'price' => 100]]];
+
+    $messenger = MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'user_data' => $sampleData,
+    ]);
+    expect($messenger->user_data)->toBeArray();
+    expect($messenger->toArray())->not->toHaveKey('user_data');
+    expect($messenger->toJson())->not->toContain('Test Product');
+
+    $whats = WhatsItem::factory()->create([
+        'user_id' => $user->id,
+        'user_data' => $sampleData,
+    ]);
+    expect($whats->user_data)->toBeArray();
+    expect($whats->toArray())->not->toHaveKey('user_data');
+
+    $instagram = InstagramItem::factory()->create([
+        'user_id' => $user->id,
+        'user_data' => $sampleData,
+    ]);
+    expect($instagram->user_data)->toBeArray();
+    expect($instagram->toArray())->not->toHaveKey('user_data');
+
+    $telegram = TelegramAccount::factory()->create([
+        'user_id' => $user->id,
+        'user_data' => $sampleData,
+    ]);
+    expect($telegram->user_data)->toBeArray();
+    expect($telegram->toArray())->not->toHaveKey('user_data');
+
+    $tiktok = TikTokAccount::factory()->create([
+        'user_id' => $user->id,
+        'user_data' => $sampleData,
+    ]);
+    expect($tiktok->user_data)->toBeArray();
+    expect($tiktok->toArray())->not->toHaveKey('user_data');
+});
+
+test('artisan products:sync updates user_data for channels with api_link', function () {
+    $user = User::factory()->create();
+
+    $messenger = MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'api_link' => 'https://bcknd.systego.net',
+        'user_data' => null,
+    ]);
+
+    $whats = WhatsItem::factory()->create([
+        'user_id' => $user->id,
+        'api_link' => 'https://bcknd.systego.net',
+        'user_data' => null,
+    ]);
+
+    Http::fake([
+        'https://bcknd.systego.net/api/public/products' => Http::response([
+            'success' => true,
+            'data' => [
+                'data' => [
+                    [
+                        '_id' => 'prod_1',
+                        'ar_name' => 'منتج متزامن',
+                        'ar_description' => 'وصف تجريبي',
+                        'price' => 250,
+                    ],
+                ],
+            ],
+        ], 200),
+    ]);
+
+    $this->artisan('products:sync', ['--channel' => 'messenger,whats'])
+        ->expectsOutputToContain('Sync completed')
+        ->assertSuccessful();
+
+    $messenger->refresh();
+    $whats->refresh();
+
+    expect($messenger->user_data)->toBeArray();
+    expect($messenger->user_data['data']['data'][0]['ar_name'])->toBe('منتج متزامن');
+
+    expect($whats->user_data)->toBeArray();
+    expect($whats->user_data['data']['data'][0]['ar_name'])->toBe('منتج متزامن');
+});
+
+test('buildApiProductsPromptSection uses user_data without making http calls', function () {
+    $user = User::factory()->create();
+
+    $account = MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'api_link' => 'https://bcknd.systego.net',
+        'user_data' => [
+            'data' => [
+                'data' => [
+                    [
+                        'ar_name' => 'وجبة سريعة من الكاش',
+                        'price' => 75,
+                    ],
+                ],
+            ],
+        ],
+    ]);
+
+    // Ensure Http::fake will fail if called unexpectedly
+    Http::fake([
+        '*' => Http::response(['error' => 'Should not be called!'], 500),
+    ]);
+
+    $controller = app(HomeController::class);
+    $promptSection = $controller->buildApiProductsPromptSection($account);
+
+    expect($promptSection)->toContain('وجبة سريعة من الكاش');
+    expect($promptSection)->toContain('75');
+
+    // Confirm no HTTP requests were made because user_data was present
+    Http::assertNothingSent();
+});

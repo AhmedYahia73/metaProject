@@ -28,6 +28,7 @@ class TelegramAccount extends Model
         'ios_link',
         'website_url',
         'api_link',
+        'user_data',
         'msg_number',
         'start_date',
         'end_date',
@@ -40,6 +41,7 @@ class TelegramAccount extends Model
      */
     protected $hidden = [
         'bot_token',
+        'user_data',
     ];
 
     /**
@@ -50,6 +52,7 @@ class TelegramAccount extends Model
     protected function casts(): array
     {
         return [
+            'user_data' => 'array',
             'status' => 'string',
             'msg_number' => 'integer',
             'start_date' => 'date',

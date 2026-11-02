@@ -25,6 +25,7 @@ class MessengerAccount extends Model
         'ios_link',
         'website_url',
         'api_link',
+        'user_data',
         'msg_number',
         'start_date',
         'end_date',
@@ -37,6 +38,7 @@ class MessengerAccount extends Model
      */
     protected $hidden = [
         'page_access_token',
+        'user_data',
     ];
 
     /**
@@ -47,6 +49,7 @@ class MessengerAccount extends Model
     protected function casts(): array
     {
         return [
+            'user_data' => 'array',
             'status' => 'string',
             'msg_number' => 'integer',
             'start_date' => 'date',

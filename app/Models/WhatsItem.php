@@ -30,6 +30,7 @@ class WhatsItem extends Model
         'ios_link',
         'website_url',
         'api_link',
+        'user_data',
         'msg_number',
         'ai_context',
         'ai_file',
@@ -44,6 +45,7 @@ class WhatsItem extends Model
      */
     protected $hidden = [
         'access_token',
+        'user_data',
     ];
 
     /**
@@ -54,6 +56,7 @@ class WhatsItem extends Model
     protected function casts(): array
     {
         return [
+            'user_data' => 'array',
             'phone_verified_at' => 'datetime',
             'msg_number' => 'integer',
             'start_date' => 'date',
