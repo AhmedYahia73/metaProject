@@ -102,5 +102,8 @@ Artisan::command('instagram:update-token {token} {--account=4} {--user=4}', func
 // Schedule polling for Instagram comments every minute as a reliable automation fallback
 Schedule::command('ig:poll-comments')->everyMinute()->withoutOverlapping(10);
 
-// Schedule daily products sync from api_link into user_data for all channels
-Schedule::command('products:sync')->daily()->withoutOverlapping(30);
+// Schedule daily products sync from api_link into user_data for all channels at 4:37 PM (Africa/Cairo)
+Schedule::command('products:sync')
+    ->dailyAt('16:37')
+    ->timezone(config('app.timezone', 'Africa/Cairo'))
+    ->withoutOverlapping(30);
