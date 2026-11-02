@@ -305,10 +305,19 @@ INSTRUCTIONS;
             $products = ! empty($formattedCatalog)
                 ? "{$formattedCatalog}\n\nبيانات تفصيلية إضافية (JSON):\n{$rawJson}"
                 : $rawJson;
+
+            Log::info('[ProductsCatalog] Loaded products from cached user_data for webhook prompt.', [
+                'channel' => class_basename($itemOrLink),
+                'account_id' => $itemOrLink->id ?? null,
+            ]);
         }
 
         // 2. Fallback to direct HTTP fetch if user_data is empty but api_link is present
         if (empty($products)) {
+            Log::info('[ProductsCatalog] user_data is empty; attempting on-the-fly fetch from api_link.', [
+                'channel' => is_object($itemOrLink) ? class_basename($itemOrLink) : null,
+                'account_id' => $itemOrLink->id ?? null,
+            ]);
             $products = $this->fetchProductsFromApiLink($itemOrLink);
         }
 

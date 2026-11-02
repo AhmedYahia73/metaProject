@@ -45,6 +45,11 @@ class SyncChannelProductsCommand extends Command
         $this->info('Starting Channel Products Sync (api_link -> user_data)');
         $this->info('====================================================');
 
+        Log::info('[products:sync] Cron job started.', [
+            'channel_filter' => $channelFilter !== '' ? $channelFilter : 'all',
+            'id_filter' => $idFilter,
+        ]);
+
         $channels = [
             'instagram' => ['name' => 'Instagram', 'model' => InstagramItem::class],
             'messenger' => ['name' => 'Messenger', 'model' => MessengerAccount::class],
@@ -95,11 +100,13 @@ class SyncChannelProductsCommand extends Command
 
             if ($items->isEmpty()) {
                 $this->line("<fg=gray>[i] {$channelName}: No records with api_link found.</>");
+                Log::info("[products:sync] {$channelName}: No accounts with api_link found.");
 
                 continue;
             }
 
             $this->comment("--> Checking {$channelName} ({$items->count()} accounts)...");
+            Log::info("[products:sync] Processing {$channelName}.", ['accounts_count' => $items->count()]);
 
             foreach ($items as $item) {
                 $totalChecked++;
@@ -107,12 +114,22 @@ class SyncChannelProductsCommand extends Command
 
                 if (empty($url)) {
                     $this->warn("  [!] {$channelName} #{$item->id}: Invalid api_link [{$item->api_link}]");
+                    Log::warning("[products:sync] Invalid api_link for {$channelName} #{$item->id}.", [
+                        'channel' => $channelName,
+                        'account_id' => $item->id,
+                        'raw_api_link' => $item->api_link,
+                    ]);
                     $totalFailed++;
 
                     continue;
                 }
 
                 $this->line("  [*] Syncing {$channelName} #{$item->id} from {$url}...");
+                Log::info("[products:sync] Fetching products for {$channelName} #{$item->id}.", [
+                    'channel' => $channelName,
+                    'account_id' => $item->id,
+                    'url' => $url,
+                ]);
 
                 try {
                     $response = Http::timeout(10)
@@ -129,6 +146,12 @@ class SyncChannelProductsCommand extends Command
 
                         if (! is_array($payload)) {
                             $this->error("  [✗] {$channelName} #{$item->id}: Response was not valid JSON array.");
+                            Log::error("[products:sync] Response is not valid JSON array for {$channelName} #{$item->id}.", [
+                                'channel' => $channelName,
+                                'account_id' => $item->id,
+                                'url' => $url,
+                                'body_sample' => substr((string) $response->body(), 0, 300),
+                            ]);
                             $totalFailed++;
 
                             continue;
@@ -140,14 +163,32 @@ class SyncChannelProductsCommand extends Command
                         $count = is_array($itemsList) ? count($itemsList) : 0;
 
                         $this->info("  [✓] {$channelName} #{$item->id}: Successfully saved {$count} product(s) to user_data.");
+                        Log::info("[products:sync] SUCCESS: Saved {$count} product(s) to user_data for {$channelName} #{$item->id}.", [
+                            'channel' => $channelName,
+                            'account_id' => $item->id,
+                            'url' => $url,
+                            'products_count' => $count,
+                        ]);
                         $totalSuccess++;
                     } else {
                         $this->error("  [✗] {$channelName} #{$item->id}: HTTP request returned status [{$response->status()}]");
+                        Log::error("[products:sync] HTTP Failed for {$channelName} #{$item->id}.", [
+                            'channel' => $channelName,
+                            'account_id' => $item->id,
+                            'url' => $url,
+                            'http_status' => $response->status(),
+                            'body_sample' => substr((string) $response->body(), 0, 300),
+                        ]);
                         $totalFailed++;
                     }
                 } catch (\Throwable $e) {
                     $this->error("  [✗] {$channelName} #{$item->id}: Exception - {$e->getMessage()}");
-                    Log::error("Failed syncing channel products for {$channelName} #{$item->id}: ".$e->getMessage());
+                    Log::error("[products:sync] Exception occurred for {$channelName} #{$item->id}.", [
+                        'channel' => $channelName,
+                        'account_id' => $item->id,
+                        'url' => $url,
+                        'error' => $e->getMessage(),
+                    ]);
                     $totalFailed++;
                 }
             }
@@ -157,6 +198,12 @@ class SyncChannelProductsCommand extends Command
         $this->info('====================================================');
         $this->info("Sync completed: {$totalChecked} checked | <fg=green>{$totalSuccess} succeeded</> | <fg=red>{$totalFailed} failed</>");
         $this->info('====================================================');
+
+        Log::info('[products:sync] Cron job finished.', [
+            'total_checked' => $totalChecked,
+            'total_success' => $totalSuccess,
+            'total_failed' => $totalFailed,
+        ]);
 
         return self::SUCCESS;
     }
