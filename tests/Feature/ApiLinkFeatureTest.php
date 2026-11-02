@@ -451,3 +451,16 @@ test('buildApiProductsPromptSection uses user_data without making http calls', f
     // Confirm no HTTP requests were made because user_data was present
     Http::assertNothingSent();
 });
+
+test('products:sync command is scheduled daily at 16:37 with Cairo timezone', function () {
+    $schedule = app(\Illuminate\Console\Scheduling\Schedule::class);
+    $events = collect($schedule->events());
+
+    $event = $events->first(function ($e) {
+        return str_contains($e->command, 'products:sync');
+    });
+
+    expect($event)->not->toBeNull();
+    expect($event->expression)->toBe('37 16 * * *');
+    expect($event->timezone)->toBe('Africa/Cairo');
+});
