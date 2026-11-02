@@ -47,7 +47,6 @@ class TikTokAccountController extends Controller
                     'android_link' => $account->android_link,
                     'ios_link' => $account->ios_link,
                     'website_url' => $account->website_url,
-                'api_link' => $account->api_link,
                     'api_link' => $account->api_link,
                     'subscription_status' => $subInfo['subscription_status'],
                     'available_msgs' => $subInfo['available_msgs'],

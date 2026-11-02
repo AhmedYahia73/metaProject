@@ -135,7 +135,7 @@ INSTRUCTIONS;
      * Appends /api/public/products to the api_link.
      *
      * @param  object|string|null  $itemOrLink  Model with api_link attribute or raw URL string
-     * @return string|null  Formatted string containing products for AI, or null
+     * @return string|null Formatted string containing products for AI, or null
      */
     public function fetchProductsFromApiLink(object|string|null $itemOrLink): ?string
     {

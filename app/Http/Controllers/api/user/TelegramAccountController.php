@@ -46,7 +46,6 @@ class TelegramAccountController extends Controller
                     'android_link' => $account->android_link,
                     'ios_link' => $account->ios_link,
                     'website_url' => $account->website_url,
-                'api_link' => $account->api_link,
                     'api_link' => $account->api_link,
                     'subscription_status' => $subInfo['subscription_status'],
                     'available_msgs' => $subInfo['available_msgs'],
@@ -333,12 +332,12 @@ class TelegramAccountController extends Controller
 
         $verifyToken = $telegramAccount->verify_token ?: (string) Str::uuid();
         if (empty($telegramAccount->verify_token)) {
-        // Give new bots an initial trial quota (50 msgs, 30 days) so auto-reply works immediately
-        if (! $existing) {
-            $accountData['msg_number'] = 500;
-            $accountData['start_date'] = now()->toDateString();
-            $accountData['end_date'] = now()->addDays(30)->toDateString();
-        }
+            // Give new bots an initial trial quota (50 msgs, 30 days) so auto-reply works immediately
+            if (! $existing) {
+                $accountData['msg_number'] = 500;
+                $accountData['start_date'] = now()->toDateString();
+                $accountData['end_date'] = now()->addDays(30)->toDateString();
+            }
             $telegramAccount->update([
                 'verify_token' => $verifyToken,
                 'msg_number' => 500,
