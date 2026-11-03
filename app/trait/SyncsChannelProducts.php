@@ -16,7 +16,11 @@ trait SyncsChannelProducts
     public static function bootSyncsChannelProducts(): void
     {
         static::saving(function (Model $model) {
-            if (! $model->isDirty('api_link')) {
+            $isApiLinkDirty = $model->isDirty('api_link');
+            $hasApiLink = ! empty($model->api_link);
+            $hasNoUserData = empty($model->user_data);
+
+            if (! $isApiLinkDirty && ! ($hasApiLink && $hasNoUserData)) {
                 return;
             }
 
@@ -90,13 +94,9 @@ trait SyncsChannelProducts
         }
 
         try {
-            $response = Http::timeout(5)
-                ->withOptions([
-                    'curl' => [
-                        CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
-                    ],
-                ])
-                ->retry(1, 100, throw: false)
+            $response = Http::timeout(15)
+                ->withoutVerifying()
+                ->retry(2, 200, throw: false)
                 ->get($url);
 
             if ($response->successful()) {

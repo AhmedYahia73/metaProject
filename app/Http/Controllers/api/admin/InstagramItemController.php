@@ -171,6 +171,7 @@ class InstagramItemController extends Controller
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
+            'user_data' => 'sometimes|nullable',
         ]);
 
         if ($request->hasFile('ai_file')) {
@@ -180,6 +181,17 @@ class InstagramItemController extends Controller
             }
         } elseif ($request->has('ai_file') && is_string($request->input('ai_file'))) {
             $validated['ai_file'] = $request->input('ai_file');
+        }
+
+        if (array_key_exists('api_link', $validated) && ! empty($validated['api_link']) && ! array_key_exists('user_data', $validated)) {
+            if ($instagramItem->api_link !== $validated['api_link'] || empty($instagramItem->user_data)) {
+                $payload = InstagramItem::fetchProductsPayloadFromApiLink($validated['api_link']);
+                if (is_array($payload)) {
+                    $validated['user_data'] = $payload;
+                }
+            }
+        } elseif (array_key_exists('api_link', $validated) && empty($validated['api_link']) && ! array_key_exists('user_data', $validated)) {
+            $validated['user_data'] = null;
         }
 
         $instagramItem->update($validated);

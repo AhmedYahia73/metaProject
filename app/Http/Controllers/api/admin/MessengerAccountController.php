@@ -42,7 +42,8 @@ class MessengerAccountController extends Controller
                 'login_link',
                 'user_name',
                 'password',
-                'products_link'
+                'products_link',
+                'user_data'
             )
             ->withSum(['dailyTokens as total_tokens' => function ($q) use ($startDate, $endDate) {
                 $this->filterDailyTokensDate($q, $startDate, $endDate);
@@ -51,6 +52,7 @@ class MessengerAccountController extends Controller
 
         $accounts->each(function ($account) {
             $account->total_tokens = (int) ($account->total_tokens ?? 0);
+            $account->makeVisible('user_data');
         });
 
         return response()->json([
@@ -80,6 +82,7 @@ class MessengerAccountController extends Controller
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
+            'user_data' => 'sometimes|nullable',
         ]);
 
         unset($validated['msg_number']);
@@ -95,6 +98,13 @@ class MessengerAccountController extends Controller
             $validated['ai_file'] = $validated['ai_file'];
         }
 
+        if (! empty($validated['api_link']) && ! array_key_exists('user_data', $validated)) {
+            $payload = MessengerAccount::fetchProductsPayloadFromApiLink($validated['api_link']);
+            if (is_array($payload)) {
+                $validated['user_data'] = $payload;
+            }
+        }
+
         $account = MessengerAccount::create($validated);
 
         if ($account->status === 'active' && ! empty($account->page_access_token)) {
@@ -104,7 +114,7 @@ class MessengerAccountController extends Controller
         return response()->json([
             'status' => true,
             'message' => 'Messenger page linked successfully.',
-            'data' => $account->makeVisible('page_access_token'),
+            'data' => $account->makeVisible(['page_access_token', 'user_data']),
             'setup' => [
                 'webhook_url' => url('/api/messenger-webhook'),
                 'verify_token' => $account->verify_token,
@@ -139,6 +149,7 @@ class MessengerAccountController extends Controller
                 'user_name' => $messengerAccount->user_name,
                 'password' => $messengerAccount->password,
                 'products_link' => $messengerAccount->products_link,
+                'user_data' => $messengerAccount->user_data,
             ],
         ]);
     }
@@ -155,7 +166,7 @@ class MessengerAccountController extends Controller
             'page_access_token' => 'sometimes|string',
             'status' => 'sometimes|in:active,disabled',
             'ai_context' => 'sometimes|nullable|string',
-            'ai_file' => 'sometimes|nullable||file|mimes:txt,text,md|extensions:md|max:2048',
+            'ai_file' => 'sometimes|nullable',
             'android_link' => 'sometimes|nullable|string|max:500',
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
@@ -164,6 +175,7 @@ class MessengerAccountController extends Controller
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
+            'user_data' => 'sometimes|nullable',
         ]);
 
         unset($validated['msg_number']);
@@ -179,6 +191,18 @@ class MessengerAccountController extends Controller
             unset($validated['ai_file']);
         }
 
+        if (array_key_exists('api_link', $validated) && ! empty($validated['api_link']) && ! array_key_exists('user_data', $validated)) {
+            // Fetch fresh products if api_link changed or user_data is currently empty
+            if ($messengerAccount->api_link !== $validated['api_link'] || empty($messengerAccount->user_data)) {
+                $payload = MessengerAccount::fetchProductsPayloadFromApiLink($validated['api_link']);
+                if (is_array($payload)) {
+                    $validated['user_data'] = $payload;
+                }
+            }
+        } elseif (array_key_exists('api_link', $validated) && empty($validated['api_link']) && ! array_key_exists('user_data', $validated)) {
+            $validated['user_data'] = null;
+        }
+
         $messengerAccount->update($validated);
 
         if ($messengerAccount->status === 'active' && ! empty($messengerAccount->page_access_token)) {
@@ -188,7 +212,7 @@ class MessengerAccountController extends Controller
         return response()->json([
             'status' => true,
             'message' => 'Messenger account updated successfully.',
-            'data' => $messengerAccount->fresh(),
+            'data' => $messengerAccount->fresh()->makeVisible('user_data'),
         ]);
     }
 

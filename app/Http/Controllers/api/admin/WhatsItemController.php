@@ -182,6 +182,7 @@ class WhatsItemController extends Controller
             'phone_status' => 'sometimes|in:pending_otp,verified,active',
             'ai_context' => 'sometimes|nullable|string',
             'ai_file' => 'sometimes|nullable',
+            'user_data' => 'sometimes|nullable',
         ]);
 
         if ($request->hasFile('ai_file')) {
@@ -193,6 +194,17 @@ class WhatsItemController extends Controller
             $validated['ai_file'] = $request->input('ai_file');
         } else {
             unset($validated['ai_file']);
+        }
+
+        if (array_key_exists('api_link', $validated) && ! empty($validated['api_link']) && ! array_key_exists('user_data', $validated)) {
+            if ($whatsItem->api_link !== $validated['api_link'] || empty($whatsItem->user_data)) {
+                $payload = WhatsItem::fetchProductsPayloadFromApiLink($validated['api_link']);
+                if (is_array($payload)) {
+                    $validated['user_data'] = $payload;
+                }
+            }
+        } elseif (array_key_exists('api_link', $validated) && empty($validated['api_link']) && ! array_key_exists('user_data', $validated)) {
+            $validated['user_data'] = null;
         }
 
         $whatsItem->update($validated);

@@ -20,6 +20,7 @@ use App\Http\Controllers\api\admin\UserController;
 use App\Http\Controllers\api\admin\WhatsItemController as AdminWhatsItemController;
 use App\Http\Controllers\api\auth\LoginController;
 use App\Http\Controllers\api\HomeController;
+use App\Http\Controllers\api\internal\ChannelProductsWebhookController;
 use App\Http\Controllers\api\PaymobCallbackController;
 use App\Http\Controllers\api\TelegramWebhookController;
 use App\Http\Controllers\api\TikTokWebhookController;
@@ -79,6 +80,10 @@ Route::match(['get', 'post'], '/tiktok-webhook', [TikTokWebhookController::class
 
 // Paymob Webhook / Redirection Callback (public)
 Route::match(['get', 'post'], '/paymob/callback', [PaymobCallbackController::class, 'callback']);
+
+// Internal Webhook for n8n products scraper callback
+Route::post('/internal/channel-products/webhook', [ChannelProductsWebhookController::class, 'handle'])
+    ->name('internal.channel-products.webhook');
 
 Route::view('/privacy-policy', 'privacy-policy');
 

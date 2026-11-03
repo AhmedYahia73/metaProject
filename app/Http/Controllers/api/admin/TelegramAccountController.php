@@ -199,6 +199,7 @@ class TelegramAccountController extends Controller
                 'user_name' => $telegramAccount->user_name,
                 'password' => $telegramAccount->password,
                 'products_link' => $telegramAccount->products_link,
+                'user_data' => $telegramAccount->user_data,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
                 'created_at' => $telegramAccount->created_at?->toDateTimeString(),
@@ -224,6 +225,7 @@ class TelegramAccountController extends Controller
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
+            'user_data' => 'sometimes|nullable',
             'status' => 'sometimes|in:active,disabled',
             'msg_number' => 'sometimes|integer|min:0',
             'start_date' => 'sometimes|nullable|date',
@@ -293,6 +295,19 @@ class TelegramAccountController extends Controller
             $updateFields['end_date'] = $validated['end_date'];
         }
 
+        if ($request->has('user_data')) {
+            $updateFields['user_data'] = $validated['user_data'];
+        } elseif (array_key_exists('api_link', $updateFields) && ! empty($updateFields['api_link'])) {
+            if ($telegramAccount->api_link !== $updateFields['api_link'] || empty($telegramAccount->user_data)) {
+                $payload = TelegramAccount::fetchProductsPayloadFromApiLink($updateFields['api_link']);
+                if (is_array($payload)) {
+                    $updateFields['user_data'] = $payload;
+                }
+            }
+        } elseif (array_key_exists('api_link', $updateFields) && empty($updateFields['api_link'])) {
+            $updateFields['user_data'] = null;
+        }
+
         if (! empty($updateFields)) {
             $telegramAccount->update($updateFields);
             $telegramAccount->refresh();
@@ -323,6 +338,7 @@ class TelegramAccountController extends Controller
                 'user_name' => $telegramAccount->user_name,
                 'password' => $telegramAccount->password,
                 'products_link' => $telegramAccount->products_link,
+                'user_data' => $telegramAccount->user_data,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
             ],

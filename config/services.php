@@ -58,4 +58,9 @@ return [
         'verify_token' => env('TIKTOK_VERIFY_TOKEN'),
     ],
 
+    'n8n' => [
+        'webhook_url' => env('N8N_SCRAPE_WEBHOOK_URL'),
+        'webhook_secret' => env('N8N_SCRAPE_WEBHOOK_SECRET'),
+    ],
+
 ];

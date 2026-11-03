@@ -191,6 +191,7 @@ class TikTokAccountController extends Controller
                 'user_name' => $tiktokAccount->user_name,
                 'password' => $tiktokAccount->password,
                 'products_link' => $tiktokAccount->products_link,
+                'user_data' => $tiktokAccount->user_data,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
                 'created_at' => $tiktokAccount->created_at?->toDateTimeString(),
@@ -220,6 +221,7 @@ class TikTokAccountController extends Controller
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
+            'user_data' => 'sometimes|nullable',
             'username' => 'sometimes|nullable|string|max:255',
             'display_name' => 'sometimes|nullable|string|max:255',
             'access_token' => 'sometimes|nullable|string',
@@ -228,10 +230,21 @@ class TikTokAccountController extends Controller
 
         $updateFields = [];
 
-        foreach (['status', 'msg_number', 'start_date', 'end_date', 'ai_context', 'android_link', 'ios_link', 'website_url', 'api_link', 'login_link', 'user_name', 'password', 'products_link', 'username', 'display_name', 'access_token', 'refresh_token'] as $field) {
+        foreach (['status', 'msg_number', 'start_date', 'end_date', 'ai_context', 'android_link', 'ios_link', 'website_url', 'api_link', 'login_link', 'user_name', 'password', 'products_link', 'user_data', 'username', 'display_name', 'access_token', 'refresh_token'] as $field) {
             if ($request->has($field)) {
                 $updateFields[$field] = $validated[$field];
             }
+        }
+
+        if (array_key_exists('api_link', $updateFields) && ! empty($updateFields['api_link']) && ! array_key_exists('user_data', $updateFields)) {
+            if ($tiktokAccount->api_link !== $updateFields['api_link'] || empty($tiktokAccount->user_data)) {
+                $payload = TikTokAccount::fetchProductsPayloadFromApiLink($updateFields['api_link']);
+                if (is_array($payload)) {
+                    $updateFields['user_data'] = $payload;
+                }
+            }
+        } elseif (array_key_exists('api_link', $updateFields) && empty($updateFields['api_link']) && ! array_key_exists('user_data', $updateFields)) {
+            $updateFields['user_data'] = null;
         }
 
         if ($request->hasFile('ai_file')) {

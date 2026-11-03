@@ -140,6 +140,82 @@ test('admin can update a messenger account page name and status', function () {
     ]);
 });
 
+test('admin updating api_link populates and returns user_data', function () {
+    $admin = adminUser();
+    $restaurant = restaurantUser();
+    $account = MessengerAccount::factory()->create([
+        'user_id' => $restaurant->id,
+        'api_link' => null,
+        'user_data' => null,
+    ]);
+
+    Http::fake([
+        'https://menu.myshop.com/api/public/products' => Http::response([
+            'success' => true,
+            'data' => [
+                'total' => 2,
+                'data' => [
+                    ['_id' => 'prod_1', 'ar_name' => 'بيتزا مارجريتا', 'price' => 150],
+                    ['_id' => 'prod_2', 'ar_name' => 'برجر دجاج', 'price' => 90],
+                ],
+            ],
+        ], 200),
+    ]);
+
+    $response = $this->actingAs($admin)
+        ->putJson("/api/admin/users/{$restaurant->id}/messenger-accounts/{$account->id}", [
+            'api_link' => 'https://menu.myshop.com',
+        ]);
+
+    $response->assertOk();
+    $response->assertJsonPath('data.api_link', 'https://menu.myshop.com');
+    $response->assertJsonPath('data.user_data.data.total', 2);
+    $response->assertJsonPath('data.user_data.data.data.0.ar_name', 'بيتزا مارجريتا');
+
+    $fresh = $account->fresh();
+    expect($fresh->user_data)->toBeArray();
+    expect($fresh->user_data['data']['total'])->toBe(2);
+
+    // Verify show also returns user_data
+    $showResponse = $this->actingAs($admin)
+        ->getJson("/api/admin/users/{$restaurant->id}/messenger-accounts/{$account->id}");
+
+    $showResponse->assertOk();
+    $showResponse->assertJsonPath('data.user_data.data.total', 2);
+    $showResponse->assertJsonPath('data.user_data.data.data.0.ar_name', 'بيتزا مارجريتا');
+});
+
+test('admin updating same api_link when user_data is empty still fetches and populates user_data', function () {
+    $admin = adminUser();
+    $restaurant = restaurantUser();
+    $account = MessengerAccount::factory()->create([
+        'user_id' => $restaurant->id,
+        'api_link' => 'https://menu.myshop.com',
+        'user_data' => null,
+    ]);
+
+    Http::fake([
+        'https://menu.myshop.com/api/public/products' => Http::response([
+            'success' => true,
+            'data' => [
+                'total' => 1,
+                'data' => [
+                    ['_id' => 'prod_1', 'ar_name' => 'منتج جديد', 'price' => 50],
+                ],
+            ],
+        ], 200),
+    ]);
+
+    $response = $this->actingAs($admin)
+        ->putJson("/api/admin/users/{$restaurant->id}/messenger-accounts/{$account->id}", [
+            'api_link' => 'https://menu.myshop.com',
+        ]);
+
+    $response->assertOk();
+    $response->assertJsonPath('data.user_data.data.total', 1);
+    expect($account->fresh()->user_data)->toBeArray();
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Destroy
 // ─────────────────────────────────────────────────────────────────────────────
