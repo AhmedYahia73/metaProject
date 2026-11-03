@@ -68,6 +68,13 @@ class ChannelProductsWebhookController extends Controller
         $status = strtolower($validated['status']);
         $errorMessage = $validated['error_message'] ?? null;
 
+        Log::info("[products:scrape-n8n] Callback received for {$channel} #{$accountId} with status: [{$status}].", [
+            'channel' => $channel,
+            'account_id' => $accountId,
+            'status' => $status,
+            'ip' => $request->ip(),
+        ]);
+
         /** @var class-string<Model> $modelClass */
         $modelClass = $this->channelModels[$channel];
 
@@ -84,7 +91,7 @@ class ChannelProductsWebhookController extends Controller
 
         // 3. Handle failure notification from n8n
         if ($status === 'failed') {
-            Log::warning("[products:scrape-n8n] Scraping failed for {$channel} #{$accountId}.", [
+            Log::warning("[products:scrape-n8n] FAILED: Scraping failed for {$channel} #{$accountId}.", [
                 'channel' => $channel,
                 'account_id' => $accountId,
                 'error_message' => $errorMessage,
@@ -100,20 +107,32 @@ class ChannelProductsWebhookController extends Controller
 
         // 4. Handle success: update user_data
         $rawPayload = $request->input('data') ?? $request->input('products') ?? [];
-
-        // Normalize payload: ensure it is saved as an array
-        $account->update([
-            'user_data' => $rawPayload,
-        ]);
-
         $itemsList = $rawPayload['data']['data'] ?? $rawPayload['data'] ?? $rawPayload['products'] ?? (array_is_list($rawPayload) ? $rawPayload : []);
         $count = is_array($itemsList) ? count($itemsList) : 0;
 
-        Log::info("[products:scrape-n8n] SUCCESS: Updated user_data for {$channel} #{$accountId}.", [
-            'channel' => $channel,
-            'account_id' => $accountId,
-            'products_count' => $count,
-        ]);
+        try {
+            $account->update([
+                'user_data' => $rawPayload,
+            ]);
+
+            Log::info("[products:scrape-n8n] SUCCESS: Updated user_data for {$channel} #{$accountId}.", [
+                'channel' => $channel,
+                'account_id' => $accountId,
+                'products_count' => $count,
+                'sample_item' => $itemsList[0] ?? null,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error("[products:scrape-n8n] DATABASE ERROR updating user_data for {$channel} #{$accountId}: {$e->getMessage()}", [
+                'channel' => $channel,
+                'account_id' => $accountId,
+                'exception' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'message' => 'Failed to save products in database: '.$e->getMessage(),
+            ], 500);
+        }
 
         return response()->json([
             'status' => true,

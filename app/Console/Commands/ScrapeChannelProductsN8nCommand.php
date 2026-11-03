@@ -89,7 +89,11 @@ class ScrapeChannelProductsN8nCommand extends Command
             $channels = $filtered;
         }
 
-        $callbackUrl = url('/api/internal/channel-products/webhook');
+        $baseUrl = config('app.url');
+        if (empty($baseUrl) || str_contains($baseUrl, 'localhost')) {
+            $baseUrl = 'https://bcknd.smartego.org';
+        }
+        $callbackUrl = rtrim((string) $baseUrl, '/').'/api/internal/channel-products/webhook';
         $totalChecked = 0;
         $totalDispatched = 0;
         $totalFailed = 0;
@@ -141,6 +145,7 @@ class ScrapeChannelProductsN8nCommand extends Command
                     'password' => $item->password,
                     'products_link' => $item->products_link,
                     'callback_url' => $callbackUrl,
+                    'secret_token' => $n8nSecret,
                     'triggered_at' => now()->toIso8601String(),
                 ];
 
