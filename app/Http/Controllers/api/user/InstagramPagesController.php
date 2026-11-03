@@ -480,6 +480,7 @@ class InstagramPagesController extends Controller
             'user_name' => 'sometimes',
             'password' => 'sometimes',
             'products_link' => 'sometimes',
+            'user_data' => 'sometimes|nullable',
         ]);
 
         $query = InstagramItem::query();
@@ -534,6 +535,13 @@ class InstagramPagesController extends Controller
         if ($request->has('products_link')) {
             $updateFields['products_link'] = $request->products_link;
         }
+        if ($request->has('user_data')) {
+            $updateFields['user_data'] = $request->user_data;
+        }
+
+        if (isset($updateFields['api_link']) && ! array_key_exists('user_data', $updateFields)) {
+            $updateFields['user_data'] = $data->fetchProductsPayloadFromApiLink($updateFields['api_link']);
+        }
 
         if (! empty($updateFields)) {
             $data->update($updateFields);
@@ -546,6 +554,7 @@ class InstagramPagesController extends Controller
             'ai_file' => $data->ai_file,
             'website_url' => $data->website_url,
             'api_link' => $data->api_link,
+            'user_data' => $data->user_data,
             'data' => [
                 'ai_context' => $data->ai_context,
                 'ai_file' => $data->ai_file,
@@ -557,6 +566,7 @@ class InstagramPagesController extends Controller
                 'user_name' => $data->user_name,
                 'password' => $data->password,
                 'products_link' => $data->products_link,
+                'user_data' => $data->user_data,
             ],
         ]);
     }
@@ -582,6 +592,7 @@ class InstagramPagesController extends Controller
                     'ai_file' => $item->ai_file,
                     'website_url' => $item->website_url,
                     'api_link' => $item->api_link,
+                    'user_data' => $item->user_data,
                 ];
             });
 

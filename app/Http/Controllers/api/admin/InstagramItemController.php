@@ -136,7 +136,7 @@ class InstagramItemController extends Controller
 
         return response()->json([
             'status' => true,
-            'data' => $instagramItem->makeVisible('access_token'),
+            'data' => $instagramItem->makeVisible(['access_token', 'user_data']),
             'subscription' => $instagramItem->getSubscriptionInfo(),
         ]);
     }
@@ -203,7 +203,7 @@ class InstagramItemController extends Controller
         return response()->json([
             'status' => true,
             'message' => 'Instagram account updated successfully.',
-            'data' => $instagramItem->fresh()->makeVisible('access_token'),
+            'data' => $instagramItem->fresh()->makeVisible(['access_token', 'user_data']),
         ]);
     }
 

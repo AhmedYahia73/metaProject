@@ -100,6 +100,7 @@ class WhatsPagesController extends Controller
                     'user_name' => $item->user_name,
                     'password' => $item->password,
                     'products_link' => $item->products_link,
+                    'user_data' => $item->user_data,
                     'msg_number' => $item->msg_number,
                     'ai_context' => $item->ai_context,
                     'ai_file' => $item->ai_file,
@@ -128,6 +129,7 @@ class WhatsPagesController extends Controller
             'user_name' => $data->user_name,
             'password' => $data->password,
             'products_link' => $data->products_link,
+            'user_data' => $data->user_data,
         ]);
     }
 
@@ -252,7 +254,7 @@ class WhatsPagesController extends Controller
 
         return response()->json([
             'status' => true,
-            'data' => $whatsItem,
+            'data' => $whatsItem->makeVisible('user_data'),
         ]);
     }
 
@@ -274,6 +276,7 @@ class WhatsPagesController extends Controller
             'products_link' => 'sometimes|nullable|string|max:500',
             'ai_context' => 'sometimes|nullable|string',
             'ai_file' => 'sometimes|nullable||file|mimes:txt,text,md|extensions:md|max:2048',
+            'user_data' => 'sometimes|nullable',
         ]);
 
         if ($request->hasFile('ai_file')) {
@@ -287,12 +290,18 @@ class WhatsPagesController extends Controller
             unset($validated['ai_file']);
         }
 
+        if ($request->has('user_data')) {
+            $validated['user_data'] = $request->input('user_data');
+        } elseif (array_key_exists('api_link', $validated) && filled($validated['api_link'])) {
+            $validated['user_data'] = $whatsItem->fetchProductsPayloadFromApiLink($validated['api_link']);
+        }
+
         $whatsItem->update($validated);
 
         return response()->json([
             'status' => true,
             'message' => 'WhatsApp item updated successfully.',
-            'data' => $whatsItem->fresh(),
+            'data' => $whatsItem->fresh()->makeVisible('user_data'),
         ]);
     }
 

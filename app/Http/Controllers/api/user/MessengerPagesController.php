@@ -194,6 +194,7 @@ class MessengerPagesController extends Controller
             'user_name' => 'sometimes',
             'password' => 'sometimes',
             'products_link' => 'sometimes',
+            'user_data' => 'sometimes|nullable',
         ]);
 
         $data = MessengerAccount::where('page_id', $request->page_id)
@@ -236,23 +237,33 @@ class MessengerPagesController extends Controller
         if ($request->has('products_link')) {
             $updateFields['products_link'] = $request->products_link;
         }
+        if ($request->has('user_data')) {
+            $updateFields['user_data'] = $request->user_data;
+        }
 
-        if (! empty($updateFields)) {
-            $data->update($updateFields);
-            $data->refresh();
+        if ($data) {
+            if (isset($updateFields['api_link']) && ! array_key_exists('user_data', $updateFields)) {
+                $updateFields['user_data'] = $data->fetchProductsPayloadFromApiLink($updateFields['api_link']);
+            }
+
+            if (! empty($updateFields)) {
+                $data->update($updateFields);
+                $data->refresh();
+            }
         }
 
         return response()->json([
-            'ai_context' => $data->ai_context,
-            'ai_file' => $data->ai_file,
-            'android_link' => $data->android_link,
-            'ios_link' => $data->ios_link,
-            'website_url' => $data->website_url,
-            'api_link' => $data->api_link,
-            'login_link' => $data->login_link,
-            'user_name' => $data->user_name,
-            'password' => $data->password,
-            'products_link' => $data->products_link,
+            'ai_context' => $data?->ai_context,
+            'ai_file' => $data?->ai_file,
+            'android_link' => $data?->android_link,
+            'ios_link' => $data?->ios_link,
+            'website_url' => $data?->website_url,
+            'api_link' => $data?->api_link,
+            'login_link' => $data?->login_link,
+            'user_name' => $data?->user_name,
+            'password' => $data?->password,
+            'products_link' => $data?->products_link,
+            'user_data' => $data?->user_data,
         ]);
     }
 

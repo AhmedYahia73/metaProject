@@ -158,7 +158,7 @@ class WhatsItemController extends Controller
 
         return response()->json([
             'status' => true,
-            'data' => $whatsItem,
+            'data' => $whatsItem->makeVisible('user_data'),
         ]);
     }
 
@@ -212,7 +212,7 @@ class WhatsItemController extends Controller
         return response()->json([
             'status' => true,
             'message' => 'WhatsApp item updated successfully.',
-            'data' => $whatsItem->fresh(),
+            'data' => $whatsItem->fresh()->makeVisible('user_data'),
         ]);
     }
 
@@ -354,7 +354,7 @@ class WhatsItemController extends Controller
                 'status' => false,
                 'message' => 'Code verified, but failed to register on Cloud API: '.($registerResult['message'] ?? ''),
                 'phone_status' => 'verified',
-                'data' => $whatsItem->fresh(),
+                'data' => $whatsItem->fresh()->makeVisible('user_data'),
             ], Response::HTTP_BAD_REQUEST);
         }
 
@@ -371,7 +371,7 @@ class WhatsItemController extends Controller
         return response()->json([
             'status' => true,
             'message' => 'Phone number verified and registered on WhatsApp Cloud API successfully!',
-            'data' => $whatsItem->fresh(),
+            'data' => $whatsItem->fresh()->makeVisible('user_data'),
         ]);
     }
 
@@ -474,7 +474,7 @@ class WhatsItemController extends Controller
         return response()->json([
             'status' => true,
             'message' => 'Phone number registered and connected to WhatsApp Cloud API successfully!',
-            'data' => $whatsItem->fresh(),
+            'data' => $whatsItem->fresh()->makeVisible('user_data'),
         ]);
     }
 

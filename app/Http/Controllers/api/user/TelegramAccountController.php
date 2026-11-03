@@ -51,6 +51,8 @@ class TelegramAccountController extends Controller
                     'user_name' => $account->user_name,
                     'password' => $account->password,
                     'products_link' => $account->products_link,
+                'user_data' => $account->user_data,
+                    'user_data' => $account->user_data,
                     'subscription_status' => $subInfo['subscription_status'],
                     'available_msgs' => $subInfo['available_msgs'],
                     'created_at' => $account->created_at?->toDateTimeString(),
@@ -83,6 +85,7 @@ class TelegramAccountController extends Controller
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
+            'user_data' => 'sometimes|nullable',
         ]);
 
         $botToken = trim($validated['bot_token']);
@@ -128,6 +131,7 @@ class TelegramAccountController extends Controller
             'user_name' => $validated['user_name'] ?? null,
             'password' => $validated['password'] ?? null,
             'products_link' => $validated['products_link'] ?? null,
+            'user_data' => $validated['user_data'] ?? null,
         ];
 
         if ($request->hasFile('ai_file')) {
@@ -180,6 +184,7 @@ class TelegramAccountController extends Controller
                 'user_name' => $account->user_name,
                 'password' => $account->password,
                 'products_link' => $account->products_link,
+                'user_data' => $account->user_data,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
                 'webhook_url' => $webhookUrl,
@@ -219,6 +224,7 @@ class TelegramAccountController extends Controller
                 'user_name' => $telegramAccount->user_name,
                 'password' => $telegramAccount->password,
                 'products_link' => $telegramAccount->products_link,
+                'user_data' => $telegramAccount->user_data,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
                 'created_at' => $telegramAccount->created_at?->toDateTimeString(),
@@ -245,6 +251,7 @@ class TelegramAccountController extends Controller
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
             'status' => 'sometimes|in:active,disabled',
+            'user_data' => 'sometimes|nullable',
         ]);
 
         $updateFields = [];
@@ -298,6 +305,12 @@ class TelegramAccountController extends Controller
             $updateFields['status'] = $validated['status'];
         }
 
+        if ($request->has('user_data')) {
+            $updateFields['user_data'] = $validated['user_data'];
+        } elseif (isset($updateFields['api_link']) && filled($updateFields['api_link'])) {
+            $updateFields['user_data'] = $telegramAccount->fetchProductsPayloadFromApiLink($updateFields['api_link']);
+        }
+
         if (! empty($updateFields)) {
             $telegramAccount->update($updateFields);
             $telegramAccount->refresh();
@@ -327,6 +340,7 @@ class TelegramAccountController extends Controller
                 'user_name' => $telegramAccount->user_name,
                 'password' => $telegramAccount->password,
                 'products_link' => $telegramAccount->products_link,
+                'user_data' => $telegramAccount->user_data,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
             ],

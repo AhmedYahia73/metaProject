@@ -680,3 +680,193 @@ test('admin can store, show, and update credentials and products_link', function
     expect($account->password)->toBe('new_pass_456');
     expect($account->products_link)->toBe('https://portal2.shop.com/catalog');
 });
+
+test('admin updating api_link populates and returns user_data for whats, instagram, telegram, and tiktok', function () {
+    Http::fake([
+        'https://pos.systego.test/api/public/products' => Http::response([
+            'products' => [
+                'data' => [
+                    [
+                        'id' => 101,
+                        'name' => 'Burger',
+                        'price' => '85.00',
+                    ],
+                ],
+            ],
+        ], 200),
+    ]);
+
+    $admin = User::factory()->create(['role' => 'admin']);
+    $user = User::factory()->create();
+
+    // 1. WhatsApp
+    $whats = WhatsItem::factory()->create([
+        'user_id' => $user->id,
+        'api_link' => null,
+        'user_data' => null,
+    ]);
+
+    $whatsResponse = $this->actingAs($admin)
+        ->putJson("/api/admin/users/{$user->id}/whats-items/{$whats->id}", [
+            'api_link' => 'https://pos.systego.test',
+        ]);
+    $whatsResponse->assertOk()
+        ->assertJsonPath('data.api_link', 'https://pos.systego.test')
+        ->assertJsonPath('data.user_data.products.data.0.name', 'Burger');
+
+    expect($whats->fresh()->user_data)->not->toBeNull();
+
+    // 2. Instagram
+    $instagram = InstagramItem::factory()->create([
+        'user_id' => $user->id,
+        'api_link' => null,
+        'user_data' => null,
+    ]);
+
+    $igResponse = $this->actingAs($admin)
+        ->putJson("/api/admin/users/{$user->id}/instagram-items/{$instagram->id}", [
+            'api_link' => 'https://pos.systego.test',
+        ]);
+    $igResponse->assertOk()
+        ->assertJsonPath('data.api_link', 'https://pos.systego.test')
+        ->assertJsonPath('data.user_data.products.data.0.name', 'Burger');
+
+    expect($instagram->fresh()->user_data)->not->toBeNull();
+
+    // 3. Telegram
+    $telegram = TelegramAccount::factory()->create([
+        'user_id' => $user->id,
+        'api_link' => null,
+        'user_data' => null,
+    ]);
+
+    $tgResponse = $this->actingAs($admin)
+        ->putJson("/api/admin/users/{$user->id}/telegram-accounts/{$telegram->id}", [
+            'api_link' => 'https://pos.systego.test',
+        ]);
+    $tgResponse->assertOk()
+        ->assertJsonPath('data.api_link', 'https://pos.systego.test')
+        ->assertJsonPath('data.user_data.products.data.0.name', 'Burger');
+
+    expect($telegram->fresh()->user_data)->not->toBeNull();
+
+    // 4. TikTok
+    $tiktok = TikTokAccount::factory()->create([
+        'user_id' => $user->id,
+        'api_link' => null,
+        'user_data' => null,
+    ]);
+
+    $ttResponse = $this->actingAs($admin)
+        ->putJson("/api/admin/users/{$user->id}/tiktok-accounts/{$tiktok->id}", [
+            'api_link' => 'https://pos.systego.test',
+        ]);
+    $ttResponse->assertOk()
+        ->assertJsonPath('data.api_link', 'https://pos.systego.test')
+        ->assertJsonPath('data.user_data.products.data.0.name', 'Burger');
+
+    expect($tiktok->fresh()->user_data)->not->toBeNull();
+});
+
+test('user updating api_link populates and returns user_data for all channels', function () {
+    Http::fake([
+        'https://pos.systego.test/api/public/products' => Http::response([
+            'products' => [
+                'data' => [
+                    [
+                        'id' => 202,
+                        'name' => 'Pizza',
+                        'price' => '120.00',
+                    ],
+                ],
+            ],
+        ], 200),
+    ]);
+
+    $user = User::factory()->create(['role' => 'user']);
+
+    // 1. Messenger user ai_data
+    $messenger = MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'page_id' => 'page_user_sync_test',
+        'api_link' => null,
+        'user_data' => null,
+    ]);
+
+    $msgResponse = $this->actingAs($user)
+        ->postJson('/api/user/messenger/ai_data', [
+            'page_id' => 'page_user_sync_test',
+            'api_link' => 'https://pos.systego.test',
+        ]);
+    $msgResponse->assertOk()
+        ->assertJsonPath('api_link', 'https://pos.systego.test')
+        ->assertJsonPath('user_data.products.data.0.name', 'Pizza');
+    expect($messenger->fresh()->user_data)->not->toBeNull();
+
+    // 2. Instagram user ai_data
+    $instagram = InstagramItem::factory()->create([
+        'user_id' => $user->id,
+        'instagram_id' => 'ig_user_sync_test',
+        'api_link' => null,
+        'user_data' => null,
+    ]);
+
+    $igResponse = $this->actingAs($user)
+        ->postJson('/api/user/instagram/ai_data', [
+            'instagram_id' => 'ig_user_sync_test',
+            'api_link' => 'https://pos.systego.test',
+        ]);
+    $igResponse->assertOk()
+        ->assertJsonPath('api_link', 'https://pos.systego.test')
+        ->assertJsonPath('user_data.products.data.0.name', 'Pizza')
+        ->assertJsonPath('data.user_data.products.data.0.name', 'Pizza');
+    expect($instagram->fresh()->user_data)->not->toBeNull();
+
+    // 3. WhatsApp user update
+    $whats = WhatsItem::factory()->create([
+        'user_id' => $user->id,
+        'api_link' => null,
+        'user_data' => null,
+    ]);
+
+    $whatsResponse = $this->actingAs($user)
+        ->putJson("/api/user/whats/items/{$whats->id}", [
+            'api_link' => 'https://pos.systego.test',
+        ]);
+    $whatsResponse->assertOk()
+        ->assertJsonPath('data.api_link', 'https://pos.systego.test')
+        ->assertJsonPath('data.user_data.products.data.0.name', 'Pizza');
+    expect($whats->fresh()->user_data)->not->toBeNull();
+
+    // 4. Telegram user update
+    $telegram = TelegramAccount::factory()->create([
+        'user_id' => $user->id,
+        'api_link' => null,
+        'user_data' => null,
+    ]);
+
+    $tgResponse = $this->actingAs($user)
+        ->putJson("/api/user/telegram/accounts/{$telegram->id}", [
+            'api_link' => 'https://pos.systego.test',
+        ]);
+    $tgResponse->assertOk()
+        ->assertJsonPath('data.api_link', 'https://pos.systego.test')
+        ->assertJsonPath('data.user_data.products.data.0.name', 'Pizza');
+    expect($telegram->fresh()->user_data)->not->toBeNull();
+
+    // 5. TikTok user update
+    $tiktok = TikTokAccount::factory()->create([
+        'user_id' => $user->id,
+        'api_link' => null,
+        'user_data' => null,
+    ]);
+
+    $ttResponse = $this->actingAs($user)
+        ->putJson("/api/user/tiktok/accounts/{$tiktok->id}", [
+            'api_link' => 'https://pos.systego.test',
+        ]);
+    $ttResponse->assertOk()
+        ->assertJsonPath('data.api_link', 'https://pos.systego.test')
+        ->assertJsonPath('data.user_data.products.data.0.name', 'Pizza');
+    expect($tiktok->fresh()->user_data)->not->toBeNull();
+});

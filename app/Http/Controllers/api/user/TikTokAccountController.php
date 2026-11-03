@@ -52,6 +52,7 @@ class TikTokAccountController extends Controller
                     'user_name' => $account->user_name,
                     'password' => $account->password,
                     'products_link' => $account->products_link,
+                    'user_data' => $account->user_data,
                     'subscription_status' => $subInfo['subscription_status'],
                     'available_msgs' => $subInfo['available_msgs'],
                     'created_at' => $account->created_at?->toDateTimeString(),
@@ -106,6 +107,7 @@ class TikTokAccountController extends Controller
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
+            'user_data' => 'sometimes|nullable',
         ]);
 
         $accessToken = $validated['access_token'] ?? null;
@@ -175,6 +177,7 @@ class TikTokAccountController extends Controller
             'user_name' => $validated['user_name'] ?? null,
             'password' => $validated['password'] ?? null,
             'products_link' => $validated['products_link'] ?? null,
+            'user_data' => $validated['user_data'] ?? null,
         ];
 
         if ($request->hasFile('ai_file')) {
@@ -224,6 +227,7 @@ class TikTokAccountController extends Controller
                 'user_name' => $account->user_name,
                 'password' => $account->password,
                 'products_link' => $account->products_link,
+                'user_data' => $account->user_data,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
             ],
@@ -261,6 +265,7 @@ class TikTokAccountController extends Controller
                 'user_name' => $tiktokAccount->user_name,
                 'password' => $tiktokAccount->password,
                 'products_link' => $tiktokAccount->products_link,
+                'user_data' => $tiktokAccount->user_data,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
                 'created_at' => $tiktokAccount->created_at?->toDateTimeString(),
@@ -287,6 +292,7 @@ class TikTokAccountController extends Controller
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
             'status' => 'sometimes|in:active,disabled',
+            'user_data' => 'sometimes|nullable',
         ]);
 
         $updateFields = [];
@@ -340,6 +346,12 @@ class TikTokAccountController extends Controller
             $updateFields['status'] = $validated['status'];
         }
 
+        if ($request->has('user_data')) {
+            $updateFields['user_data'] = $validated['user_data'];
+        } elseif (isset($updateFields['api_link']) && filled($updateFields['api_link'])) {
+            $updateFields['user_data'] = $tiktokAccount->fetchProductsPayloadFromApiLink($updateFields['api_link']);
+        }
+
         if (! empty($updateFields)) {
             $tiktokAccount->update($updateFields);
             $tiktokAccount->refresh();
@@ -370,6 +382,7 @@ class TikTokAccountController extends Controller
                 'user_name' => $tiktokAccount->user_name,
                 'password' => $tiktokAccount->password,
                 'products_link' => $tiktokAccount->products_link,
+                'user_data' => $tiktokAccount->user_data,
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
             ],

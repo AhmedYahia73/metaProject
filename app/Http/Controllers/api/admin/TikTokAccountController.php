@@ -266,7 +266,7 @@ class TikTokAccountController extends Controller
         return response()->json([
             'status' => true,
             'message' => 'TikTok account updated successfully.',
-            'data' => array_merge($tiktokAccount->toArray(), [
+            'data' => array_merge($tiktokAccount->makeVisible('user_data')->toArray(), [
                 'subscription_status' => $subInfo['subscription_status'],
                 'available_msgs' => $subInfo['available_msgs'],
             ]),
