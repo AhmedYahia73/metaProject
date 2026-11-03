@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Services\MetaWhatsAppService;
+use App\trait\SyncsChannelProducts;
 use Database\Factories\WhatsItemFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -15,6 +16,8 @@ class WhatsItem extends Model
 {
     /** @use HasFactory<WhatsItemFactory> */
     use HasFactory;
+
+    use SyncsChannelProducts;
 
     protected $fillable = [
         'user_id',
@@ -30,6 +33,10 @@ class WhatsItem extends Model
         'ios_link',
         'website_url',
         'api_link',
+        'login_link',
+        'user_name',
+        'password',
+        'products_link',
         'user_data',
         'msg_number',
         'ai_context',

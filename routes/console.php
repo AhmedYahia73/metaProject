@@ -104,6 +104,6 @@ Schedule::command('ig:poll-comments')->everyMinute()->withoutOverlapping(10);
 
 // Schedule daily products sync from api_link into user_data for all channels at 4:37 PM (Africa/Cairo)
 Schedule::command('products:sync')
-    ->dailyAt('16:52')
+    ->dailyAt('16:37')
     ->timezone('Africa/Cairo')
     ->withoutOverlapping(30);

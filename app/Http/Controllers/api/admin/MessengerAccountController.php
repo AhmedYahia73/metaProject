@@ -38,7 +38,11 @@ class MessengerAccountController extends Controller
                 'android_link',
                 'ios_link',
                 'website_url',
-                'api_link'
+                'api_link',
+                'login_link',
+                'user_name',
+                'password',
+                'products_link'
             )
             ->withSum(['dailyTokens as total_tokens' => function ($q) use ($startDate, $endDate) {
                 $this->filterDailyTokensDate($q, $startDate, $endDate);
@@ -72,6 +76,10 @@ class MessengerAccountController extends Controller
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
             'api_link' => 'sometimes|nullable|string|max:500',
+            'login_link' => 'sometimes|nullable|string|max:500',
+            'user_name' => 'sometimes|nullable|string|max:255',
+            'password' => 'sometimes|nullable|string|max:255',
+            'products_link' => 'sometimes|nullable|string|max:500',
         ]);
 
         unset($validated['msg_number']);
@@ -127,6 +135,10 @@ class MessengerAccountController extends Controller
                 'ios_link' => $messengerAccount->ios_link,
                 'website_url' => $messengerAccount->website_url,
                 'api_link' => $messengerAccount->api_link,
+                'login_link' => $messengerAccount->login_link,
+                'user_name' => $messengerAccount->user_name,
+                'password' => $messengerAccount->password,
+                'products_link' => $messengerAccount->products_link,
             ],
         ]);
     }
@@ -148,6 +160,10 @@ class MessengerAccountController extends Controller
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
             'api_link' => 'sometimes|nullable|string|max:500',
+            'login_link' => 'sometimes|nullable|string|max:500',
+            'user_name' => 'sometimes|nullable|string|max:255',
+            'password' => 'sometimes|nullable|string|max:255',
+            'products_link' => 'sometimes|nullable|string|max:500',
         ]);
 
         unset($validated['msg_number']);

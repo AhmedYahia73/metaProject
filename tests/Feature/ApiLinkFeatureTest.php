@@ -7,6 +7,7 @@ use App\Models\TelegramAccount;
 use App\Models\TikTokAccount;
 use App\Models\User;
 use App\Models\WhatsItem;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 
@@ -19,6 +20,10 @@ test('all channel tables have api_link column', function () {
 });
 
 test('models allow fillable api_link', function () {
+    Http::fake([
+        '*restaurant-pos.test*' => Http::response(['data' => []], 200),
+    ]);
+
     $user = User::factory()->create();
 
     $messenger = MessengerAccount::factory()->create([
@@ -453,7 +458,7 @@ test('buildApiProductsPromptSection uses user_data without making http calls', f
 });
 
 test('products:sync command is scheduled daily at 16:37 with Cairo timezone', function () {
-    $schedule = app(\Illuminate\Console\Scheduling\Schedule::class);
+    $schedule = app(Schedule::class);
     $events = collect($schedule->events());
 
     $event = $events->first(function ($e) {
@@ -463,4 +468,215 @@ test('products:sync command is scheduled daily at 16:37 with Cairo timezone', fu
     expect($event)->not->toBeNull();
     expect($event->expression)->toBe('37 16 * * *');
     expect($event->timezone)->toBe('Africa/Cairo');
+});
+
+test('updating api_link on any model automatically fetches products and updates user_data', function () {
+    $user = User::factory()->create();
+
+    Http::fake([
+        'https://bcknd.systego.net/api/public/products' => Http::response([
+            'success' => true,
+            'data' => [
+                'data' => [
+                    [
+                        '_id' => 'item_instant_1',
+                        'ar_name' => 'منتج لحظي جديد',
+                        'price' => 500,
+                    ],
+                ],
+            ],
+        ], 200),
+    ]);
+
+    // 1. MessengerAccount
+    $messenger = MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'api_link' => null,
+        'user_data' => null,
+    ]);
+    expect($messenger->user_data)->toBeNull();
+
+    $messenger->update(['api_link' => 'https://bcknd.systego.net']);
+    $messenger->refresh();
+    expect($messenger->user_data)->toBeArray();
+    expect($messenger->user_data['data']['data'][0]['ar_name'])->toBe('منتج لحظي جديد');
+
+    // 2. InstagramItem
+    $instagram = InstagramItem::factory()->create([
+        'user_id' => $user->id,
+        'api_link' => null,
+        'user_data' => null,
+    ]);
+    $instagram->update(['api_link' => 'https://bcknd.systego.net']);
+    $instagram->refresh();
+    expect($instagram->user_data)->toBeArray();
+    expect($instagram->user_data['data']['data'][0]['ar_name'])->toBe('منتج لحظي جديد');
+
+    // 3. WhatsItem
+    $whats = WhatsItem::factory()->create([
+        'user_id' => $user->id,
+        'api_link' => null,
+        'user_data' => null,
+    ]);
+    $whats->update(['api_link' => 'https://bcknd.systego.net']);
+    $whats->refresh();
+    expect($whats->user_data)->toBeArray();
+    expect($whats->user_data['data']['data'][0]['ar_name'])->toBe('منتج لحظي جديد');
+
+    // 4. Clearing api_link resets user_data to null
+    $messenger->update(['api_link' => null]);
+    $messenger->refresh();
+    expect($messenger->user_data)->toBeNull();
+});
+
+test('updating other fields does not trigger http products fetch', function () {
+    $user = User::factory()->create();
+
+    $messenger = MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'api_link' => null,
+        'user_data' => ['sample' => 'data'],
+    ]);
+
+    Http::fake([
+        '*' => Http::response(['error' => 'Should never be called!'], 500),
+    ]);
+
+    $messenger->update(['page_name' => 'Renamed Page']);
+    $messenger->refresh();
+
+    expect($messenger->page_name)->toBe('Renamed Page');
+    expect($messenger->user_data)->toBe(['sample' => 'data']);
+    Http::assertNothingSent();
+});
+
+test('all channel tables have login_link, user_name, password, and products_link columns', function () {
+    $tables = [
+        'messenger_accounts',
+        'whats_items',
+        'instagram_items',
+        'telegram_accounts',
+        'tiktok_accounts',
+    ];
+
+    foreach ($tables as $table) {
+        expect(Schema::hasColumn($table, 'login_link'))->toBeTrue();
+        expect(Schema::hasColumn($table, 'user_name'))->toBeTrue();
+        expect(Schema::hasColumn($table, 'password'))->toBeTrue();
+        expect(Schema::hasColumn($table, 'products_link'))->toBeTrue();
+    }
+});
+
+test('models allow fillable login credentials and products_link', function () {
+    $user = User::factory()->create();
+
+    $messenger = MessengerAccount::factory()->create([
+        'user_id' => $user->id,
+        'login_link' => 'https://store.test/login',
+        'user_name' => 'admin_user',
+        'password' => 'secret_pass_123',
+        'products_link' => 'https://store.test/products',
+    ]);
+
+    expect($messenger->login_link)->toBe('https://store.test/login');
+    expect($messenger->user_name)->toBe('admin_user');
+    expect($messenger->password)->toBe('secret_pass_123');
+    expect($messenger->products_link)->toBe('https://store.test/products');
+
+    $whats = WhatsItem::factory()->create([
+        'user_id' => $user->id,
+        'login_link' => 'https://store.test/login',
+        'user_name' => 'admin_user',
+        'password' => 'secret_pass_123',
+        'products_link' => 'https://store.test/products',
+    ]);
+    expect($whats->login_link)->toBe('https://store.test/login');
+    expect($whats->user_name)->toBe('admin_user');
+    expect($whats->password)->toBe('secret_pass_123');
+    expect($whats->products_link)->toBe('https://store.test/products');
+
+    $instagram = InstagramItem::factory()->create([
+        'user_id' => $user->id,
+        'login_link' => 'https://store.test/login',
+        'user_name' => 'admin_user',
+        'password' => 'secret_pass_123',
+        'products_link' => 'https://store.test/products',
+    ]);
+    expect($instagram->login_link)->toBe('https://store.test/login');
+    expect($instagram->user_name)->toBe('admin_user');
+    expect($instagram->password)->toBe('secret_pass_123');
+    expect($instagram->products_link)->toBe('https://store.test/products');
+
+    $telegram = TelegramAccount::factory()->create([
+        'user_id' => $user->id,
+        'login_link' => 'https://store.test/login',
+        'user_name' => 'admin_user',
+        'password' => 'secret_pass_123',
+        'products_link' => 'https://store.test/products',
+    ]);
+    expect($telegram->login_link)->toBe('https://store.test/login');
+    expect($telegram->user_name)->toBe('admin_user');
+    expect($telegram->password)->toBe('secret_pass_123');
+    expect($telegram->products_link)->toBe('https://store.test/products');
+
+    $tiktok = TikTokAccount::factory()->create([
+        'user_id' => $user->id,
+        'login_link' => 'https://store.test/login',
+        'user_name' => 'admin_user',
+        'password' => 'secret_pass_123',
+        'products_link' => 'https://store.test/products',
+    ]);
+    expect($tiktok->login_link)->toBe('https://store.test/login');
+    expect($tiktok->user_name)->toBe('admin_user');
+    expect($tiktok->password)->toBe('secret_pass_123');
+    expect($tiktok->products_link)->toBe('https://store.test/products');
+});
+
+test('admin can store, show, and update credentials and products_link', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+    $user = User::factory()->create();
+
+    // Store
+    $storeResponse = $this->actingAs($admin)
+        ->postJson("/api/admin/users/{$user->id}/messenger-accounts", [
+            'page_id' => 'page_test_cred_1',
+            'page_name' => 'Page With Credentials',
+            'page_access_token' => 'dummy_token',
+            'login_link' => 'https://portal.shop.com/login',
+            'user_name' => 'manager',
+            'password' => 'P@ssw0rd!',
+            'products_link' => 'https://portal.shop.com/catalog',
+        ]);
+
+    $storeResponse->assertCreated();
+    $account = MessengerAccount::where('page_id', 'page_test_cred_1')->first();
+    expect($account->login_link)->toBe('https://portal.shop.com/login');
+    expect($account->user_name)->toBe('manager');
+    expect($account->password)->toBe('P@ssw0rd!');
+    expect($account->products_link)->toBe('https://portal.shop.com/catalog');
+
+    // Show
+    $showResponse = $this->actingAs($admin)
+        ->getJson("/api/admin/users/{$user->id}/messenger-accounts/{$account->id}");
+    $showResponse->assertOk()
+        ->assertJsonPath('data.login_link', 'https://portal.shop.com/login')
+        ->assertJsonPath('data.user_name', 'manager')
+        ->assertJsonPath('data.password', 'P@ssw0rd!')
+        ->assertJsonPath('data.products_link', 'https://portal.shop.com/catalog');
+
+    // Update
+    $updateResponse = $this->actingAs($admin)
+        ->putJson("/api/admin/users/{$user->id}/messenger-accounts/{$account->id}", [
+            'login_link' => 'https://portal2.shop.com/login',
+            'user_name' => 'admin2',
+            'password' => 'new_pass_456',
+            'products_link' => 'https://portal2.shop.com/catalog',
+        ]);
+    $updateResponse->assertOk();
+
+    $account->refresh();
+    expect($account->login_link)->toBe('https://portal2.shop.com/login');
+    expect($account->user_name)->toBe('admin2');
+    expect($account->password)->toBe('new_pass_456');
+    expect($account->products_link)->toBe('https://portal2.shop.com/catalog');
 });

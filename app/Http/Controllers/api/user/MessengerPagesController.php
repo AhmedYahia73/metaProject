@@ -190,6 +190,10 @@ class MessengerPagesController extends Controller
             'ios_link' => 'sometimes',
             'website_url' => 'sometimes',
             'api_link' => 'sometimes',
+            'login_link' => 'sometimes',
+            'user_name' => 'sometimes',
+            'password' => 'sometimes',
+            'products_link' => 'sometimes',
         ]);
 
         $data = MessengerAccount::where('page_id', $request->page_id)
@@ -220,6 +224,18 @@ class MessengerPagesController extends Controller
         if ($request->has('api_link')) {
             $updateFields['api_link'] = $request->api_link;
         }
+        if ($request->has('login_link')) {
+            $updateFields['login_link'] = $request->login_link;
+        }
+        if ($request->has('user_name')) {
+            $updateFields['user_name'] = $request->user_name;
+        }
+        if ($request->has('password')) {
+            $updateFields['password'] = $request->password;
+        }
+        if ($request->has('products_link')) {
+            $updateFields['products_link'] = $request->products_link;
+        }
 
         if (! empty($updateFields)) {
             $data->update($updateFields);
@@ -233,6 +249,10 @@ class MessengerPagesController extends Controller
             'ios_link' => $data->ios_link,
             'website_url' => $data->website_url,
             'api_link' => $data->api_link,
+            'login_link' => $data->login_link,
+            'user_name' => $data->user_name,
+            'password' => $data->password,
+            'products_link' => $data->products_link,
         ]);
     }
 

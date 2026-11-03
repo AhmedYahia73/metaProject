@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\trait\SyncsChannelProducts;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -11,6 +12,7 @@ use Illuminate\Support\Carbon;
 class TelegramAccount extends Model
 {
     use HasFactory;
+    use SyncsChannelProducts;
 
     protected $table = 'telegram_accounts';
 
@@ -28,6 +30,10 @@ class TelegramAccount extends Model
         'ios_link',
         'website_url',
         'api_link',
+        'login_link',
+        'user_name',
+        'password',
+        'products_link',
         'user_data',
         'msg_number',
         'start_date',

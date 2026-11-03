@@ -42,6 +42,10 @@ class InstagramItemController extends Controller
                 'ios_link',
                 'website_url',
                 'api_link',
+                'login_link',
+                'user_name',
+                'password',
+                'products_link',
                 'msg_number',
                 'created_at',
                 'updated_at'
@@ -81,6 +85,10 @@ class InstagramItemController extends Controller
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
             'api_link' => 'sometimes|nullable|string|max:500',
+            'login_link' => 'sometimes|nullable|string|max:500',
+            'user_name' => 'sometimes|nullable|string|max:255',
+            'password' => 'sometimes|nullable|string|max:255',
+            'products_link' => 'sometimes|nullable|string|max:500',
         ]);
 
         unset($validated['msg_number']);
@@ -159,6 +167,10 @@ class InstagramItemController extends Controller
             'ios_link' => 'sometimes|nullable|string|max:500',
             'website_url' => 'sometimes|nullable|string|max:500',
             'api_link' => 'sometimes|nullable|string|max:500',
+            'login_link' => 'sometimes|nullable|string|max:500',
+            'user_name' => 'sometimes|nullable|string|max:255',
+            'password' => 'sometimes|nullable|string|max:255',
+            'products_link' => 'sometimes|nullable|string|max:500',
         ]);
 
         if ($request->hasFile('ai_file')) {
