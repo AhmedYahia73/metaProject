@@ -78,31 +78,36 @@ class ApiDiscoveryService
 
             Log::info(self::LOG_PREFIX.' Login successful, token obtained.');
 
-            // Step 4: Fetch products/items with token
-            Log::info(self::LOG_PREFIX.' Step 4: Fetching products/items.');
-            $keywords = $this->extractEntityKeywords($productsLink);
-            $products = $this->fetchProducts($apiConfig, $token, $keywords);
+            try {
+                // Step 4: Fetch products/items with token
+                Log::info(self::LOG_PREFIX.' Step 4: Fetching products/items.');
+                $keywords = $this->extractEntityKeywords($productsLink);
+                $products = $this->fetchProducts($apiConfig, $token, $keywords);
 
-            if ($products === null || empty($products)) {
-                Log::warning(self::LOG_PREFIX.' Direct API fetch failed, trying Browserless fallback.', $context);
+                if ($products === null || empty($products)) {
+                    Log::warning(self::LOG_PREFIX.' Direct API fetch failed, trying Browserless fallback.', $context);
 
-                return $this->scrapeViaBrowserless($loginLink, $userName, $password, $productsLink);
+                    return $this->scrapeViaBrowserless($loginLink, $userName, $password, $productsLink);
+                }
+
+                Log::info(self::LOG_PREFIX.' Products fetched successfully.', [
+                    'count' => count($products),
+                    'sample' => $products[0] ?? null,
+                ]);
+
+                return [
+                    'products' => $products,
+                    'meta' => [
+                        'source' => 'api_discovery',
+                        'base_url' => $apiConfig['base_url'],
+                        'products_count' => count($products),
+                        'scraped_at' => now()->toIso8601String(),
+                    ],
+                ];
+            } finally {
+                // Step 5: Always gracefully log out session to avoid multi-device / single-session lockout
+                $this->attemptLogout($apiConfig, $token);
             }
-
-            Log::info(self::LOG_PREFIX.' Products fetched successfully.', [
-                'count' => count($products),
-                'sample' => $products[0] ?? null,
-            ]);
-
-            return [
-                'products' => $products,
-                'meta' => [
-                    'source' => 'api_discovery',
-                    'base_url' => $apiConfig['base_url'],
-                    'products_count' => count($products),
-                    'scraped_at' => now()->toIso8601String(),
-                ],
-            ];
         } catch (\Throwable $e) {
             Log::error(self::LOG_PREFIX.' Uncaught exception during discovery.', [
                 'error' => $e->getMessage(),
@@ -214,15 +219,16 @@ class ApiDiscoveryService
     }
 
     /**
-     * Parse JS bundles to discover API base URL, login paths, and product paths.
+     * Parse JS bundles to discover API base URL, login paths, product paths, and logout paths.
      *
      * @param  array<int, string>  $jsUrls
-     * @return array{base_url: string|null, login_paths: array<int, string>, product_paths: array<int, string>}
+     * @return array{base_url: string|null, login_paths: array<int, string>, product_paths: array<int, string>, logout_paths: array<int, string>}
      */
     protected function discoverApiConfig(array $jsUrls, string $loginLink, string $productsLink): array
     {
         $baseUrls = [];
         $loginPaths = [];
+        $logoutPaths = [];
         $productPathsFromJs = [];
         $harvestedApis = [];
 
@@ -255,6 +261,10 @@ class ApiDiscoveryService
                 // Extract login paths from JS
                 $foundLoginPaths = $this->extractPathsFromJs($js, 'login');
                 $loginPaths = array_merge($loginPaths, $foundLoginPaths);
+
+                // Extract logout paths from JS
+                $foundLogoutPaths = $this->extractPathsFromJs($js, 'logout');
+                $logoutPaths = array_merge($logoutPaths, $foundLogoutPaths);
 
                 // Extract entity paths from JS matching user's keywords or common items
                 $foundProductPaths = $this->extractEntityPathsFromJs($js, $keywords);
@@ -306,6 +316,16 @@ class ApiDiscoveryService
         });
         $loginPaths = array_values($loginPaths);
 
+        // Standard logout paths
+        $standardLogoutPaths = [
+            '/api/logout',
+            '/logout',
+            '/api/admin/logout',
+            '/api/auth/logout',
+            '/admin/logout',
+        ];
+        $logoutPaths = array_values(array_unique(array_merge($logoutPaths, $standardLogoutPaths)));
+
         // ── GENERATE PRODUCT / ENTITY PATHS (Hierarchical Priority) ──
         // Priority 1: Paths derived directly from the user's products_link (e.g. /admin/courses/categories)
         $derivedProductPaths = $this->deriveEntityPathsFromUrl($productsLink, $keywords);
@@ -350,11 +370,16 @@ class ApiDiscoveryService
 
         // Generate prefixed variations for all paths (e.g. /village/owner/owners, /village/owners)
         $prefixedPaths = [];
+        $prefixedJsPaths = [];
         foreach ($subBasePrefixes as $prefix) {
             foreach ($allProductPaths as $p) {
                 if (! str_starts_with($p, 'http://') && ! str_starts_with($p, 'https://')) {
                     if (! str_starts_with($p, $prefix)) {
-                        $prefixedPaths[] = $prefix.'/'.ltrim($p, '/');
+                        $prefixed = $prefix.'/'.ltrim($p, '/');
+                        $prefixedPaths[] = $prefixed;
+                        if (in_array($p, $productPathsFromJs)) {
+                            $prefixedJsPaths[] = $prefixed;
+                        }
                     }
                 }
             }
@@ -362,15 +387,25 @@ class ApiDiscoveryService
 
         $allProductPaths = array_values(array_unique(array_merge($allProductPaths, $prefixedPaths)));
 
-        // Prioritize paths with /api/, shorter depth, and matching primary entity
+        // Real paths found in the application's compiled JavaScript (or their sub-base prefixed variants)
+        $realJsPaths = array_values(array_unique(array_merge($productPathsFromJs, $prefixedJsPaths)));
+
+        // Prioritize paths found directly in JS (+35), with /api/, shorter depth, and matching primary entity
         $primaryKeyword = ! empty($keywords) ? end($keywords) : '';
 
-        usort($allProductPaths, function ($a, $b) use ($keywords, $primaryKeyword) {
+        usort($allProductPaths, function ($a, $b) use ($keywords, $primaryKeyword, $realJsPaths) {
             $depthA = count(explode('/', trim($a, '/')));
             $depthB = count(explode('/', trim($b, '/')));
 
-            $scoreA = (str_starts_with($a, '/api/') ? 12 : 0) + (str_contains($a, '/admin') ? 6 : 0) - ($depthA * 3);
-            $scoreB = (str_starts_with($b, '/api/') ? 12 : 0) + (str_contains($b, '/admin') ? 6 : 0) - ($depthB * 3);
+            $scoreA = (in_array($a, $realJsPaths) ? 35 : 0)
+                + (str_starts_with($a, '/api/') ? 12 : 0)
+                + (str_contains($a, '/admin') ? 6 : 0)
+                - ($depthA * 2);
+
+            $scoreB = (in_array($b, $realJsPaths) ? 35 : 0)
+                + (str_starts_with($b, '/api/') ? 12 : 0)
+                + (str_contains($b, '/admin') ? 6 : 0)
+                - ($depthB * 2);
 
             if (! empty($primaryKeyword)) {
                 if (str_ends_with($a, '/'.$primaryKeyword) || str_contains($a, '/'.$primaryKeyword.'/')) {
@@ -407,6 +442,7 @@ class ApiDiscoveryService
             'base_url' => $bestBaseUrl,
             'login_paths' => $loginPaths,
             'product_paths' => $finalProductPaths,
+            'logout_paths' => $logoutPaths,
         ];
     }
 
@@ -692,6 +728,35 @@ class ApiDiscoveryService
             }
         }
 
+        if ($type === 'logout') {
+            // 1. Full https:// URLs containing logout
+            if (preg_match_all('/https?:\/\/[a-zA-Z0-9.-]+(?::[0-9]+)?(?:\/[a-zA-Z0-9._\/-]*)?/i', $js, $fullMatches)) {
+                foreach ($fullMatches[0] as $u) {
+                    $lower = strtolower($u);
+                    if (str_contains($lower, 'logout')
+                        && ! str_contains($lower, 'pusher')
+                        && ! str_contains($lower, 'github')
+                        && ! str_contains($lower, 'w3.org')
+                        && ! str_contains($lower, 'google')
+                        && ! str_contains($lower, '.js')) {
+                        $paths[] = $u;
+                    }
+                }
+            }
+
+            // 2. Relative paths
+            $logoutPatterns = [
+                '/["\'`](\/(?:api\/)?[a-zA-Z0-9_-]*(?:auth\/)?logout)\b["\'`]/i',
+                '/["\'`](\/(?:village\/)?[a-zA-Z0-9_-]*logout)\b["\'`]/i',
+            ];
+
+            foreach ($logoutPatterns as $pattern) {
+                if (preg_match_all($pattern, $js, $matches)) {
+                    $paths = array_merge($paths, $matches[1]);
+                }
+            }
+        }
+
         return array_values(array_unique($paths));
     }
 
@@ -838,11 +903,57 @@ class ApiDiscoveryService
             }
 
             if (! $response->successful()) {
+                $body = (string) $response->body();
                 Log::debug(self::LOG_PREFIX." Login attempt failed: {$url}", [
                     'status' => $response->status(),
                     'content_type' => $contentType,
-                    'response' => substr((string) $response->body(), 0, 150),
+                    'response' => substr($body, 0, 150),
                 ]);
+
+                // Handle single-device / active session lockouts: "You log from another device"
+                if (stripos($body, 'another device') !== false || stripos($body, 'already logged') !== false) {
+                    Log::warning(self::LOG_PREFIX.' Remote backend detected active session ("another device"). Attempting forced login override...');
+
+                    $forceVariants = [
+                        ['force' => 1],
+                        ['force' => true],
+                        ['force_login' => 1],
+                        ['force_login' => true],
+                        ['logout_others' => 1],
+                        ['device' => 'scraper_'.uniqid()],
+                    ];
+
+                    foreach ($forceVariants as $forceVariant) {
+                        try {
+                            $retryReq = Http::timeout(self::HTTP_TIMEOUT)
+                                ->withoutVerifying()
+                                ->withOptions(['curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])
+                                ->withHeaders([
+                                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                                ])
+                                ->acceptJson();
+
+                            $forcedCreds = array_merge($credentials, $forceVariant);
+                            $retryResp = ($contentType === 'json')
+                                ? $retryReq->post($url, $forcedCreds)
+                                : $retryReq->asForm()->post($url, $forcedCreds);
+
+                            if ($retryResp->successful()) {
+                                $forcedData = $retryResp->json();
+                                $forcedToken = $this->extractToken($forcedData);
+                                if ($forcedToken) {
+                                    Log::info(self::LOG_PREFIX.' Forced login override succeeded!', [
+                                        'flag' => array_key_first($forceVariant),
+                                    ]);
+
+                                    return $forcedToken;
+                                }
+                            }
+                        } catch (\Throwable) {
+                            // continue
+                        }
+                    }
+                }
 
                 return null;
             }
@@ -898,6 +1009,65 @@ class ApiDiscoveryService
         }
 
         return null;
+    }
+
+    /**
+     * Gracefully log out from remote session using Bearer token to prevent multi-device lockout.
+     *
+     * @param  array{base_url: string|null, logout_paths?: array<int, string>}  $apiConfig
+     */
+    protected function attemptLogout(array $apiConfig, string $token): void
+    {
+        $logoutPaths = $apiConfig['logout_paths'] ?? [];
+        $baseUrl = $apiConfig['base_url'] ?? '';
+
+        if (empty($logoutPaths)) {
+            $logoutPaths = ['/api/logout', '/logout'];
+        }
+
+        foreach (array_slice($logoutPaths, 0, 4) as $path) {
+            $url = (str_starts_with($path, 'http://') || str_starts_with($path, 'https://'))
+                ? $path
+                : rtrim($baseUrl, '/').'/'.ltrim($path, '/');
+
+            try {
+                // Try GET first (used by React apps like Sea-Go)
+                $resp = Http::timeout(4)
+                    ->withoutVerifying()
+                    ->withOptions(['curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])
+                    ->withHeaders([
+                        'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                    ])
+                    ->withToken($token)
+                    ->acceptJson()
+                    ->get($url);
+
+                if ($resp->successful()) {
+                    Log::info(self::LOG_PREFIX.' Successfully logged out from remote session.', ['url' => $url]);
+
+                    return;
+                }
+
+                // Also try POST
+                $postResp = Http::timeout(4)
+                    ->withoutVerifying()
+                    ->withOptions(['curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])
+                    ->withHeaders([
+                        'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                    ])
+                    ->withToken($token)
+                    ->acceptJson()
+                    ->post($url);
+
+                if ($postResp->successful()) {
+                    Log::info(self::LOG_PREFIX.' Successfully logged out from remote session (POST).', ['url' => $url]);
+
+                    return;
+                }
+            } catch (\Throwable) {
+                // Ignore logout exceptions
+            }
+        }
     }
 
     /**
@@ -1083,8 +1253,8 @@ class ApiDiscoveryService
                     ? (floor((float) $rawPrice) == (float) $rawPrice ? (int) $rawPrice : (float) $rawPrice)
                     : (string) $rawPrice;
             }
-            $description = $item['description'] ?? $item['ar_description'] ?? $item['desc'] ?? $item['details'] ?? null;
-            $image = $item['image'] ?? $item['image_url'] ?? $item['thumbnail'] ?? $item['cover'] ?? null;
+            $description = $item['description'] ?? $item['ar_description'] ?? $item['desc'] ?? $item['details'] ?? $item['phone'] ?? $item['email'] ?? null;
+            $image = $item['image'] ?? $item['image_url'] ?? $item['image_link'] ?? $item['avatar'] ?? $item['thumbnail'] ?? $item['cover'] ?? null;
 
             $normalized[] = [
                 'id' => $id,

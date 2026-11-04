@@ -1,6 +1,7 @@
 <?php
 
 use App\Services\ApiDiscoveryService;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 
 test('api discovery extracts js bundle urls from html including scripts and preloads', function () {
@@ -235,6 +236,98 @@ JS;
     expect($result['products'][0]['price'])->toBe(500);
     expect($result['products'][1]['name'])->toBe('فيزياء لغات');
     expect($result['products'][1]['price'])->toBe(450);
+});
+
+test('discoverAndFetch calls logout endpoint gracefully after fetching products', function () {
+    $loginHtml = '<script src="/assets/app.js"></script>';
+    $jsBundle = <<<'JS'
+const baseURL = "https://bcknd.resort.test";
+const loginUrl = "/api/auth/login";
+const logoutUrl = "https://bcknd.resort.test/api/logout";
+const ownersUrl = "/api/owners";
+JS;
+
+    $ownersData = [
+        'owners' => [
+            'data' => [
+                ['id' => 10, 'name' => 'Owner Alpha', 'image_link' => 'https://img.test/alpha.png'],
+            ],
+        ],
+    ];
+
+    $logoutCalled = false;
+
+    Http::fake([
+        'https://resort.test/login' => Http::response($loginHtml, 200),
+        'https://resort.test/assets/app.js' => Http::response($jsBundle, 200),
+        'https://bcknd.resort.test/api/auth/login' => Http::response([
+            'token' => 'jwt_resort_token_1234567890',
+        ], 200),
+        'https://bcknd.resort.test/api/owners' => Http::response($ownersData, 200),
+        'https://bcknd.resort.test/api/logout' => function () use (&$logoutCalled) {
+            $logoutCalled = true;
+
+            return Http::response(['message' => 'Logged out'], 200);
+        },
+    ]);
+
+    $service = new ApiDiscoveryService;
+    $result = $service->discoverAndFetch(
+        'https://resort.test/login',
+        'admin@resort.test',
+        'secret',
+        'https://resort.test/owners'
+    );
+
+    expect($result)->not->toBeNull();
+    expect($result['products'])->toHaveCount(1);
+    expect($result['products'][0]['name'])->toBe('Owner Alpha');
+    expect($result['products'][0]['image'])->toBe('https://img.test/alpha.png');
+    expect($logoutCalled)->toBeTrue();
+});
+
+test('discoverAndFetch overrides another device lockout with force login flags', function () {
+    $loginHtml = '<script src="/assets/app.js"></script>';
+    $jsBundle = <<<'JS'
+const baseURL = "https://bcknd.lockout.test";
+const loginUrl = "/api/login";
+const itemsUrl = "/api/items";
+JS;
+
+    $itemsData = [
+        'data' => [
+            ['id' => 1, 'name' => 'Item After Force Login'],
+        ],
+    ];
+
+    Http::fake([
+        'https://lockout.test/login' => Http::response($loginHtml, 200),
+        'https://lockout.test/assets/app.js' => Http::response($jsBundle, 200),
+        'https://bcknd.lockout.test/api/login' => function (Request $request) {
+            $data = $request->data();
+            // Normal login fails with "You log from another device"
+            if (! isset($data['force']) && ! isset($data['force_login'])) {
+                return Http::response(['errors' => 'You log from another device'], 400);
+            }
+
+            // Forced login succeeds
+            return Http::response(['token' => 'jwt_force_token_1234567890'], 200);
+        },
+        'https://bcknd.lockout.test/api/items' => Http::response($itemsData, 200),
+        'https://bcknd.lockout.test/api/logout' => Http::response([], 200),
+    ]);
+
+    $service = new ApiDiscoveryService;
+    $result = $service->discoverAndFetch(
+        'https://lockout.test/login',
+        'admin@lockout.test',
+        'pass',
+        'https://lockout.test/items'
+    );
+
+    expect($result)->not->toBeNull();
+    expect($result['products'])->toHaveCount(1);
+    expect($result['products'][0]['name'])->toBe('Item After Force Login');
 });
 
 test('discoverAndFetch returns null safely when login page fails or is unreachable', function () {
