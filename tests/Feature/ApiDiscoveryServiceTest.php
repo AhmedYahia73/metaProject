@@ -505,3 +505,107 @@ JS;
     expect($result['meta']['source'])->toBe('api_discovery');
     expect($logoutCalled)->toBeTrue();
 });
+
+test('discoverAndFetch scrapes traditional blade web apps with session cookies when not an API', function () {
+    $loginHtml = <<<'HTML'
+<!DOCTYPE html>
+<html>
+<head><title>Student Login</title></head>
+<body>
+    <form action="https://school.test/login_store" method="POST">
+        <input type="hidden" name="_token" value="csrf_sample_token_xyz">
+        <input type="email" name="email" placeholder="Email">
+        <input type="password" name="password" placeholder="Password">
+        <button type="submit">Sign In</button>
+    </form>
+</body>
+</html>
+HTML;
+
+    $coursesHtml = <<<'HTML'
+<!DOCTYPE html>
+<html>
+<head><title>My Courses</title></head>
+<body>
+    <div class="container">
+        <h2>Enrolled Courses</h2>
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Course</th>
+                    <th>Instructor</th>
+                    <th>Fee</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><a href="/courses/1">SAT Math Preparation</a></td>
+                    <td>Mr. David</td>
+                    <td>$250</td>
+                </tr>
+                <tr>
+                    <td><a href="/courses/2">Calculus & Vectors</a></td>
+                    <td>Dr. Sarah</td>
+                    <td>$320</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
+HTML;
+
+    $loginFormSubmitted = false;
+    $cookiesSent = false;
+
+    Http::fake([
+        // Step 1: Login page HTML (no API JS bundles)
+        'https://school.test/login' => Http::response($loginHtml, 200),
+        // Step 2: Login form POST
+        'https://school.test/login_store' => function (Request $request) use (&$loginFormSubmitted) {
+            $data = $request->data();
+            if (($data['_token'] ?? '') === 'csrf_sample_token_xyz' &&
+                ($data['email'] ?? '') === 'student@school.test' &&
+                ($data['password'] ?? '') === 'secret123') {
+                $loginFormSubmitted = true;
+
+                return Http::response('Redirecting...', 302, [
+                    'Set-Cookie' => 'laravel_session=session_cookie_sample_12345; Path=/; HttpOnly',
+                    'Location' => 'https://school.test/student/MyCourses',
+                ]);
+            }
+
+            return Http::response('Invalid credentials', 401);
+        },
+        // Step 3: Courses page HTML with session cookies
+        'https://school.test/student/MyCourses' => function (Request $request) use (&$cookiesSent, $coursesHtml) {
+            $cookies = $request->header('Cookie');
+            if (! empty($cookies)) {
+                $cookiesSent = true;
+            }
+
+            return Http::response($coursesHtml, 200, [
+                'Content-Type' => 'text/html; charset=UTF-8',
+            ]);
+        },
+    ]);
+
+    $service = new ApiDiscoveryService;
+    $result = $service->discoverAndFetch(
+        'https://school.test/login',
+        'student@school.test',
+        'secret123',
+        'https://school.test/student/MyCourses'
+    );
+
+    expect($result)->not->toBeNull();
+    expect($result['meta']['source'])->toBe('web_session_scrape');
+    expect($result['products'])->toHaveCount(2);
+    expect($result['products'][0]['name'])->toBe('SAT Math Preparation');
+    expect($result['products'][0]['price'])->toBe(250);
+    expect($result['products'][1]['name'])->toBe('Calculus & Vectors');
+    expect($result['products'][1]['price'])->toBe(320);
+
+    expect($loginFormSubmitted)->toBeTrue();
+    expect($cookiesSent)->toBeTrue();
+});

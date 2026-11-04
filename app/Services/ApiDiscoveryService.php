@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use GuzzleHttp\Cookie\CookieJar;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -44,7 +45,12 @@ class ApiDiscoveryService
             $jsUrls = $this->extractJsBundleUrls($loginLink);
 
             if (empty($jsUrls)) {
-                Log::warning(self::LOG_PREFIX.' No JS bundles found in HTML, trying Browserless.', $context);
+                Log::info(self::LOG_PREFIX.' No JS bundles found in HTML, trying Web Session Scraper fallback.', $context);
+
+                $webResult = $this->scrapeViaWebSession($loginLink, $userName, $password, $productsLink);
+                if ($webResult !== null && ! empty($webResult['products'])) {
+                    return $webResult;
+                }
 
                 return $this->scrapeViaBrowserless($loginLink, $userName, $password, $productsLink);
             }
@@ -56,7 +62,12 @@ class ApiDiscoveryService
             $apiConfig = $this->discoverApiConfig($jsUrls, $loginLink, $productsLink);
 
             if (! $apiConfig['base_url']) {
-                Log::warning(self::LOG_PREFIX.' Could not discover backend base URL from JS bundles.', $context);
+                Log::info(self::LOG_PREFIX.' Could not discover backend base URL from JS bundles. Trying Web Session Scraper...', $context);
+
+                $webResult = $this->scrapeViaWebSession($loginLink, $userName, $password, $productsLink);
+                if ($webResult !== null && ! empty($webResult['products'])) {
+                    return $webResult;
+                }
 
                 return $this->scrapeViaBrowserless($loginLink, $userName, $password, $productsLink);
             }
@@ -72,7 +83,12 @@ class ApiDiscoveryService
             $token = $this->attemptLogin($apiConfig, $userName, $password);
 
             if (! $token) {
-                Log::warning(self::LOG_PREFIX.' All login attempts failed.', $context);
+                Log::info(self::LOG_PREFIX.' All API login attempts failed. Trying Web Session Scraper...', $context);
+
+                $webResult = $this->scrapeViaWebSession($loginLink, $userName, $password, $productsLink);
+                if ($webResult !== null && ! empty($webResult['products'])) {
+                    return $webResult;
+                }
 
                 return $this->scrapeViaBrowserless($loginLink, $userName, $password, $productsLink);
             }
@@ -97,7 +113,14 @@ class ApiDiscoveryService
                         return $harvestedResult;
                     }
 
-                    Log::warning(self::LOG_PREFIX.' Multi-endpoint harvest returned no data, trying Browserless fallback.', $context);
+                    Log::info(self::LOG_PREFIX.' Multi-endpoint harvest returned no items (non-API site). Trying Web Session Scraper...', $context);
+
+                    $webResult = $this->scrapeViaWebSession($loginLink, $userName, $password, $productsLink);
+                    if ($webResult !== null && ! empty($webResult['products'])) {
+                        return $webResult;
+                    }
+
+                    Log::warning(self::LOG_PREFIX.' Both API discovery and Web Session Scraper returned no data, trying Browserless fallback.', $context);
 
                     return $this->scrapeViaBrowserless($loginLink, $userName, $password, $productsLink);
                 }
@@ -126,6 +149,11 @@ class ApiDiscoveryService
                 'trace' => substr($e->getTraceAsString(), 0, 500),
                 ...$context,
             ]);
+
+            $webResult = $this->scrapeViaWebSession($loginLink, $userName, $password, $productsLink);
+            if ($webResult !== null && ! empty($webResult['products'])) {
+                return $webResult;
+            }
 
             return $this->scrapeViaBrowserless($loginLink, $userName, $password, $productsLink);
         }
@@ -1506,6 +1534,303 @@ class ApiDiscoveryService
         }
 
         return $normalized;
+    }
+
+    /**
+     * Stage 2: Scrape traditional server-rendered websites (HTML / Blade / PHP / WordPress)
+     * via authenticated web session cookies and DOM parsing.
+     * Runs ONLY when the site is not an API or API discovery yields no data.
+     *
+     * @return array{products: array<int, mixed>, meta: array<string, mixed>}|null
+     */
+    protected function scrapeViaWebSession(
+        string $loginLink,
+        string $userName,
+        string $password,
+        string $productsLink
+    ): ?array {
+        try {
+            $jar = new CookieJar;
+
+            // 1. Download login page HTML to inspect form action and CSRF token
+            $loginResponse = Http::timeout(self::HTTP_TIMEOUT)
+                ->withoutVerifying()
+                ->withOptions(['cookies' => $jar, 'curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])
+                ->withHeaders([
+                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                    'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                ])
+                ->get($loginLink);
+
+            if (! $loginResponse->successful()) {
+                return null;
+            }
+
+            $loginHtml = $loginResponse->body();
+            $formDetails = $this->extractFormDetails($loginHtml, $loginLink);
+
+            if (! $formDetails['action']) {
+                return null;
+            }
+
+            // Build form POST payload with hidden fields (CSRF) and credentials
+            $postData = $formDetails['hidden_inputs'];
+            $emailField = $formDetails['email_field'] ?? 'email';
+            $passwordField = $formDetails['password_field'] ?? 'password';
+
+            $postData[$emailField] = $userName;
+            $postData[$passwordField] = $password;
+
+            Log::info(self::LOG_PREFIX.' [WebSession] Submitting web login form with session cookies.', [
+                'action' => $formDetails['action'],
+                'user_field' => $emailField,
+                'hidden_fields' => array_keys($formDetails['hidden_inputs']),
+            ]);
+
+            // 2. Submit login form
+            $loginResp = Http::timeout(self::HTTP_TIMEOUT)
+                ->withoutVerifying()
+                ->withOptions([
+                    'cookies' => $jar,
+                    'allow_redirects' => true,
+                    'curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4],
+                ])
+                ->withHeaders([
+                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                    'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Referer' => $loginLink,
+                ])
+                ->asForm()
+                ->post($formDetails['action'], $postData);
+
+            // 3. Fetch products page with authenticated session cookies
+            Log::info(self::LOG_PREFIX.' [WebSession] Fetching products page with session cookies.', [
+                'url' => $productsLink,
+                'cookies_count' => count($jar),
+            ]);
+
+            $productsResp = Http::timeout(self::HTTP_TIMEOUT)
+                ->withoutVerifying()
+                ->withOptions([
+                    'cookies' => $jar,
+                    'allow_redirects' => true,
+                    'curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4],
+                ])
+                ->withHeaders([
+                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                    'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8,application/json',
+                    'Referer' => $loginLink,
+                ])
+                ->get($productsLink);
+
+            if (! $productsResp->successful()) {
+                Log::debug(self::LOG_PREFIX.' [WebSession] Products page returned error.', [
+                    'status' => $productsResp->status(),
+                ]);
+
+                return null;
+            }
+
+            // 4. Extract items (supports both JSON responses and HTML DOM tables/cards)
+            $contentType = $productsResp->header('Content-Type') ?? '';
+            $rawItems = [];
+
+            if (str_contains($contentType, 'application/json')) {
+                $jsonData = $productsResp->json();
+                $rawItems = $this->extractProductsList($jsonData) ?? [];
+            } else {
+                $html = $productsResp->body();
+                $rawItems = $this->extractItemsFromHtmlDom($html);
+            }
+
+            if (empty($rawItems)) {
+                Log::debug(self::LOG_PREFIX.' [WebSession] No items extracted from page.');
+
+                return null;
+            }
+
+            $normalized = $this->normalizeProductItems($rawItems);
+
+            if (empty($normalized)) {
+                return null;
+            }
+
+            Log::info(self::LOG_PREFIX.' [WebSession] Successfully scraped items from traditional web page!', [
+                'count' => count($normalized),
+                'sample' => $normalized[0] ?? null,
+            ]);
+
+            return [
+                'products' => $normalized,
+                'meta' => [
+                    'source' => 'web_session_scrape',
+                    'login_url' => $loginLink,
+                    'products_url' => $productsLink,
+                    'products_count' => count($normalized),
+                    'scraped_at' => now()->toIso8601String(),
+                ],
+            ];
+        } catch (\Throwable $e) {
+            Log::debug(self::LOG_PREFIX.' [WebSession] Exception: '.$e->getMessage());
+
+            return null;
+        }
+    }
+
+    /**
+     * Extract login form action, hidden inputs (e.g. CSRF tokens), and input field names.
+     *
+     * @return array{action: string, hidden_inputs: array<string, string>, email_field: string, password_field: string}
+     */
+    protected function extractFormDetails(string $html, string $loginLink): array
+    {
+        $parsed = parse_url($loginLink);
+        $baseOrigin = ($parsed['scheme'] ?? 'https').'://'.($parsed['host'] ?? '');
+
+        $action = null;
+        if (preg_match('/<form\b[^>]*?\baction=["\']([^"\']*)["\']/i', $html, $m)) {
+            $rawAction = trim($m[1]);
+            if (empty($rawAction) || $rawAction === '#') {
+                $action = $loginLink;
+            } elseif (str_starts_with($rawAction, '//')) {
+                $action = ($parsed['scheme'] ?? 'https').':'.$rawAction;
+            } elseif (str_starts_with($rawAction, 'http://') || str_starts_with($rawAction, 'https://')) {
+                $action = $rawAction;
+            } elseif (str_starts_with($rawAction, '/')) {
+                $action = $baseOrigin.$rawAction;
+            } else {
+                $dir = dirname($parsed['path'] ?? '/');
+                $action = $baseOrigin.($dir === '/' || $dir === '\\' ? '' : $dir).'/'.ltrim($rawAction, '/');
+            }
+        }
+
+        if (! $action) {
+            $action = $loginLink;
+        }
+
+        // Hidden inputs (CSRF token, etc.)
+        $hidden = [];
+        if (preg_match_all('/<input\b[^>]*?\btype=["\']hidden["\'][^>]*>/i', $html, $hiddenMatches)) {
+            foreach ($hiddenMatches[0] as $inputTag) {
+                if (preg_match('/\bname=["\']([^"\']+)["\']/i', $inputTag, $nameMatch) &&
+                    preg_match('/\bvalue=["\']([^"\']*)["\']/i', $inputTag, $valMatch)) {
+                    $hidden[$nameMatch[1]] = $valMatch[1];
+                }
+            }
+        }
+
+        // Email / Username field name
+        $emailField = 'email';
+        if (preg_match('/<input\b[^>]*?\btype=["\'](?:email|text)["\'][^>]*?\bname=["\']([^"\']+)["\']/i', $html, $userMatch)) {
+            $emailField = $userMatch[1];
+        }
+
+        // Password field name
+        $passwordField = 'password';
+        if (preg_match('/<input\b[^>]*?\btype=["\']password["\'][^>]*?\bname=["\']([^"\']+)["\']/i', $html, $passMatch)) {
+            $passwordField = $passMatch[1];
+        }
+
+        return [
+            'action' => $action,
+            'hidden_inputs' => $hidden,
+            'email_field' => $emailField,
+            'password_field' => $passwordField,
+        ];
+    }
+
+    /**
+     * Extract product / course / item structures from HTML DOM (tables, cards, lists).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    protected function extractItemsFromHtmlDom(string $html): array
+    {
+        if (empty(trim($html))) {
+            return [];
+        }
+
+        $dom = new \DOMDocument;
+        @$dom->loadHTML('<?xml encoding="utf-8" ?>'.$html, LIBXML_NOERROR | LIBXML_NOWARNING);
+        $xpath = new \DOMXPath($dom);
+
+        $items = [];
+
+        // Strategy A: HTML Table Rows (common in course lists, admin tables, student portals)
+        $rows = $xpath->query('//table//tbody//tr');
+        if ($rows && $rows->length > 0) {
+            foreach ($rows as $index => $row) {
+                $cells = $xpath->query('.//td', $row);
+                if ($cells && $cells->length >= 2) {
+                    $name = trim($cells->item(0)->textContent);
+                    $desc = $cells->length >= 3 ? trim($cells->item(1)->textContent) : null;
+                    $price = null;
+                    for ($i = 1; $i < $cells->length; $i++) {
+                        $txt = trim($cells->item($i)->textContent);
+                        if (preg_match('/(?:[\$£€]|EGP|LE|SAR|\bUSD\b)\s*([0-9]+(?:\.[0-9]+)?)/i', $txt, $numMatch)) {
+                            $price = $numMatch[1];
+                            break;
+                        } elseif (preg_match('/^[0-9]+(?:\.[0-9]+)?$/', $txt, $numMatch)) {
+                            $price = $numMatch[0];
+                        }
+                    }
+
+                    $imgNode = $xpath->query('.//img', $row);
+                    $img = ($imgNode && $imgNode->length > 0) ? $imgNode->item(0)->getAttribute('src') : null;
+
+                    if (! empty($name) && strlen($name) > 2) {
+                        $items[] = [
+                            'id' => $index + 1,
+                            'name' => $name,
+                            'description' => $desc,
+                            'price' => $price,
+                            'image' => $img,
+                        ];
+                    }
+                }
+            }
+
+            if (! empty($items)) {
+                return $items;
+            }
+        }
+
+        // Strategy B: Cards / Grid Items (.card, .course, .product, .item)
+        $cardQuery = '//*[contains(concat(" ", normalize-space(@class), " "), " card ") '
+            .'or contains(concat(" ", normalize-space(@class), " "), " course ") '
+            .'or contains(concat(" ", normalize-space(@class), " "), " product ") '
+            .'or contains(@class, "course-card") '
+            .'or contains(@class, "product-card") '
+            .'or contains(@class, "item-card")]';
+
+        $cardNodes = $xpath->query($cardQuery);
+        if ($cardNodes && $cardNodes->length >= 1) {
+            foreach ($cardNodes as $idx => $card) {
+                $titleNode = $xpath->query('.//h1|.//h2|.//h3|.//h4|.//h5|.//h6|.//a[contains(@class, "title")]|.//div[contains(@class, "title")]', $card);
+                $name = ($titleNode && $titleNode->length > 0) ? trim($titleNode->item(0)->textContent) : null;
+
+                $descNode = $xpath->query('.//p|.//div[contains(@class, "text")]|.//div[contains(@class, "desc")]', $card);
+                $desc = ($descNode && $descNode->length > 0) ? trim($descNode->item(0)->textContent) : null;
+
+                $priceNode = $xpath->query('.//*[contains(@class, "price")]', $card);
+                $price = ($priceNode && $priceNode->length > 0) ? trim($priceNode->item(0)->textContent) : null;
+
+                $imgNode = $xpath->query('.//img', $card);
+                $img = ($imgNode && $imgNode->length > 0) ? $imgNode->item(0)->getAttribute('src') : null;
+
+                if (! empty($name) && strlen($name) > 2) {
+                    $items[] = [
+                        'id' => $idx + 1,
+                        'name' => $name,
+                        'description' => $desc,
+                        'price' => $price,
+                        'image' => $img,
+                    ];
+                }
+            }
+        }
+
+        return $items;
     }
 
     /**
