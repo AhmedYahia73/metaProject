@@ -1543,7 +1543,7 @@ class ApiDiscoveryService
      *
      * @return array{products: array<int, mixed>, meta: array<string, mixed>}|null
      */
-    protected function scrapeViaWebSession(
+    public function scrapeViaWebSession(
         string $loginLink,
         string $userName,
         string $password,
@@ -1551,6 +1551,8 @@ class ApiDiscoveryService
     ): ?array {
         try {
             $jar = new CookieJar;
+            $parsedLogin = parse_url($loginLink);
+            $baseOrigin = ($parsedLogin['scheme'] ?? 'https').'://'.($parsedLogin['host'] ?? '');
 
             // 1. Download login page HTML to inspect form action and CSRF token
             $loginResponse = Http::timeout(self::HTTP_TIMEOUT)
@@ -1587,21 +1589,99 @@ class ApiDiscoveryService
                 'hidden_fields' => array_keys($formDetails['hidden_inputs']),
             ]);
 
-            // 2. Submit login form
+            // 2. Submit login form (allow_redirects=false so we can detect authentication success/failure)
+            $loginHeaders = [
+                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8,application/json',
+                'Origin' => $baseOrigin,
+                'Referer' => $loginLink,
+            ];
+            if (! empty($formDetails['hidden_inputs']['_token'])) {
+                $loginHeaders['X-CSRF-TOKEN'] = $formDetails['hidden_inputs']['_token'];
+            }
+
             $loginResp = Http::timeout(self::HTTP_TIMEOUT)
                 ->withoutVerifying()
                 ->withOptions([
                     'cookies' => $jar,
-                    'allow_redirects' => true,
+                    'allow_redirects' => false,
                     'curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4],
                 ])
-                ->withHeaders([
-                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                    'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Referer' => $loginLink,
-                ])
+                ->withHeaders($loginHeaders)
                 ->asForm()
                 ->post($formDetails['action'], $postData);
+
+            $status = $loginResp->status();
+            $location = $loginResp->header('Location');
+
+            // Handle HTTP 3xx Redirects
+            if ($status >= 300 && $status < 400 && $location) {
+                if (str_starts_with($location, '/')) {
+                    $location = $baseOrigin.$location;
+                }
+
+                $loginPath = parse_url($loginLink, PHP_URL_PATH) ?? '/login';
+                $redirectPath = parse_url($location, PHP_URL_PATH) ?? '';
+
+                // If redirected back to login page, authentication failed
+                if (str_contains(strtolower($redirectPath), 'login') || $redirectPath === $loginPath) {
+                    $errorMsg = null;
+                    try {
+                        $errPage = Http::timeout(self::HTTP_TIMEOUT)
+                            ->withoutVerifying()
+                            ->withOptions(['cookies' => $jar, 'curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])
+                            ->get($location);
+
+                        $errBody = $errPage->body();
+                        if (preg_match('/<span[^>]*style="[^"]*color:\s*red[^"]*"[^>]*>(.*?)<\/span>/is', $errBody, $m)) {
+                            $errorMsg = trim(strip_tags($m[1]));
+                        } elseif (preg_match('/<(?:div|span|p)[^>]*class="[^"]*(?:alert|danger|error|invalid-feedback)[^"]*"[^>]*>(.*?)<\/(?:div|span|p)>/is', $errBody, $m)) {
+                            $errorMsg = trim(strip_tags($m[1]));
+                        }
+                    } catch (\Throwable) {
+                    }
+
+                    Log::warning(self::LOG_PREFIX.' [WebSession] Login rejected by server: '.($errorMsg ?: 'Server redirected back to login page. Please verify email and password for this account.'), [
+                        'redirect' => $location,
+                        'server_error' => $errorMsg,
+                    ]);
+
+                    return null;
+                }
+
+                // Redirected to dashboard/home -> Login successful! Initialize session
+                Log::info(self::LOG_PREFIX.' [WebSession] Login successful (redirected to '.$location.'). Initializing session.');
+                try {
+                    Http::timeout(self::HTTP_TIMEOUT)
+                        ->withoutVerifying()
+                        ->withOptions(['cookies' => $jar, 'curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])
+                        ->get($location);
+                } catch (\Throwable) {
+                }
+            } elseif ($status === 200) {
+                $contentType = $loginResp->header('Content-Type') ?? '';
+                if (str_contains($contentType, 'application/json')) {
+                    $json = $loginResp->json();
+                    if (isset($json['status']) && ($json['status'] === false || $json['status'] >= 400 || ! empty($json['errors']))) {
+                        Log::warning(self::LOG_PREFIX.' [WebSession] AJAX login rejected by server.', ['response' => $json]);
+
+                        return null;
+                    }
+                } else {
+                    $body = $loginResp->body();
+                    if (str_contains($body, 'name="password"') && (str_contains($body, 'alert-danger') || str_contains($body, 'Invalid') || str_contains($body, 'do not match'))) {
+                        Log::warning(self::LOG_PREFIX.' [WebSession] Login form redisplayed with credentials error.');
+
+                        return null;
+                    }
+                }
+            } elseif ($status >= 400) {
+                Log::warning(self::LOG_PREFIX." [WebSession] Login endpoint returned HTTP {$status}.", [
+                    'action' => $formDetails['action'],
+                ]);
+
+                return null;
+            }
 
             // 3. Fetch products page with authenticated session cookies
             Log::info(self::LOG_PREFIX.' [WebSession] Fetching products page with session cookies.', [
@@ -1613,7 +1693,7 @@ class ApiDiscoveryService
                 ->withoutVerifying()
                 ->withOptions([
                     'cookies' => $jar,
-                    'allow_redirects' => true,
+                    'allow_redirects' => false,
                     'curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4],
                 ])
                 ->withHeaders([
@@ -1623,6 +1703,41 @@ class ApiDiscoveryService
                 ])
                 ->get($productsLink);
 
+            $prodStatus = $productsResp->status();
+            if ($prodStatus >= 300 && $prodStatus < 400) {
+                $targetLoc = $productsResp->header('Location');
+                if ($targetLoc) {
+                    if (str_starts_with($targetLoc, '/')) {
+                        $targetLoc = $baseOrigin.$targetLoc;
+                    }
+
+                    // Guard: If redirected to login, session is unauthenticated
+                    if (str_contains(strtolower($targetLoc), 'login') || str_contains(strtolower($targetLoc), 'signin')) {
+                        Log::warning(self::LOG_PREFIX.' [WebSession] Access denied: Products page redirected to login (unauthenticated session).', [
+                            'redirect' => $targetLoc,
+                            'products_link' => $productsLink,
+                        ]);
+
+                        return null;
+                    }
+
+                    // Follow valid redirect to actual target page
+                    $productsResp = Http::timeout(self::HTTP_TIMEOUT)
+                        ->withoutVerifying()
+                        ->withOptions([
+                            'cookies' => $jar,
+                            'allow_redirects' => true,
+                            'curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4],
+                        ])
+                        ->withHeaders([
+                            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                            'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8,application/json',
+                            'Referer' => $productsLink,
+                        ])
+                        ->get($targetLoc);
+                }
+            }
+
             if (! $productsResp->successful()) {
                 Log::debug(self::LOG_PREFIX.' [WebSession] Products page returned error.', [
                     'status' => $productsResp->status(),
@@ -1631,7 +1746,15 @@ class ApiDiscoveryService
                 return null;
             }
 
-            // 4. Extract items (supports both JSON responses and HTML DOM tables/cards)
+            // Guard: verify page is not a login form
+            $bodyContent = $productsResp->body();
+            if (str_contains($bodyContent, 'name="password"') && (str_contains($bodyContent, 'login_store') || str_contains($bodyContent, 'action=') || str_contains($bodyContent, 'sublogin'))) {
+                Log::warning(self::LOG_PREFIX.' [WebSession] Products page rendered a login form instead of content (unauthenticated session).');
+
+                return null;
+            }
+
+            // 4. Extract items (supports JSON, embedded scripts/Inertia props, and HTML DOM tables/cards)
             $contentType = $productsResp->header('Content-Type') ?? '';
             $rawItems = [];
 
@@ -1639,12 +1762,15 @@ class ApiDiscoveryService
                 $jsonData = $productsResp->json();
                 $rawItems = $this->extractProductsList($jsonData) ?? [];
             } else {
-                $html = $productsResp->body();
-                $rawItems = $this->extractItemsFromHtmlDom($html);
+                $rawItems = $this->extractItemsFromHtmlDom($bodyContent);
             }
 
             if (empty($rawItems)) {
-                Log::debug(self::LOG_PREFIX.' [WebSession] No items extracted from page.');
+                $pageTitle = preg_match('/<title[^>]*>(.*?)<\/title>/is', $bodyContent, $titleMatch) ? trim(strip_tags($titleMatch[1])) : 'Unknown';
+                Log::debug(self::LOG_PREFIX.' [WebSession] No items extracted from page.', [
+                    'page_title' => $pageTitle,
+                    'html_length' => strlen($bodyContent),
+                ]);
 
                 return null;
             }
@@ -1708,27 +1834,34 @@ class ApiDiscoveryService
             $action = $loginLink;
         }
 
-        // Hidden inputs (CSRF token, etc.)
+        // Hidden inputs and dynamic field discovery
         $hidden = [];
-        if (preg_match_all('/<input\b[^>]*?\btype=["\']hidden["\'][^>]*>/i', $html, $hiddenMatches)) {
-            foreach ($hiddenMatches[0] as $inputTag) {
-                if (preg_match('/\bname=["\']([^"\']+)["\']/i', $inputTag, $nameMatch) &&
-                    preg_match('/\bvalue=["\']([^"\']*)["\']/i', $inputTag, $valMatch)) {
-                    $hidden[$nameMatch[1]] = $valMatch[1];
+        $emailField = 'email';
+        $passwordField = 'password';
+
+        if (preg_match_all('/<input\b[^>]*>/i', $html, $allInputs)) {
+            foreach ($allInputs[0] as $inputTag) {
+                $hasName = preg_match('/\bname=["\']([^"\']+)["\']/i', $inputTag, $nameMatch);
+                $hasType = preg_match('/\btype=["\']([^"\']+)["\']/i', $inputTag, $typeMatch);
+                $name = $hasName ? $nameMatch[1] : '';
+                $type = strtolower($hasType ? $typeMatch[1] : 'text');
+
+                if ($type === 'hidden' && $hasName) {
+                    $hasVal = preg_match('/\bvalue=["\']([^"\']*)["\']/i', $inputTag, $valMatch);
+                    $hidden[$name] = $hasVal ? $valMatch[1] : '';
+                } elseif ($type === 'password' && $hasName) {
+                    $passwordField = $name;
+                } elseif (($type === 'email' || ($type === 'text' && preg_match('/user|email|login|phone/i', $name))) && $hasName) {
+                    $emailField = $name;
                 }
             }
         }
 
-        // Email / Username field name
-        $emailField = 'email';
-        if (preg_match('/<input\b[^>]*?\btype=["\'](?:email|text)["\'][^>]*?\bname=["\']([^"\']+)["\']/i', $html, $userMatch)) {
-            $emailField = $userMatch[1];
-        }
-
-        // Password field name
-        $passwordField = 'password';
-        if (preg_match('/<input\b[^>]*?\btype=["\']password["\'][^>]*?\bname=["\']([^"\']+)["\']/i', $html, $passMatch)) {
-            $passwordField = $passMatch[1];
+        // Check meta CSRF token if hidden token input was absent
+        if (empty($hidden['_token']) && empty($hidden['csrf_token']) && empty($hidden['csrf-token'])) {
+            if (preg_match('/<meta\b[^>]*?\bname=["\'](?:csrf-token|_token)["\'][^>]*?\bcontent=["\']([^"\']+)["\']/i', $html, $metaCsrf)) {
+                $hidden['_token'] = $metaCsrf[1];
+            }
         }
 
         return [
@@ -1740,7 +1873,7 @@ class ApiDiscoveryService
     }
 
     /**
-     * Extract product / course / item structures from HTML DOM (tables, cards, lists).
+     * Extract product / course / item structures from HTML DOM (tables, cards, lists, embedded JSON).
      *
      * @return array<int, array<string, mixed>>
      */
@@ -1750,14 +1883,38 @@ class ApiDiscoveryService
             return [];
         }
 
+        // Strategy A: Inertia.js data-page attribute
+        if (preg_match('/data-page=["\'](\{.*?\})["\']/s', $html, $inertiaMatch)) {
+            $decoded = json_decode(html_entity_decode($inertiaMatch[1], ENT_QUOTES | ENT_HTML5, 'UTF-8'), true);
+            if ($decoded && is_array($decoded)) {
+                $extracted = $this->extractProductsList($decoded['props'] ?? $decoded);
+                if (! empty($extracted)) {
+                    return $extracted;
+                }
+            }
+        }
+
+        // Strategy B: Inline script JSON arrays: var courses = [...]; or items = [...]
+        if (preg_match_all('/(?:var|let|const|window\.)\s*(?:courses|products|items|data|lessons|units)\s*=\s*(\[\s*\{.*?\}\s*\])\s*;/is', $html, $scriptMatches)) {
+            foreach ($scriptMatches[1] as $jsonBlock) {
+                $decoded = json_decode($jsonBlock, true);
+                if ($decoded && is_array($decoded)) {
+                    $extracted = $this->extractProductsList($decoded);
+                    if (! empty($extracted)) {
+                        return $extracted;
+                    }
+                }
+            }
+        }
+
         $dom = new \DOMDocument;
         @$dom->loadHTML('<?xml encoding="utf-8" ?>'.$html, LIBXML_NOERROR | LIBXML_NOWARNING);
         $xpath = new \DOMXPath($dom);
 
         $items = [];
 
-        // Strategy A: HTML Table Rows (common in course lists, admin tables, student portals)
-        $rows = $xpath->query('//table//tbody//tr');
+        // Strategy C: HTML Table Rows (common in student courses, admin tables, schedules)
+        $rows = $xpath->query('//table//tbody//tr|//table//tr[td]');
         if ($rows && $rows->length > 0) {
             foreach ($rows as $index => $row) {
                 $cells = $xpath->query('.//td', $row);
@@ -1767,7 +1924,7 @@ class ApiDiscoveryService
                     $price = null;
                     for ($i = 1; $i < $cells->length; $i++) {
                         $txt = trim($cells->item($i)->textContent);
-                        if (preg_match('/(?:[\$£€]|EGP|LE|SAR|\bUSD\b)\s*([0-9]+(?:\.[0-9]+)?)/i', $txt, $numMatch)) {
+                        if (preg_match('/(?:[\$£€]|EGP|LE|SAR|USD|ج\.م|جنيه|ريال)\s*([0-9]+(?:\.[0-9]+)?)/i', $txt, $numMatch)) {
                             $price = $numMatch[1];
                             break;
                         } elseif (preg_match('/^[0-9]+(?:\.[0-9]+)?$/', $txt, $numMatch)) {
@@ -1795,24 +1952,26 @@ class ApiDiscoveryService
             }
         }
 
-        // Strategy B: Cards / Grid Items (.card, .course, .product, .item)
+        // Strategy D: Cards / Grid Items (.card, .course, .product, .item, .col-, .widget)
         $cardQuery = '//*[contains(concat(" ", normalize-space(@class), " "), " card ") '
             .'or contains(concat(" ", normalize-space(@class), " "), " course ") '
             .'or contains(concat(" ", normalize-space(@class), " "), " product ") '
             .'or contains(@class, "course-card") '
             .'or contains(@class, "product-card") '
-            .'or contains(@class, "item-card")]';
+            .'or contains(@class, "item-card") '
+            .'or contains(@class, "col-") '
+            .'or contains(@class, "widget")]';
 
         $cardNodes = $xpath->query($cardQuery);
         if ($cardNodes && $cardNodes->length >= 1) {
             foreach ($cardNodes as $idx => $card) {
-                $titleNode = $xpath->query('.//h1|.//h2|.//h3|.//h4|.//h5|.//h6|.//a[contains(@class, "title")]|.//div[contains(@class, "title")]', $card);
+                $titleNode = $xpath->query('.//h1|.//h2|.//h3|.//h4|.//h5|.//h6|.//a[contains(@class, "title")]|.//div[contains(@class, "title")]|.//a[contains(@class, "name")]|.//a[contains(@href, "/")]', $card);
                 $name = ($titleNode && $titleNode->length > 0) ? trim($titleNode->item(0)->textContent) : null;
 
-                $descNode = $xpath->query('.//p|.//div[contains(@class, "text")]|.//div[contains(@class, "desc")]', $card);
+                $descNode = $xpath->query('.//p|.//div[contains(@class, "text")]|.//div[contains(@class, "desc")]|.//div[contains(@class, "detail")]', $card);
                 $desc = ($descNode && $descNode->length > 0) ? trim($descNode->item(0)->textContent) : null;
 
-                $priceNode = $xpath->query('.//*[contains(@class, "price")]', $card);
+                $priceNode = $xpath->query('.//*[contains(@class, "price") or contains(@class, "fee") or contains(@class, "cost")]', $card);
                 $price = ($priceNode && $priceNode->length > 0) ? trim($priceNode->item(0)->textContent) : null;
 
                 $imgNode = $xpath->query('.//img', $card);

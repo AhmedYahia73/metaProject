@@ -609,3 +609,108 @@ HTML;
     expect($loginFormSubmitted)->toBeTrue();
     expect($cookiesSent)->toBeTrue();
 });
+
+test('scrapeViaWebSession returns null when web login is rejected and redirected back to login', function () {
+    $loginHtml = <<<'HTML'
+<!DOCTYPE html>
+<html>
+<body>
+    <form action="https://school.test/login_store" method="POST">
+        <input type="hidden" name="_token" value="csrf_sample_token_xyz">
+        <input type="email" name="email">
+        <input type="password" name="password">
+        <button type="submit">Sign In</button>
+    </form>
+</body>
+</html>
+HTML;
+
+    $loginFailedHtml = <<<'HTML'
+<!DOCTYPE html>
+<html>
+<body>
+    <span style="color: red">The Email or Password Invalid</span>
+    <form action="https://school.test/login_store" method="POST">
+        <input type="hidden" name="_token" value="csrf_sample_token_xyz">
+        <input type="email" name="email">
+        <input type="password" name="password">
+    </form>
+</body>
+</html>
+HTML;
+
+    Http::fake([
+        'https://school.test/login' => Http::sequence()
+            ->push($loginHtml, 200)
+            ->push($loginFailedHtml, 200),
+        'https://school.test/login_store' => Http::response('', 302, [
+            'Location' => 'https://school.test/login',
+        ]),
+    ]);
+
+    $service = new ApiDiscoveryService;
+    $result = $service->scrapeViaWebSession(
+        'https://school.test/login',
+        'wrong@school.test',
+        'badpassword',
+        'https://school.test/student/MyCourses'
+    );
+
+    expect($result)->toBeNull();
+});
+
+test('scrapeViaWebSession extracts items from embedded JSON script tags and cards', function () {
+    $loginHtml = <<<'HTML'
+<!DOCTYPE html>
+<html>
+<body>
+    <form action="https://school.test/login_store" method="POST">
+        <input type="hidden" name="_token" value="token_abc">
+        <input type="email" name="email">
+        <input type="password" name="password">
+    </form>
+</body>
+</html>
+HTML;
+
+    $coursesHtml = <<<'HTML'
+<!DOCTYPE html>
+<html>
+<head><title>Student Portal</title></head>
+<body>
+    <script>
+        var courses = [
+            {"id": 10, "course_name": "Physics Level 1", "fee": 150, "description": "Mechanics and Waves"},
+            {"id": 11, "course_name": "Chemistry Level 2", "fee": 200, "description": "Organic Chemistry"}
+        ];
+    </script>
+</body>
+</html>
+HTML;
+
+    Http::fake([
+        'https://school.test/login' => Http::response($loginHtml, 200),
+        'https://school.test/login_store' => Http::response('', 302, [
+            'Location' => 'https://school.test/student/dashboard',
+        ]),
+        'https://school.test/student/dashboard' => Http::response('OK', 200),
+        'https://school.test/student/MyCourses' => Http::response($coursesHtml, 200, [
+            'Content-Type' => 'text/html; charset=UTF-8',
+        ]),
+    ]);
+
+    $service = new ApiDiscoveryService;
+    $result = $service->scrapeViaWebSession(
+        'https://school.test/login',
+        'student@school.test',
+        'password123',
+        'https://school.test/student/MyCourses'
+    );
+
+    expect($result)->not->toBeNull();
+    expect($result['products'])->toHaveCount(2);
+    expect($result['products'][0]['name'])->toBe('Physics Level 1');
+    expect($result['products'][0]['price'])->toBe(150);
+    expect($result['products'][1]['name'])->toBe('Chemistry Level 2');
+    expect($result['products'][1]['price'])->toBe(200);
+});
