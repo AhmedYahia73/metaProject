@@ -272,6 +272,7 @@ class ApiDiscoveryService
 
         $baseUrls = array_unique($baseUrls);
         $harvestedApis = array_values(array_unique($harvestedApis));
+        $loginPathsFromJs = array_values(array_unique($loginPaths));
 
         // Standard login paths
         $standardLoginPaths = [
@@ -285,16 +286,21 @@ class ApiDiscoveryService
             '/login',
         ];
 
-        $loginPaths = array_values(array_unique(array_merge($loginPaths, $standardLoginPaths)));
+        // Endpoints extracted from JS come FIRST, then standard fallbacks
+        $loginPaths = array_values(array_unique(array_merge($loginPathsFromJs, $standardLoginPaths)));
         $loginPaths = array_filter($loginPaths, function ($path) {
             $lower = strtolower($path);
 
             return str_contains($lower, 'login') || str_contains($lower, 'auth') || str_contains($lower, 'token');
         });
 
-        usort($loginPaths, function ($a, $b) {
-            $scoreA = (str_starts_with($a, '/api/') ? 10 : 0) + (str_contains($a, 'auth') ? 5 : 0);
-            $scoreB = (str_starts_with($b, '/api/') ? 10 : 0) + (str_contains($b, 'auth') ? 5 : 0);
+        usort($loginPaths, function ($a, $b) use ($loginPathsFromJs) {
+            $scoreA = (in_array($a, $loginPathsFromJs) ? 30 : 0)
+                + (str_contains($a, '/api/') ? 12 : 0)
+                + (str_contains($a, 'login') ? 8 : 0);
+            $scoreB = (in_array($b, $loginPathsFromJs) ? 30 : 0)
+                + (str_contains($b, '/api/') ? 12 : 0)
+                + (str_contains($b, 'login') ? 8 : 0);
 
             return $scoreB <=> $scoreA;
         });
@@ -468,15 +474,39 @@ class ApiDiscoveryService
         $paths = [];
         $allKeywords = array_values(array_unique(array_merge(
             $keywords,
-            ['product', 'food', 'item', 'menu', 'category', 'catalog', 'course']
+            ['product', 'food', 'item', 'menu', 'category', 'catalog', 'course', 'unit', 'village', 'owner']
         )));
 
+        // 1. Full https:// URLs matching keywords
+        if (preg_match_all('/https?:\/\/[a-zA-Z0-9.-]+(?::[0-9]+)?(?:\/[a-zA-Z0-9._\/-]*)?/i', $js, $fullMatches)) {
+            foreach ($fullMatches[0] as $u) {
+                $lower = strtolower($u);
+                if (! str_contains($lower, 'pusher')
+                    && ! str_contains($lower, 'github')
+                    && ! str_contains($lower, 'w3.org')
+                    && ! str_contains($lower, 'google')
+                    && ! str_contains($lower, 'delete')
+                    && ! str_contains($lower, 'add')
+                    && ! str_contains($lower, '.png')
+                    && ! str_contains($lower, '.jpg')
+                    && ! str_contains($lower, '.js')
+                    && ! str_contains($lower, '.css')) {
+                    foreach ($allKeywords as $kw) {
+                        if (str_contains($lower, $kw)) {
+                            $paths[] = $u;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Relative paths
         $keywordPattern = implode('|', array_map('preg_quote', $allKeywords));
         $pattern = '/["\'`](\/(?:api\/)?(?:[a-z0-9_-]+\/)*(?:'.$keywordPattern.')[a-z0-9_\/-]*)["\'`]/i';
 
         if (preg_match_all($pattern, $js, $matches)) {
             foreach ($matches[1] as $p) {
-                // Exclude assets or mutation actions
                 if (! str_contains($p, '.') && ! str_contains($p, 'delete') && ! str_contains($p, 'import') && strlen($p) < 60) {
                     $paths[] = $p;
                 }
@@ -487,7 +517,7 @@ class ApiDiscoveryService
     }
 
     /**
-     * Harvest all readable API endpoints from JS bundles (starts with /api/ or https://.../api/).
+     * Harvest all readable API endpoints from JS bundles (starts with /api/ or https://).
      *
      * @return array<int, string>
      */
@@ -501,8 +531,12 @@ class ApiDiscoveryService
         }
 
         // 2. Matches full https://.../api/... endpoints
-        if (preg_match_all('/https?:\/\/[a-z0-9.-]+(\/api\/[a-zA-Z0-9_\/-]+)/i', $js, $matches)) {
-            $apis = array_merge($apis, $matches[1]);
+        if (preg_match_all('/https?:\/\/[a-z0-9.-]+(?::[0-9]+)?(\/[a-zA-Z0-9._\/-]*)/i', $js, $matches)) {
+            foreach ($matches[0] as $u) {
+                if (! str_contains($u, 'pusher') && ! str_contains($u, 'github') && ! str_contains($u, 'w3.org') && ! str_contains($u, 'google')) {
+                    $apis[] = $u;
+                }
+            }
         }
 
         // Mutation / noise keywords to filter out
@@ -514,7 +548,7 @@ class ApiDiscoveryService
         ];
 
         $filtered = array_filter(array_unique($apis), function ($api) use ($mutationKeywords) {
-            if (str_contains($api, '.') || strlen($api) > 55) {
+            if (str_contains($api, '.') || strlen($api) > 65) {
                 return false;
             }
 
@@ -588,10 +622,30 @@ class ApiDiscoveryService
         $paths = [];
 
         if ($type === 'login') {
+            // 1. Full https:// URLs containing login/auth/signin
+            if (preg_match_all('/https?:\/\/[a-zA-Z0-9.-]+(?::[0-9]+)?(?:\/[a-zA-Z0-9._\/-]*)?/i', $js, $fullMatches)) {
+                foreach ($fullMatches[0] as $u) {
+                    $lower = strtolower($u);
+                    if ((str_contains($lower, 'login') || str_contains($lower, 'signin') || str_contains($lower, 'auth'))
+                        && ! str_contains($lower, 'logout')
+                        && ! str_contains($lower, 'pusher')
+                        && ! str_contains($lower, 'github')
+                        && ! str_contains($lower, 'w3.org')
+                        && ! str_contains($lower, 'google')
+                        && ! str_contains($lower, 'facebook')
+                        && ! str_contains($lower, 'apple')
+                        && ! str_contains($lower, '.js')
+                        && ! str_contains($lower, '.png')) {
+                        $paths[] = $u;
+                    }
+                }
+            }
+
+            // 2. Relative paths
             $loginPatterns = [
-                '/["\'`](\/(?:api\/)?(?:[a-z_-]+\/)*(?:auth\/)?login)\b["\'`]/i',
-                '/["\'`](\/(?:api\/)?(?:[a-z_-]+\/)*signin)\b["\'`]/i',
-                '/["\'`](\/(?:api\/)?(?:[a-z_-]+\/)*authenticate)\b["\'`]/i',
+                '/["\'`](\/(?:api\/)?[a-zA-Z0-9_-]*(?:auth\/)?login)\b["\'`]/i',
+                '/["\'`](\/(?:api\/)?[a-zA-Z0-9_-]*signin)\b["\'`]/i',
+                '/["\'`](\/(?:api\/)?[a-zA-Z0-9_-]*authenticate)\b["\'`]/i',
             ];
 
             foreach ($loginPatterns as $pattern) {
@@ -693,11 +747,13 @@ class ApiDiscoveryService
         // Content types to try (JSON first, then form urlencoded)
         $contentTypes = ['json', 'form'];
 
-        // Limit login paths to top 10 to keep discovery fast
-        $candidatePaths = array_slice($apiConfig['login_paths'], 0, 10);
+        // Limit login paths to top 20 to keep discovery fast
+        $candidatePaths = array_slice($apiConfig['login_paths'], 0, 20);
 
         foreach ($candidatePaths as $loginPath) {
-            $loginUrl = rtrim($baseUrl, '/').'/'.ltrim($loginPath, '/');
+            $loginUrl = (str_starts_with($loginPath, 'http://') || str_starts_with($loginPath, 'https://'))
+                ? $loginPath
+                : rtrim($baseUrl, '/').'/'.ltrim($loginPath, '/');
 
             foreach ($credentialVariants as $credentials) {
                 foreach ($contentTypes as $contentType) {
@@ -745,6 +801,7 @@ class ApiDiscoveryService
                 Log::debug(self::LOG_PREFIX." Login attempt failed: {$url}", [
                     'status' => $response->status(),
                     'content_type' => $contentType,
+                    'response' => substr((string) $response->body(), 0, 150),
                 ]);
 
                 return null;
