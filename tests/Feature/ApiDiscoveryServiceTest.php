@@ -456,3 +456,52 @@ test('formatProductsCatalog formats multi-endpoint array of arrays with section 
     expect($formatted)->toContain('### قسم [village/owner/owners]:');
     expect($formatted)->toContain('Owner John Doe');
 });
+
+test('discoverAndFetch matches compound products_link like security_man to base entity api like /village/security', function () {
+    $loginHtml = '<script src="/assets/app.js"></script>';
+    $jsBundle = <<<'JS'
+const base = "https://bcknd.compound.test";
+const loginUrl = "/api/v1/auth/login";
+const logoutUrl = "/api/v1/auth/logout";
+function getSecurity() { return axios.get(`${base}/village/security`); }
+JS;
+
+    $securityData = [
+        'security' => [
+            ['id' => 1, 'name' => 'Officer Ahmed', 'status' => 1],
+            ['id' => 2, 'name' => 'Officer Mahmoud', 'status' => 1],
+        ],
+    ];
+
+    $logoutCalled = false;
+
+    Http::fake([
+        'https://compound.test/login' => Http::response($loginHtml, 200),
+        'https://compound.test/assets/app.js' => Http::response($jsBundle, 200),
+        'https://bcknd.compound.test/api/v1/auth/login' => Http::response([
+            'token' => 'jwt_security_token_123',
+        ], 200),
+        'https://bcknd.compound.test/village/security' => Http::response($securityData, 200),
+        'https://bcknd.compound.test/api/v1/auth/logout' => function () use (&$logoutCalled) {
+            $logoutCalled = true;
+
+            return Http::response(['message' => 'Logged out'], 200);
+        },
+    ]);
+
+    $service = new ApiDiscoveryService;
+    // User passes compound link: /security_man
+    $result = $service->discoverAndFetch(
+        'https://compound.test/login',
+        'admin@compound.test',
+        'password123',
+        'https://compound.test/security_man'
+    );
+
+    expect($result)->not->toBeNull();
+    expect($result['products'])->toHaveCount(2);
+    expect($result['products'][0]['name'])->toBe('Officer Ahmed');
+    expect($result['products'][1]['name'])->toBe('Officer Mahmoud');
+    expect($result['meta']['source'])->toBe('api_discovery');
+    expect($logoutCalled)->toBeTrue();
+});

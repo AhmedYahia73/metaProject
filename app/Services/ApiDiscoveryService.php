@@ -91,7 +91,7 @@ class ApiDiscoveryService
                         'total_read_paths' => count($apiConfig['all_read_paths'] ?? []),
                     ]);
 
-                    $harvestedResult = $this->harvestAllEndpointsData($apiConfig, $token);
+                    $harvestedResult = $this->harvestAllEndpointsData($apiConfig, $token, $keywords);
 
                     if ($harvestedResult !== null && ! empty($harvestedResult['products'])) {
                         return $harvestedResult;
@@ -484,13 +484,29 @@ class ApiDiscoveryService
             'manage', 'app', 'portal', 'home', 'main', 'api', 'v1', 'v2', 'v3',
         ];
 
-        $segments = array_filter(explode('/', $path), function ($seg) use ($noise) {
+        $rawSegments = array_filter(explode('/', $path), function ($seg) use ($noise) {
             $lower = strtolower(trim($seg));
 
             return ! in_array($lower, $noise) && ! is_numeric($seg) && strlen($seg) > 2;
         });
 
-        return array_values(array_unique(array_map('strtolower', $segments)));
+        $keywords = [];
+        foreach ($rawSegments as $seg) {
+            $clean = strtolower(trim($seg));
+            $keywords[] = $clean;
+
+            // Split compound segments by '_' or '-' (e.g. "security_man" -> ["security", "man"])
+            $parts = preg_split('/[_-]+/', $clean);
+            if (count($parts) > 1) {
+                foreach ($parts as $p) {
+                    if (strlen($p) >= 3 && ! in_array($p, $noise)) {
+                        $keywords[] = $p;
+                    }
+                }
+            }
+        }
+
+        return array_values(array_unique($keywords));
     }
 
     /**
@@ -658,12 +674,14 @@ class ApiDiscoveryService
             }
         }
 
-        // Mutation / noise keywords to filter out
+        // Mutation / noise / utility keywords to filter out (not products or services)
         $mutationKeywords = [
             'login', 'logout', 'auth', 'delete', 'destroy', 'remove', 'store',
             'create', 'update', 'edit', 'add', 'status', 'upload', 'patch',
             'import', 'export', 'download', 'register', 'verify', 'password',
             'token', 'reset', 'change', 'assign', 'swap', 'toggle', 'attendance',
+            'code_request', 'notification', 'notifications', 'online_user',
+            'visitor_limit', 'my_profile', 'profile_image', 'setting',
         ];
 
         // Static asset extensions to filter out
@@ -1217,7 +1235,8 @@ class ApiDiscoveryService
                     }
 
                     foreach ($keywords as $kw) {
-                        if (stripos($productPath, $kw) !== false) {
+                        $lastSeg = trim((string) basename(parse_url($productPath, PHP_URL_PATH) ?? $productPath), '/');
+                        if (stripos($productPath, $kw) !== false || (strlen($lastSeg) >= 3 && stripos($kw, $lastSeg) !== false)) {
                             return $products;
                         }
                     }
@@ -1240,7 +1259,7 @@ class ApiDiscoveryService
      * @param  array{base_url: string|null, all_read_paths?: array<int, string>, product_paths?: array<int, string>}  $apiConfig
      * @return array{products: array<string, array<int, mixed>>, meta: array<string, mixed>}|null
      */
-    protected function harvestAllEndpointsData(array $apiConfig, string $token): ?array
+    protected function harvestAllEndpointsData(array $apiConfig, string $token, array $keywords = []): ?array
     {
         $baseUrl = $apiConfig['base_url'];
         $readPaths = $apiConfig['all_read_paths'] ?? $apiConfig['product_paths'] ?? [];
@@ -1249,8 +1268,31 @@ class ApiDiscoveryService
             return null;
         }
 
-        // Deduplicate and limit to top 30 endpoints
+        // Deduplicate
         $readPaths = array_values(array_unique($readPaths));
+
+        // Prioritize endpoints matching keywords or related to business entities
+        if (! empty($keywords)) {
+            usort($readPaths, function ($a, $b) use ($keywords) {
+                $scoreA = 0;
+                $scoreB = 0;
+                foreach ($keywords as $kw) {
+                    if (strlen($kw) >= 3) {
+                        $lastA = trim((string) basename(parse_url($a, PHP_URL_PATH) ?? $a), '/');
+                        $lastB = trim((string) basename(parse_url($b, PHP_URL_PATH) ?? $b), '/');
+                        if (stripos($a, $kw) !== false || stripos($kw, $lastA) !== false) {
+                            $scoreA += 50;
+                        }
+                        if (stripos($b, $kw) !== false || stripos($kw, $lastB) !== false) {
+                            $scoreB += 50;
+                        }
+                    }
+                }
+
+                return $scoreB <=> $scoreA;
+            });
+        }
+
         $candidatePaths = array_slice($readPaths, 0, 30);
 
         $harvested = [];
@@ -1357,7 +1399,7 @@ class ApiDiscoveryService
         // 2. Check prioritized keys (matching keywords first, then standard keys)
         $priorityKeys = array_values(array_unique(array_merge($keywords, [
             'data', 'courses', 'categories', 'products', 'foods', 'items', 'menu',
-            'owners', 'units', 'posts', 'post', 'results', 'payload', 'list', 'records', 'rows',
+            'owners', 'units', 'posts', 'post', 'security', 'results', 'payload', 'list', 'records', 'rows',
         ])));
 
         foreach ($priorityKeys as $key) {
@@ -1369,8 +1411,12 @@ class ApiDiscoveryService
             }
         }
 
-        // 3. Fallback: inspect every nested array value in the associative container
-        foreach ($data as $val) {
+        // 3. Fallback: inspect every nested array value in the associative container (skipping metadata & pagination keys)
+        $ignoredKeys = ['links', 'meta', 'pagination', 'headers', 'config', 'request', 'params', 'status', 'permissions'];
+        foreach ($data as $k => $val) {
+            if (in_array(strtolower((string) $k), $ignoredKeys)) {
+                continue;
+            }
             if (is_array($val) && ! empty($val)) {
                 $extracted = $this->extractProductsList($val, $keywords);
                 if ($extracted !== null && count($extracted) > 0) {
@@ -1394,6 +1440,14 @@ class ApiDiscoveryService
 
         foreach ($items as $index => $item) {
             if (! is_array($item)) {
+                continue;
+            }
+
+            // Skip pagination link items: {"url": "...", "label": "...", "active": ...}
+            if (isset($item['label']) && (isset($item['url']) || isset($item['active']))) {
+                continue;
+            }
+            if (isset($item['label']) && is_string($item['label']) && (stripos($item['label'], 'previous') !== false || stripos($item['label'], 'next') !== false)) {
                 continue;
             }
 
