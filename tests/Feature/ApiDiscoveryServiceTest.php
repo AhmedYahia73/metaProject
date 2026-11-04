@@ -1,6 +1,7 @@
 <?php
 
 use App\Services\ApiDiscoveryService;
+use App\trait\FormatsChatLinks;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 
@@ -141,7 +142,7 @@ HTML;
     $jsBundle = <<<'JS'
 const api = axios.create({ baseURL: "https://bcknd.foodtest.online" });
 const loginUrl = "/api/admin/auth/login";
-const productUrl = "/admin/product";
+const productUrl = "/admin/products";
 JS;
 
     $productsData = [
@@ -161,7 +162,7 @@ JS;
             'data' => ['token' => 'sample_auth_token_9876543210'],
         ], 200),
         // Step 4: Products endpoint
-        'https://bcknd.foodtest.online/admin/product' => Http::response($productsData, 200),
+        'https://bcknd.foodtest.online/admin/products' => Http::response($productsData, 200),
     ]);
 
     $service = new ApiDiscoveryService;
@@ -344,4 +345,114 @@ test('discoverAndFetch returns null safely when login page fails or is unreachab
     );
 
     expect($result)->toBeNull();
+});
+
+test('discoverAndFetch harvests all read apis into array of arrays when keyword matching yields no items', function () {
+    $loginHtml = '<script src="/assets/app.js"></script>';
+    // Bundle contains baseUrl, login endpoint, and multiple read endpoints (template literals and paths)
+    $jsBundle = <<<'JS'
+const base = "https://bcknd.randomspa.test";
+const loginUrl = "/api/v1/auth/login";
+const logoutUrl = "/api/v1/auth/logout";
+function loadPosts() { return axios.get(`${base}/village/post/new_view?page=1`); }
+function loadOwners() { return axios.get(`${base}/village/owner/owners`); }
+function loadApartments() { return axios.get(`${base}/village/appartment`); }
+JS;
+
+    $postsData = [
+        'posts' => [
+            'data' => [
+                ['id' => 101, 'title' => 'Post One', 'description' => 'First announcement'],
+                ['id' => 102, 'title' => 'Post Two', 'description' => 'Second announcement'],
+            ],
+        ],
+    ];
+
+    $ownersData = [
+        'owners' => [
+            ['id' => 201, 'name' => 'Owner Alpha', 'phone' => '01000000001'],
+        ],
+    ];
+
+    $apartmentsData = [
+        'data' => [
+            ['id' => 301, 'name' => 'Apartment 101', 'price' => 5000],
+        ],
+    ];
+
+    $logoutCalled = false;
+
+    Http::fake([
+        'https://randomspa.test/login' => Http::response($loginHtml, 200),
+        'https://randomspa.test/assets/app.js' => Http::response($jsBundle, 200),
+        'https://bcknd.randomspa.test/api/v1/auth/login' => Http::response([
+            'token' => 'jwt_token_sample_harvest_12345',
+        ], 200),
+        // Products link with arbitrary/unmatched keyword returns 404
+        'https://bcknd.randomspa.test/arbitrary_test_route' => Http::response([], 404),
+        'https://bcknd.randomspa.test/api/arbitrary_test_route' => Http::response([], 404),
+        'https://bcknd.randomspa.test/village/arbitrary_test_route' => Http::response([], 404),
+        // Discovered read endpoints return valid data
+        'https://bcknd.randomspa.test/village/post/new_view' => Http::response($postsData, 200),
+        'https://bcknd.randomspa.test/village/owner/owners' => Http::response($ownersData, 200),
+        'https://bcknd.randomspa.test/village/appartment' => Http::response($apartmentsData, 200),
+        'https://bcknd.randomspa.test/api/v1/auth/logout' => function () use (&$logoutCalled) {
+            $logoutCalled = true;
+
+            return Http::response(['message' => 'Logged out'], 200);
+        },
+    ]);
+
+    $service = new ApiDiscoveryService;
+    // User passes arbitrary testing link that does NOT match endpoints directly
+    $result = $service->discoverAndFetch(
+        'https://randomspa.test/login',
+        'tester@randomspa.test',
+        'password123',
+        'https://randomspa.test/arbitrary_test_route'
+    );
+
+    expect($result)->not->toBeNull();
+    expect($result['meta']['source'])->toBe('api_discovery_harvest');
+    expect($result['products'])->toBeArray();
+
+    // Verify it is an array of arrays keyed by endpoint name
+    expect(array_is_list($result['products']))->toBeFalse();
+    expect($result['products'])->toHaveKey('village/post/new_view');
+    expect($result['products'])->toHaveKey('village/owner/owners');
+    expect($result['products'])->toHaveKey('village/appartment');
+
+    expect($result['products']['village/post/new_view'])->toHaveCount(2);
+    expect($result['products']['village/post/new_view'][0]['name'])->toBe('Post One');
+
+    expect($result['products']['village/owner/owners'])->toHaveCount(1);
+    expect($result['products']['village/owner/owners'][0]['name'])->toBe('Owner Alpha');
+
+    expect($result['products']['village/appartment'])->toHaveCount(1);
+    expect($result['products']['village/appartment'][0]['name'])->toBe('Apartment 101');
+
+    expect($logoutCalled)->toBeTrue();
+});
+
+test('formatProductsCatalog formats multi-endpoint array of arrays with section headers', function () {
+    $formatter = new class
+    {
+        use FormatsChatLinks;
+    };
+
+    $multiData = [
+        'village/post/new_view' => [
+            ['id' => 1, 'name' => 'First Post', 'description' => 'Post detail'],
+        ],
+        'village/owner/owners' => [
+            ['id' => 2, 'name' => 'Owner John Doe'],
+        ],
+    ];
+
+    $formatted = $formatter->formatProductsCatalog($multiData);
+
+    expect($formatted)->toContain('### قسم [village/post/new_view]:');
+    expect($formatted)->toContain('First Post');
+    expect($formatted)->toContain('### قسم [village/owner/owners]:');
+    expect($formatted)->toContain('Owner John Doe');
 });

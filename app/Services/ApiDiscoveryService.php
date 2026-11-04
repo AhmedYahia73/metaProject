@@ -4,6 +4,7 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class ApiDiscoveryService
 {
@@ -85,7 +86,18 @@ class ApiDiscoveryService
                 $products = $this->fetchProducts($apiConfig, $token, $keywords);
 
                 if ($products === null || empty($products)) {
-                    Log::warning(self::LOG_PREFIX.' Direct API fetch failed, trying Browserless fallback.', $context);
+                    Log::info(self::LOG_PREFIX.' Direct keyword fetch returned no items. Harvesting data from all APIs discovered across the page...', [
+                        'keywords' => $keywords,
+                        'total_read_paths' => count($apiConfig['all_read_paths'] ?? []),
+                    ]);
+
+                    $harvestedResult = $this->harvestAllEndpointsData($apiConfig, $token);
+
+                    if ($harvestedResult !== null && ! empty($harvestedResult['products'])) {
+                        return $harvestedResult;
+                    }
+
+                    Log::warning(self::LOG_PREFIX.' Multi-endpoint harvest returned no data, trying Browserless fallback.', $context);
 
                     return $this->scrapeViaBrowserless($loginLink, $userName, $password, $productsLink);
                 }
@@ -390,33 +402,28 @@ class ApiDiscoveryService
         // Real paths found in the application's compiled JavaScript (or their sub-base prefixed variants)
         $realJsPaths = array_values(array_unique(array_merge($productPathsFromJs, $prefixedJsPaths)));
 
-        // Prioritize paths found directly in JS (+35), with /api/, shorter depth, and matching primary entity
-        $primaryKeyword = ! empty($keywords) ? end($keywords) : '';
-
-        usort($allProductPaths, function ($a, $b) use ($keywords, $primaryKeyword, $realJsPaths) {
+        // Prioritize paths found directly in JS (+50), matching entity keywords (+25), shorter depth
+        usort($allProductPaths, function ($a, $b) use ($keywords, $realJsPaths) {
             $depthA = count(explode('/', trim($a, '/')));
             $depthB = count(explode('/', trim($b, '/')));
 
-            $scoreA = (in_array($a, $realJsPaths) ? 35 : 0)
+            $scoreA = (in_array($a, $realJsPaths) ? 50 : 0)
                 + (str_starts_with($a, '/api/') ? 12 : 0)
                 + (str_contains($a, '/admin') ? 6 : 0)
                 - ($depthA * 2);
 
-            $scoreB = (in_array($b, $realJsPaths) ? 35 : 0)
+            $scoreB = (in_array($b, $realJsPaths) ? 50 : 0)
                 + (str_starts_with($b, '/api/') ? 12 : 0)
                 + (str_contains($b, '/admin') ? 6 : 0)
                 - ($depthB * 2);
 
-            if (! empty($primaryKeyword)) {
-                if (str_ends_with($a, '/'.$primaryKeyword) || str_contains($a, '/'.$primaryKeyword.'/')) {
+            foreach ($keywords as $kw) {
+                if (str_ends_with($a, '/'.$kw) || str_contains($a, '/'.$kw.'/') || str_contains($a, '/'.$kw.'_')) {
                     $scoreA += 25;
                 }
-                if (str_ends_with($b, '/'.$primaryKeyword) || str_contains($b, '/'.$primaryKeyword.'/')) {
+                if (str_ends_with($b, '/'.$kw) || str_contains($b, '/'.$kw.'/') || str_contains($b, '/'.$kw.'_')) {
                     $scoreB += 25;
                 }
-            }
-
-            foreach ($keywords as $kw) {
                 if (stripos($a, $kw) !== false) {
                     $scoreA += 10;
                 }
@@ -428,6 +435,21 @@ class ApiDiscoveryService
             return $scoreB <=> $scoreA;
         });
         $finalProductPaths = array_values($allProductPaths);
+
+        // Build exhaustive list of all read paths harvested across the JS
+        $allReadPaths = [];
+        $rawHarvested = array_values(array_unique(array_merge($harvestedApis, $productPathsFromJs)));
+        foreach ($rawHarvested as $hp) {
+            $allReadPaths[] = $hp;
+            if (! str_starts_with($hp, 'http://') && ! str_starts_with($hp, 'https://')) {
+                foreach ($subBasePrefixes as $prefix) {
+                    if (! str_starts_with($hp, $prefix)) {
+                        $allReadPaths[] = $prefix.'/'.ltrim($hp, '/');
+                    }
+                }
+            }
+        }
+        $allReadPaths = array_values(array_unique($allReadPaths));
 
         // Pick the best base URL
         $bestBaseUrl = $this->selectBestBaseUrl($baseUrls, $loginLink);
@@ -443,11 +465,13 @@ class ApiDiscoveryService
             'login_paths' => $loginPaths,
             'product_paths' => $finalProductPaths,
             'logout_paths' => $logoutPaths,
+            'all_read_paths' => $allReadPaths,
         ];
     }
 
     /**
-     * Extract entity keywords from the products URL (e.g. "courses", "categories", "foods").
+     * Extract entity keywords from the products URL (e.g. "courses", "categories", "foods", "posts").
+     * Exact segments from URL without arbitrary guessing or mutation.
      *
      * @return array<int, string>
      */
@@ -491,33 +515,19 @@ class ApiDiscoveryService
             $paths[] = '/admin'.$path;
         }
 
-        // 3. For each individual keyword: generate clean direct paths (e.g. /admin/product, /api/admin/category)
+        // 3. For each individual keyword: generate clean direct paths (e.g. /admin/product, /api/admin/category, /api/posts)
         foreach ($keywords as $kw) {
             $paths[] = '/api/admin/'.$kw;
             $paths[] = '/admin/'.$kw;
             $paths[] = '/api/'.$kw;
             $paths[] = '/'.$kw;
-
-            // Singular form (e.g. categories -> category, courses -> course, foods -> food)
-            $singular = null;
-            if (str_ends_with($kw, 'ies')) {
-                $singular = substr($kw, 0, -3).'y';
-            } elseif (str_ends_with($kw, 's')) {
-                $singular = substr($kw, 0, -1);
-            }
-
-            if ($singular) {
-                $paths[] = '/api/admin/'.$singular;
-                $paths[] = '/admin/'.$singular;
-                $paths[] = '/api/'.$singular;
-                $paths[] = '/'.$singular;
-            }
         }
 
-        // 4. Combined progressive segments
+        // 4. Combined progressive segments from actual URL path
+        $rawSegments = array_filter(explode('/', $parsed['path'] ?? '/'), fn ($s) => strlen(trim($s)) > 2 && ! is_numeric($s));
         $accum = '';
-        foreach ($keywords as $seg) {
-            $accum .= '/'.$seg;
+        foreach ($rawSegments as $seg) {
+            $accum .= '/'.strtolower(trim($seg));
             $paths[] = '/api'.$accum;
             $paths[] = '/api/admin'.$accum;
             $paths[] = '/admin'.$accum;
@@ -577,7 +587,7 @@ class ApiDiscoveryService
             }
         }
 
-        // 3. Template literal paths like `${e}/owner/owners?page=...`
+        // 3. Template literal paths like `${e}/owner/owners?page=...` or `${e}/post/new_view?`
         if (preg_match_all('/`\$\{[a-zA-Z0-9_]+\}(\/[a-zA-Z0-9_\/-]+)(?:[\?`\$]|\/\{)/i', $js, $tplMatches)) {
             foreach ($tplMatches[1] as $p) {
                 if (! str_contains($p, '.') && ! str_contains($p, 'delete') && ! str_contains($p, 'add') && strlen($p) < 60) {
@@ -586,11 +596,25 @@ class ApiDiscoveryService
             }
         }
 
-        return array_values(array_unique($paths));
+        // Filter out mutations and noisy paths
+        $mutationKeywords = ['update', 'delete', 'destroy', 'edit', 'add', 'status', 'upload', 'import', 'export'];
+        $filtered = array_filter(array_unique($paths), function ($p) use ($mutationKeywords) {
+            $lower = strtolower($p);
+            foreach ($mutationKeywords as $bad) {
+                if (str_contains($lower, '/'.$bad) || str_ends_with($lower, $bad)) {
+                    return false;
+                }
+            }
+
+            return true;
+        });
+
+        return array_values($filtered);
     }
 
     /**
-     * Harvest all readable API endpoints from JS bundles (starts with /api/ or https://).
+     * Harvest all readable API endpoints from JS bundles (template literals, Axios/Fetch calls, relative/absolute paths).
+     * Universal, domain-agnostic and entity-agnostic.
      *
      * @return array<int, string>
      */
@@ -598,15 +622,37 @@ class ApiDiscoveryService
     {
         $apis = [];
 
-        // 1. Matches relative /api/... endpoints
-        if (preg_match_all('/["\'](\/api\/[a-zA-Z0-9_\/-]+)["\']/i', $js, $matches)) {
+        // 1. Template literal paths like `${var}/endpoint/path`
+        if (preg_match_all('/`\$\{[a-zA-Z0-9_]+\}(\/[a-zA-Z0-9_\/-]+)(?:[\?`\$]|\/\{)/i', $js, $tplMatches)) {
+            $apis = array_merge($apis, $tplMatches[1]);
+        }
+
+        // 2. HTTP client calls: .get('/path'), .post('/path'), fetch('/path')
+        if (preg_match_all('/(?:\.(?:get|post)|fetch)\s*\(\s*["\'](\/[a-zA-Z0-9_\/-]+)["\']/i', $js, $clientMatches)) {
+            $apis = array_merge($apis, $clientMatches[1]);
+        }
+        if (preg_match_all('/(?:\.(?:get|post)|fetch)\s*\(\s*`\$\{[^}]+\}(\/[a-zA-Z0-9_\/-]+)/i', $js, $clientTplMatches)) {
+            $apis = array_merge($apis, $clientTplMatches[1]);
+        }
+
+        // 3. Matches relative /api/ or other common route prefix endpoints in quotes
+        if (preg_match_all('/["\'](\/(?:api|admin|v[0-9]+|rest|app|portal|dashboard)\/[a-zA-Z0-9_\/-]+)["\']/i', $js, $matches)) {
             $apis = array_merge($apis, $matches[1]);
         }
 
-        // 2. Matches full https://.../api/... endpoints
-        if (preg_match_all('/https?:\/\/[a-z0-9.-]+(?::[0-9]+)?(\/[a-zA-Z0-9._\/-]*)/i', $js, $matches)) {
-            foreach ($matches[0] as $u) {
-                if (! str_contains($u, 'pusher') && ! str_contains($u, 'github') && ! str_contains($u, 'w3.org') && ! str_contains($u, 'google')) {
+        // 4. Matches full https://... endpoints, excluding common 3rd-party CDNs and analytics
+        if (preg_match_all('/https?:\/\/[a-z0-9.-]+(?::[0-9]+)?(\/[a-zA-Z0-9._\/-]*)/i', $js, $fullMatches)) {
+            foreach ($fullMatches[0] as $u) {
+                $lower = strtolower($u);
+                if (! str_contains($lower, 'pusher')
+                    && ! str_contains($lower, 'github')
+                    && ! str_contains($lower, 'w3.org')
+                    && ! str_contains($lower, 'google')
+                    && ! str_contains($lower, 'sentry')
+                    && ! str_contains($lower, 'cloudflare')
+                    && ! str_contains($lower, 'facebook')
+                    && ! str_contains($lower, 'unpkg')
+                    && ! str_contains($lower, 'jsdelivr')) {
                     $apis[] = $u;
                 }
             }
@@ -615,19 +661,38 @@ class ApiDiscoveryService
         // Mutation / noise keywords to filter out
         $mutationKeywords = [
             'login', 'logout', 'auth', 'delete', 'destroy', 'remove', 'store',
-            'create', 'update', 'edit', 'patch', 'upload', 'import', 'export',
-            'download', 'reset', 'register', 'verify', 'password', 'token',
-            'search', 'swap-order', 'attendance', 'manual', 'ocr', 'live',
+            'create', 'update', 'edit', 'add', 'status', 'upload', 'patch',
+            'import', 'export', 'download', 'register', 'verify', 'password',
+            'token', 'reset', 'change', 'assign', 'swap', 'toggle', 'attendance',
         ];
 
-        $filtered = array_filter(array_unique($apis), function ($api) use ($mutationKeywords) {
-            if (str_contains($api, '.') || strlen($api) > 65) {
+        // Static asset extensions to filter out
+        $assetExtensions = [
+            '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp',
+            '.css', '.js', '.woff', '.woff2', '.ttf', '.eot', '.map',
+        ];
+
+        $filtered = array_filter(array_unique($apis), function ($api) use ($mutationKeywords, $assetExtensions) {
+            $api = trim($api);
+            if (strlen($api) < 3 || strlen($api) > 65) {
+                return false;
+            }
+
+            // Exclude static assets
+            foreach ($assetExtensions as $ext) {
+                if (str_ends_with(strtolower($api), $ext) || str_contains($api, $ext.'?')) {
+                    return false;
+                }
+            }
+
+            // Exclude trailing slashes and parameter placeholders
+            if (str_ends_with($api, '/') || str_contains($api, ':') || str_contains($api, '{') || str_contains($api, '$')) {
                 return false;
             }
 
             $lower = strtolower($api);
             foreach ($mutationKeywords as $bad) {
-                if (str_contains($lower, $bad)) {
+                if (str_contains($lower, '/'.$bad) || str_ends_with($lower, $bad)) {
                     return false;
                 }
             }
@@ -716,14 +781,16 @@ class ApiDiscoveryService
 
             // 2. Relative paths
             $loginPatterns = [
-                '/["\'`](\/(?:api\/)?[a-zA-Z0-9_-]*(?:auth\/)?login)\b["\'`]/i',
-                '/["\'`](\/(?:api\/)?[a-zA-Z0-9_-]*signin)\b["\'`]/i',
-                '/["\'`](\/(?:api\/)?[a-zA-Z0-9_-]*authenticate)\b["\'`]/i',
+                '/["\'`](\/[a-zA-Z0-9_\/-]*(?:login|signin|authenticate)[a-zA-Z0-9_\/-]*)["\'`]/i',
             ];
 
             foreach ($loginPatterns as $pattern) {
                 if (preg_match_all($pattern, $js, $matches)) {
-                    $paths = array_merge($paths, $matches[1]);
+                    foreach ($matches[1] as $p) {
+                        if (! str_contains($p, '.') && strlen($p) < 60) {
+                            $paths[] = $p;
+                        }
+                    }
                 }
             }
         }
@@ -733,7 +800,7 @@ class ApiDiscoveryService
             if (preg_match_all('/https?:\/\/[a-zA-Z0-9.-]+(?::[0-9]+)?(?:\/[a-zA-Z0-9._\/-]*)?/i', $js, $fullMatches)) {
                 foreach ($fullMatches[0] as $u) {
                     $lower = strtolower($u);
-                    if (str_contains($lower, 'logout')
+                    if ((str_contains($lower, 'logout') || str_contains($lower, 'signout'))
                         && ! str_contains($lower, 'pusher')
                         && ! str_contains($lower, 'github')
                         && ! str_contains($lower, 'w3.org')
@@ -746,13 +813,16 @@ class ApiDiscoveryService
 
             // 2. Relative paths
             $logoutPatterns = [
-                '/["\'`](\/(?:api\/)?[a-zA-Z0-9_-]*(?:auth\/)?logout)\b["\'`]/i',
-                '/["\'`](\/(?:village\/)?[a-zA-Z0-9_-]*logout)\b["\'`]/i',
+                '/["\'`](\/[a-zA-Z0-9_\/-]*(?:logout|signout)[a-zA-Z0-9_\/-]*)["\'`]/i',
             ];
 
             foreach ($logoutPatterns as $pattern) {
                 if (preg_match_all($pattern, $js, $matches)) {
-                    $paths = array_merge($paths, $matches[1]);
+                    foreach ($matches[1] as $p) {
+                        if (! str_contains($p, '.') && strlen($p) < 60) {
+                            $paths[] = $p;
+                        }
+                    }
                 }
             }
         }
@@ -1141,14 +1211,15 @@ class ApiDiscoveryService
                         'matched_path' => $productPath,
                     ]);
 
-                    // If this endpoint matches the primary requested keyword, return immediately
-                    if (! empty($primaryKeyword) && (stripos($productPath, $primaryKeyword) !== false)) {
+                    // If no keywords specified, or if this endpoint matches any requested keyword, return it
+                    if (empty($keywords)) {
                         return $products;
                     }
 
-                    // Otherwise keep as high quality fallback
-                    if ($fallbackCandidate === null || count($products) > count($fallbackCandidate)) {
-                        $fallbackCandidate = $products;
+                    foreach ($keywords as $kw) {
+                        if (stripos($productPath, $kw) !== false) {
+                            return $products;
+                        }
                     }
                 }
             } catch (\Throwable $e) {
@@ -1158,7 +1229,112 @@ class ApiDiscoveryService
             }
         }
 
-        return $fallbackCandidate;
+        return null;
+    }
+
+    /**
+     * Universal fallback: harvest data from ALL read API endpoints discovered on the page/bundle.
+     * Queries each discovered endpoint with auth token and groups valid lists of items into an associative array:
+     * ['endpoint_name' => [items...], ...]
+     *
+     * @param  array{base_url: string|null, all_read_paths?: array<int, string>, product_paths?: array<int, string>}  $apiConfig
+     * @return array{products: array<string, array<int, mixed>>, meta: array<string, mixed>}|null
+     */
+    protected function harvestAllEndpointsData(array $apiConfig, string $token): ?array
+    {
+        $baseUrl = $apiConfig['base_url'];
+        $readPaths = $apiConfig['all_read_paths'] ?? $apiConfig['product_paths'] ?? [];
+
+        if (empty($readPaths) || ! $baseUrl) {
+            return null;
+        }
+
+        // Deduplicate and limit to top 30 endpoints
+        $readPaths = array_values(array_unique($readPaths));
+        $candidatePaths = array_slice($readPaths, 0, 30);
+
+        $harvested = [];
+
+        foreach ($candidatePaths as $path) {
+            $url = (str_starts_with($path, 'http://') || str_starts_with($path, 'https://'))
+                ? $path
+                : rtrim($baseUrl, '/').'/'.ltrim($path, '/');
+
+            try {
+                $response = Http::timeout(4)
+                    ->withoutVerifying()
+                    ->withOptions(['curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])
+                    ->withHeaders([
+                        'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                    ])
+                    ->acceptJson()
+                    ->withToken($token)
+                    ->get($url);
+
+                if (! $response->successful()) {
+                    if ($response->status() === 405) {
+                        $postResp = Http::timeout(4)
+                            ->withoutVerifying()
+                            ->withOptions(['curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])
+                            ->withHeaders([
+                                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                            ])
+                            ->acceptJson()
+                            ->withToken($token)
+                            ->post($url, ['page' => 1, 'limit' => 50]);
+
+                        if ($postResp->successful()) {
+                            $response = $postResp;
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+                }
+
+                $data = $response->json();
+                $items = $this->extractProductsList($data);
+
+                if ($items !== null && count($items) > 0) {
+                    $cleanKey = trim((string) parse_url($path, PHP_URL_PATH), '/');
+                    if (empty($cleanKey)) {
+                        $cleanKey = trim($path, '/');
+                    }
+
+                    $harvested[$cleanKey] = $items;
+                    Log::info(self::LOG_PREFIX." Harvested endpoint [{$cleanKey}] with ".count($items).' items.', [
+                        'url' => $url,
+                        'count' => count($items),
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                Log::debug(self::LOG_PREFIX." Harvest request error for {$url}: ".$e->getMessage());
+            }
+        }
+
+        if (empty($harvested)) {
+            return null;
+        }
+
+        $totalItems = array_sum(array_map('count', $harvested));
+        Log::info(self::LOG_PREFIX.' Universal multi-endpoint harvest completed successfully.', [
+            'endpoints_count' => count($harvested),
+            'endpoints' => array_keys($harvested),
+            'total_items' => $totalItems,
+        ]);
+
+        return [
+            'products' => $harvested,
+            'meta' => [
+                'source' => 'api_discovery_harvest',
+                'base_url' => $baseUrl,
+                'endpoints' => array_keys($harvested),
+                'endpoints_count' => count($harvested),
+                'total_items' => $totalItems,
+                'scraped_at' => now()->toIso8601String(),
+            ],
+        ];
     }
 
     /**
@@ -1181,7 +1357,7 @@ class ApiDiscoveryService
         // 2. Check prioritized keys (matching keywords first, then standard keys)
         $priorityKeys = array_values(array_unique(array_merge($keywords, [
             'data', 'courses', 'categories', 'products', 'foods', 'items', 'menu',
-            'owners', 'units', 'results', 'payload', 'list', 'records', 'rows',
+            'owners', 'units', 'posts', 'post', 'results', 'payload', 'list', 'records', 'rows',
         ])));
 
         foreach ($priorityKeys as $key) {
@@ -1221,7 +1397,7 @@ class ApiDiscoveryService
                 continue;
             }
 
-            $id = $item['id'] ?? $item['_id'] ?? $item['course_id'] ?? $item['category_id'] ?? ($index + 1);
+            $id = $item['id'] ?? $item['_id'] ?? $item['course_id'] ?? $item['category_id'] ?? $item['post_id'] ?? ($index + 1);
             $name = $item['name']
                 ?? $item['ar_name']
                 ?? $item['name_ar']
@@ -1230,11 +1406,9 @@ class ApiDiscoveryService
                 ?? $item['course_name']
                 ?? $item['category_name']
                 ?? $item['label']
-                ?? null;
-
-            if (empty($name)) {
-                continue;
-            }
+                ?? $item['admin_name']
+                ?? (isset($item['description']) && is_string($item['description']) && trim($item['description']) !== '' ? Str::limit(trim(strip_tags($item['description'])), 60) : null)
+                ?? ('Item #'.($id ?? ($index + 1)));
 
             $price = null;
             if (isset($item['price']) && $item['price'] !== null && $item['price'] !== '') {
@@ -1253,8 +1427,19 @@ class ApiDiscoveryService
                     ? (floor((float) $rawPrice) == (float) $rawPrice ? (int) $rawPrice : (float) $rawPrice)
                     : (string) $rawPrice;
             }
+
             $description = $item['description'] ?? $item['ar_description'] ?? $item['desc'] ?? $item['details'] ?? $item['phone'] ?? $item['email'] ?? null;
-            $image = $item['image'] ?? $item['image_url'] ?? $item['image_link'] ?? $item['avatar'] ?? $item['thumbnail'] ?? $item['cover'] ?? null;
+            $image = $item['image']
+                ?? $item['image_url']
+                ?? $item['imageUrl']
+                ?? $item['image_link']
+                ?? (isset($item['images'][0]['image_link']) ? $item['images'][0]['image_link'] : null)
+                ?? (isset($item['images'][0]['url']) ? $item['images'][0]['url'] : null)
+                ?? (isset($item['images'][0]) && is_string($item['images'][0]) ? $item['images'][0] : null)
+                ?? $item['avatar']
+                ?? $item['thumbnail']
+                ?? $item['cover']
+                ?? null;
 
             $normalized[] = [
                 'id' => $id,

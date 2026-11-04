@@ -240,10 +240,39 @@ INSTRUCTIONS;
         $rawItems = $data['data']['data'] ?? $data['data'] ?? $data['products'] ?? (array_is_list($data) ? $data : []);
 
         if (! is_array($rawItems) || empty($rawItems)) {
+            // Check if $data is an associative array of arrays (e.g. ['endpoint_1' => [...], 'endpoint_2' => [...]])
+            if (! array_is_list($data) && ! empty($data)) {
+                $sections = [];
+                foreach ($data as $endpointName => $items) {
+                    if (is_array($items) && ! empty($items)) {
+                        $itemsList = array_is_list($items) ? $items : array_values($items);
+                        $formattedSection = $this->formatItemsList($itemsList);
+                        if (! empty($formattedSection)) {
+                            $sections[] = "### قسم [{$endpointName}]:\n".$formattedSection;
+                        }
+                    }
+                }
+                if (! empty($sections)) {
+                    return "بيانات وأقسام المنتجات والخدمات المتاحة:\n".implode("\n\n", $sections);
+                }
+            }
+
             return '';
         }
 
-        $lines = ['قائمة المنتجات والأسعار المتاحة:'];
+        $formatted = $this->formatItemsList($rawItems);
+
+        return ! empty($formatted) ? "قائمة المنتجات والأسعار المتاحة:\n".$formatted : '';
+    }
+
+    /**
+     * Format a flat list of items into readable lines.
+     *
+     * @param  array<int, mixed>  $rawItems
+     */
+    protected function formatItemsList(array $rawItems): string
+    {
+        $lines = [];
 
         foreach ($rawItems as $index => $item) {
             if (! is_array($item)) {
@@ -287,7 +316,7 @@ INSTRUCTIONS;
             $lines[] = $line;
         }
 
-        return count($lines) > 1 ? implode("\n", $lines) : '';
+        return implode("\n", $lines);
     }
 
     /**

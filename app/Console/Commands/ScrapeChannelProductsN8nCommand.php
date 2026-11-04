@@ -166,16 +166,23 @@ class ScrapeChannelProductsN8nCommand extends Command
                 if ($result !== null && ! empty($result['products'])) {
                     try {
                         $item->update(['user_data' => $result['products']]);
-                        $count = count($result['products']);
+                        $isMulti = ! array_is_list($result['products']);
+                        $count = $isMulti
+                            ? array_sum(array_map('count', $result['products']))
+                            : count($result['products']);
+                        $endpointsCount = $isMulti ? count($result['products']) : 1;
 
-                        $this->info("  [✓] {$channelName} #{$item->id}: API discovery succeeded ({$count} products).");
+                        $this->info("  [✓] {$channelName} #{$item->id}: API discovery succeeded ({$endpointsCount} endpoints, {$count} items).");
                         Log::info("[products:scrape-n8n] SUCCESS: API discovery for {$channelName} #{$item->id}.", [
                             'channel' => $channelName,
                             'account_id' => $item->id,
                             'products_count' => $count,
-                            'source' => 'api_discovery',
+                            'endpoints_count' => $endpointsCount,
+                            'source' => $result['meta']['source'] ?? 'api_discovery',
                             'base_url' => $result['meta']['base_url'] ?? null,
-                            'sample_item' => $result['products'][0] ?? null,
+                            'sample_item' => $isMulti
+                                ? (reset($result['products'])[0] ?? null)
+                                : ($result['products'][0] ?? null),
                         ]);
                         $totalDispatched++;
 
