@@ -179,6 +179,64 @@ JS;
     expect($result['meta']['base_url'])->toBe('https://bcknd.foodtest.online');
 });
 
+test('discoverAndFetch discovers educational platforms with courses and categories', function () {
+    $loginHtml = <<<'HTML'
+<!DOCTYPE html>
+<html>
+<head><script type="module" src="/assets/index-maths.js"></script></head>
+<body><div id="root"></div></body>
+</html>
+HTML;
+
+    $jsBundle = <<<'JS'
+const api = axios.create({ baseURL: "https://bcknd.mathstest.net" });
+const loginUrl = "/api/admin/auth/login";
+const coursesUrl = "/api/admin/courses";
+const categoryUrl = "/api/admin/category";
+JS;
+
+    $coursesData = [
+        'status' => true,
+        'courses' => [
+            ['course_id' => 1, 'course_name' => 'رياضيات الصف الثالث الثانوي', 'fee' => 500],
+            ['course_id' => 2, 'course_name' => 'فيزياء لغات', 'fee' => 450],
+        ],
+    ];
+
+    Http::fake([
+        'https://admin.mathstest.net' => Http::response($loginHtml, 200),
+        'https://admin.mathstest.net/assets/index-maths.js' => Http::response($jsBundle, 200),
+        'https://bcknd.mathstest.net/api/admin/auth/login' => Http::response([
+            'data' => ['token' => 'jwt_maths_token_1234567890'],
+        ], 200),
+        'https://bcknd.mathstest.net/api/admin/courses/categories' => Http::response([], 404),
+        'https://bcknd.mathstest.net/api/courses/categories' => Http::response([], 404),
+        'https://bcknd.mathstest.net/api/admin/categories' => Http::response([], 404),
+        'https://bcknd.mathstest.net/admin/courses/categories' => Http::response([], 404),
+        'https://bcknd.mathstest.net/api/categories' => Http::response([], 404),
+        'https://bcknd.mathstest.net/courses/categories' => Http::response([], 404),
+        'https://bcknd.mathstest.net/admin/courses/categories/add' => Http::response([], 404),
+        'https://bcknd.mathstest.net/admin/categories' => Http::response([], 404),
+        'https://bcknd.mathstest.net/categories' => Http::response([], 404),
+        'https://bcknd.mathstest.net/api/admin/courses' => Http::response($coursesData, 200),
+    ]);
+
+    $service = new ApiDiscoveryService;
+    $result = $service->discoverAndFetch(
+        'https://admin.mathstest.net',
+        'admin@mathstest.net',
+        'secret123',
+        'https://admin.mathstest.net/admin/courses/categories'
+    );
+
+    expect($result)->not->toBeNull();
+    expect($result['products'])->toHaveCount(2);
+    expect($result['products'][0]['name'])->toBe('رياضيات الصف الثالث الثانوي');
+    expect($result['products'][0]['price'])->toBe(500);
+    expect($result['products'][1]['name'])->toBe('فيزياء لغات');
+    expect($result['products'][1]['price'])->toBe(450);
+});
+
 test('discoverAndFetch returns null safely when login page fails or is unreachable', function () {
     Http::fake([
         'https://offline.test/login' => Http::response('Server Error', 500),

@@ -14,13 +14,15 @@ class ApiDiscoveryService
     protected const JS_DOWNLOAD_TIMEOUT = 30;
 
     /**
-     * Discover the API from a SPA frontend and fetch products.
+     * Discover the API from a SPA frontend and fetch products/items/courses.
      *
-     * Algorithm:
-     *  1. Download HTML from login page → extract JS bundle URLs
-     *  2. Download JS bundles → extract backend base URL, login path, product path
-     *  3. Login via discovered API → extract auth token
-     *  4. Fetch products with Bearer token → normalize response
+     * Algorithm (Universal & Entity-Agnostic):
+     *  1. Download HTML from login page → extract JS bundle URLs (scripts & preloads)
+     *  2. Extract entity keywords from products_link (e.g. courses, categories, items, foods)
+     *  3. Parse JS bundles → extract backend base URL & matching API endpoints
+     *  4. Login via discovered API → extract auth token
+     *  5. Fetch data with Bearer token → recursive JSON unnesting & normalization
+     *  6. If API discovery yields no data, attempt Browserless Headless Browser fallback
      *
      * @return array{products: array<int, mixed>, meta: array<string, mixed>}|null
      */
@@ -41,27 +43,27 @@ class ApiDiscoveryService
             $jsUrls = $this->extractJsBundleUrls($loginLink);
 
             if (empty($jsUrls)) {
-                Log::warning(self::LOG_PREFIX.' No JS bundles found in HTML.', $context);
+                Log::warning(self::LOG_PREFIX.' No JS bundles found in HTML, trying Browserless.', $context);
 
-                return null;
+                return $this->scrapeViaBrowserless($loginLink, $userName, $password, $productsLink);
             }
 
             Log::info(self::LOG_PREFIX.' Found JS bundles.', ['count' => count($jsUrls)]);
 
-            // Step 2: Parse JS bundles to discover API config
+            // Step 2: Parse JS bundles and products_link for API config
             Log::info(self::LOG_PREFIX.' Step 2: Parsing JS bundles for API config.');
             $apiConfig = $this->discoverApiConfig($jsUrls, $loginLink, $productsLink);
 
             if (! $apiConfig['base_url']) {
                 Log::warning(self::LOG_PREFIX.' Could not discover backend base URL from JS bundles.', $context);
 
-                return null;
+                return $this->scrapeViaBrowserless($loginLink, $userName, $password, $productsLink);
             }
 
             Log::info(self::LOG_PREFIX.' Discovered API config.', [
                 'base_url' => $apiConfig['base_url'],
-                'login_paths' => $apiConfig['login_paths'],
-                'product_paths' => $apiConfig['product_paths'],
+                'login_paths' => array_slice($apiConfig['login_paths'], 0, 8),
+                'product_paths' => array_slice($apiConfig['product_paths'], 0, 10),
             ]);
 
             // Step 3: Try to login and get auth token
@@ -71,19 +73,20 @@ class ApiDiscoveryService
             if (! $token) {
                 Log::warning(self::LOG_PREFIX.' All login attempts failed.', $context);
 
-                return null;
+                return $this->scrapeViaBrowserless($loginLink, $userName, $password, $productsLink);
             }
 
             Log::info(self::LOG_PREFIX.' Login successful, token obtained.');
 
-            // Step 4: Fetch products with token
-            Log::info(self::LOG_PREFIX.' Step 4: Fetching products.');
-            $products = $this->fetchProducts($apiConfig, $token);
+            // Step 4: Fetch products/items with token
+            Log::info(self::LOG_PREFIX.' Step 4: Fetching products/items.');
+            $keywords = $this->extractEntityKeywords($productsLink);
+            $products = $this->fetchProducts($apiConfig, $token, $keywords);
 
-            if ($products === null) {
-                Log::warning(self::LOG_PREFIX.' All product fetch attempts failed.', $context);
+            if ($products === null || empty($products)) {
+                Log::warning(self::LOG_PREFIX.' Direct API fetch failed, trying Browserless fallback.', $context);
 
-                return null;
+                return $this->scrapeViaBrowserless($loginLink, $userName, $password, $productsLink);
             }
 
             Log::info(self::LOG_PREFIX.' Products fetched successfully.', [
@@ -107,7 +110,7 @@ class ApiDiscoveryService
                 ...$context,
             ]);
 
-            return null;
+            return $this->scrapeViaBrowserless($loginLink, $userName, $password, $productsLink);
         }
     }
 
@@ -159,8 +162,6 @@ class ApiDiscoveryService
 
         $urls = [];
         foreach ($rawSrcs as $src) {
-            $cleanSrc = explode('?', $src)[0];
-
             if (str_starts_with($src, '//')) {
                 $abs = $scheme.':'.$src;
             } elseif (str_starts_with($src, 'http://') || str_starts_with($src, 'https://')) {
@@ -222,7 +223,11 @@ class ApiDiscoveryService
     {
         $baseUrls = [];
         $loginPaths = [];
-        $productPaths = [];
+        $productPathsFromJs = [];
+        $harvestedApis = [];
+
+        // Extract entity keywords from user's products_link (e.g. courses, categories, foods, etc.)
+        $keywords = $this->extractEntityKeywords($productsLink);
 
         // Limit to first 5 bundles to avoid excessive downloads
         $jsUrls = array_slice($jsUrls, 0, 5);
@@ -251,9 +256,13 @@ class ApiDiscoveryService
                 $foundLoginPaths = $this->extractPathsFromJs($js, 'login');
                 $loginPaths = array_merge($loginPaths, $foundLoginPaths);
 
-                // Extract product paths from JS
-                $foundProductPaths = $this->extractPathsFromJs($js, 'product');
-                $productPaths = array_merge($productPaths, $foundProductPaths);
+                // Extract entity paths from JS matching user's keywords or common items
+                $foundProductPaths = $this->extractEntityPathsFromJs($js, $keywords);
+                $productPathsFromJs = array_merge($productPathsFromJs, $foundProductPaths);
+
+                // Harvest ALL read API endpoints from the JS bundle (starts with /api/ or https://)
+                $foundHarvested = $this->harvestAllReadApisFromJs($js);
+                $harvestedApis = array_merge($harvestedApis, $foundHarvested);
             } catch (\Throwable $e) {
                 Log::debug(self::LOG_PREFIX." Failed to download JS bundle: {$jsUrl}", [
                     'error' => $e->getMessage(),
@@ -262,8 +271,9 @@ class ApiDiscoveryService
         }
 
         $baseUrls = array_unique($baseUrls);
+        $harvestedApis = array_values(array_unique($harvestedApis));
 
-        // Standard common REST API endpoints to supplement discovered paths
+        // Standard login paths
         $standardLoginPaths = [
             '/api/admin/auth/login',
             '/api/restaurant/auth/login',
@@ -275,6 +285,26 @@ class ApiDiscoveryService
             '/login',
         ];
 
+        $loginPaths = array_values(array_unique(array_merge($loginPaths, $standardLoginPaths)));
+        $loginPaths = array_filter($loginPaths, function ($path) {
+            $lower = strtolower($path);
+
+            return str_contains($lower, 'login') || str_contains($lower, 'auth') || str_contains($lower, 'token');
+        });
+
+        usort($loginPaths, function ($a, $b) {
+            $scoreA = (str_starts_with($a, '/api/') ? 10 : 0) + (str_contains($a, 'auth') ? 5 : 0);
+            $scoreB = (str_starts_with($b, '/api/') ? 10 : 0) + (str_contains($b, 'auth') ? 5 : 0);
+
+            return $scoreB <=> $scoreA;
+        });
+        $loginPaths = array_values($loginPaths);
+
+        // ── GENERATE PRODUCT / ENTITY PATHS (Hierarchical Priority) ──
+        // Priority 1: Paths derived directly from the user's products_link (e.g. /admin/courses/categories)
+        $derivedProductPaths = $this->deriveEntityPathsFromUrl($productsLink, $keywords);
+
+        // Priority 2: Standard common paths as fallbacks
         $standardProductPaths = [
             '/admin/product',
             '/api/admin/product',
@@ -290,36 +320,45 @@ class ApiDiscoveryService
             '/api/public/products',
         ];
 
-        $loginPaths = array_values(array_unique(array_merge($loginPaths, $standardLoginPaths)));
-        $productPaths = array_values(array_unique(array_merge($productPaths, $standardProductPaths)));
+        // Combine all candidates: Derived FIRST, then JS-discovered, then Standard fallbacks, then ALL harvested APIs
+        $allProductPaths = array_values(array_unique(array_merge(
+            $derivedProductPaths,
+            $productPathsFromJs,
+            $standardProductPaths,
+            $harvestedApis
+        )));
 
-        // Filter and sort login paths: must contain login/auth/token, prioritize /api/
-        $loginPaths = array_filter($loginPaths, function ($path) {
-            $lower = strtolower($path);
+        // Prioritize paths with /api/, shorter depth, and matching primary entity
+        $primaryKeyword = ! empty($keywords) ? end($keywords) : '';
 
-            return str_contains($lower, 'login') || str_contains($lower, 'auth') || str_contains($lower, 'token');
-        });
-        usort($loginPaths, function ($a, $b) {
-            $scoreA = (str_starts_with($a, '/api/') ? 10 : 0) + (str_contains($a, 'auth') ? 5 : 0);
-            $scoreB = (str_starts_with($b, '/api/') ? 10 : 0) + (str_contains($b, 'auth') ? 5 : 0);
+        usort($allProductPaths, function ($a, $b) use ($keywords, $primaryKeyword) {
+            $depthA = count(explode('/', trim($a, '/')));
+            $depthB = count(explode('/', trim($b, '/')));
+
+            $scoreA = (str_starts_with($a, '/api/') ? 12 : 0) + (str_contains($a, '/admin') ? 6 : 0) - ($depthA * 3);
+            $scoreB = (str_starts_with($b, '/api/') ? 12 : 0) + (str_contains($b, '/admin') ? 6 : 0) - ($depthB * 3);
+
+            if (! empty($primaryKeyword)) {
+                if (str_ends_with($a, '/'.$primaryKeyword) || str_contains($a, '/'.$primaryKeyword.'/')) {
+                    $scoreA += 25;
+                }
+                if (str_ends_with($b, '/'.$primaryKeyword) || str_contains($b, '/'.$primaryKeyword.'/')) {
+                    $scoreB += 25;
+                }
+            }
+
+            foreach ($keywords as $kw) {
+                if (stripos($a, $kw) !== false) {
+                    $scoreA += 10;
+                }
+                if (stripos($b, $kw) !== false) {
+                    $scoreB += 10;
+                }
+            }
 
             return $scoreB <=> $scoreA;
         });
-        $loginPaths = array_values($loginPaths);
-
-        // Filter and sort product paths: must contain product/food/item/menu/categor
-        $productPaths = array_filter($productPaths, function ($path) {
-            $lower = strtolower($path);
-
-            return str_contains($lower, 'product') || str_contains($lower, 'food') || str_contains($lower, 'item') || str_contains($lower, 'menu');
-        });
-        usort($productPaths, function ($a, $b) {
-            $scoreA = (str_starts_with($a, '/api/') ? 10 : 0) + (str_starts_with($a, '/admin/') ? 8 : 0);
-            $scoreB = (str_starts_with($b, '/api/') ? 10 : 0) + (str_starts_with($b, '/admin/') ? 8 : 0);
-
-            return $scoreB <=> $scoreA;
-        });
-        $productPaths = array_values($productPaths);
+        $finalProductPaths = array_values($allProductPaths);
 
         // Pick the best base URL
         $bestBaseUrl = $this->selectBestBaseUrl($baseUrls, $loginLink);
@@ -330,20 +369,166 @@ class ApiDiscoveryService
             $bestBaseUrl = ($parsed['scheme'] ?? 'https').'://'.($parsed['host'] ?? '');
         }
 
-        // If we couldn't find paths in JS, derive them from the user-provided links
-        if (empty($loginPaths)) {
-            $loginPaths = $this->derivePathsFromUrl($loginLink, 'login');
-        }
-
-        if (empty($productPaths)) {
-            $productPaths = $this->derivePathsFromUrl($productsLink, 'product');
-        }
-
         return [
             'base_url' => $bestBaseUrl,
             'login_paths' => $loginPaths,
-            'product_paths' => $productPaths,
+            'product_paths' => $finalProductPaths,
         ];
+    }
+
+    /**
+     * Extract entity keywords from the products URL (e.g. "courses", "categories", "foods").
+     *
+     * @return array<int, string>
+     */
+    protected function extractEntityKeywords(string $url): array
+    {
+        $parsed = parse_url($url);
+        $path = $parsed['path'] ?? '/';
+        $noise = [
+            '', 'admin', 'dashboard', 'setup', 'panel', 'view', 'list', 'index',
+            'manage', 'app', 'portal', 'home', 'main', 'api', 'v1', 'v2', 'v3',
+        ];
+
+        $segments = array_filter(explode('/', $path), function ($seg) use ($noise) {
+            $lower = strtolower(trim($seg));
+
+            return ! in_array($lower, $noise) && ! is_numeric($seg) && strlen($seg) > 2;
+        });
+
+        return array_values(array_unique(array_map('strtolower', $segments)));
+    }
+
+    /**
+     * Derive candidate API paths directly from the user-provided products link.
+     *
+     * @param  array<int, string>  $keywords
+     * @return array<int, string>
+     */
+    protected function deriveEntityPathsFromUrl(string $url, array $keywords): array
+    {
+        $parsed = parse_url($url);
+        $path = '/'.ltrim($parsed['path'] ?? '/', '/');
+        $paths = [];
+
+        // 1. The exact path as provided by user
+        $paths[] = $path;
+        $paths[] = '/api'.$path;
+
+        // 2. Prefix variations
+        if (! str_starts_with($path, '/admin/') && ! str_starts_with($path, '/api/admin/')) {
+            $paths[] = '/api/admin'.$path;
+            $paths[] = '/admin'.$path;
+        }
+
+        // 3. For each individual keyword: generate clean direct paths (e.g. /admin/product, /api/admin/category)
+        foreach ($keywords as $kw) {
+            $paths[] = '/api/admin/'.$kw;
+            $paths[] = '/admin/'.$kw;
+            $paths[] = '/api/'.$kw;
+            $paths[] = '/'.$kw;
+
+            // Singular form (e.g. categories -> category, courses -> course, foods -> food)
+            $singular = null;
+            if (str_ends_with($kw, 'ies')) {
+                $singular = substr($kw, 0, -3).'y';
+            } elseif (str_ends_with($kw, 's')) {
+                $singular = substr($kw, 0, -1);
+            }
+
+            if ($singular) {
+                $paths[] = '/api/admin/'.$singular;
+                $paths[] = '/admin/'.$singular;
+                $paths[] = '/api/'.$singular;
+                $paths[] = '/'.$singular;
+            }
+        }
+
+        // 4. Combined progressive segments
+        $accum = '';
+        foreach ($keywords as $seg) {
+            $accum .= '/'.$seg;
+            $paths[] = '/api'.$accum;
+            $paths[] = '/api/admin'.$accum;
+            $paths[] = '/admin'.$accum;
+            $paths[] = $accum;
+        }
+
+        return array_values(array_unique($paths));
+    }
+
+    /**
+     * Extract API paths matching entity keywords from JS bundle.
+     *
+     * @param  array<int, string>  $keywords
+     * @return array<int, string>
+     */
+    protected function extractEntityPathsFromJs(string $js, array $keywords): array
+    {
+        $paths = [];
+        $allKeywords = array_values(array_unique(array_merge(
+            $keywords,
+            ['product', 'food', 'item', 'menu', 'category', 'catalog', 'course']
+        )));
+
+        $keywordPattern = implode('|', array_map('preg_quote', $allKeywords));
+        $pattern = '/["\'`](\/(?:api\/)?(?:[a-z0-9_-]+\/)*(?:'.$keywordPattern.')[a-z0-9_\/-]*)["\'`]/i';
+
+        if (preg_match_all($pattern, $js, $matches)) {
+            foreach ($matches[1] as $p) {
+                // Exclude assets or mutation actions
+                if (! str_contains($p, '.') && ! str_contains($p, 'delete') && ! str_contains($p, 'import') && strlen($p) < 60) {
+                    $paths[] = $p;
+                }
+            }
+        }
+
+        return array_values(array_unique($paths));
+    }
+
+    /**
+     * Harvest all readable API endpoints from JS bundles (starts with /api/ or https://.../api/).
+     *
+     * @return array<int, string>
+     */
+    protected function harvestAllReadApisFromJs(string $js): array
+    {
+        $apis = [];
+
+        // 1. Matches relative /api/... endpoints
+        if (preg_match_all('/["\'](\/api\/[a-zA-Z0-9_\/-]+)["\']/i', $js, $matches)) {
+            $apis = array_merge($apis, $matches[1]);
+        }
+
+        // 2. Matches full https://.../api/... endpoints
+        if (preg_match_all('/https?:\/\/[a-z0-9.-]+(\/api\/[a-zA-Z0-9_\/-]+)/i', $js, $matches)) {
+            $apis = array_merge($apis, $matches[1]);
+        }
+
+        // Mutation / noise keywords to filter out
+        $mutationKeywords = [
+            'login', 'logout', 'auth', 'delete', 'destroy', 'remove', 'store',
+            'create', 'update', 'edit', 'patch', 'upload', 'import', 'export',
+            'download', 'reset', 'register', 'verify', 'password', 'token',
+            'search', 'swap-order', 'attendance', 'manual', 'ocr', 'live',
+        ];
+
+        $filtered = array_filter(array_unique($apis), function ($api) use ($mutationKeywords) {
+            if (str_contains($api, '.') || strlen($api) > 55) {
+                return false;
+            }
+
+            $lower = strtolower($api);
+            foreach ($mutationKeywords as $bad) {
+                if (str_contains($lower, $bad)) {
+                    return false;
+                }
+            }
+
+            return true;
+        });
+
+        return array_values($filtered);
     }
 
     /**
@@ -414,61 +599,6 @@ class ApiDiscoveryService
                     $paths = array_merge($paths, $matches[1]);
                 }
             }
-        } elseif ($type === 'product') {
-            $productPatterns = [
-                '/["\'`](\/(?:api\/)?(?:[a-z_-]+\/)*(?:products?|foods?|items?|menu|categories|categor(?:y|ies)))\s*["\'`]/i',
-            ];
-
-            foreach ($productPatterns as $pattern) {
-                if (preg_match_all($pattern, $js, $matches)) {
-                    $paths = array_merge($paths, $matches[1]);
-                }
-            }
-        }
-
-        return array_values(array_unique($paths));
-    }
-
-    /**
-     * Derive API paths from a user-provided URL when JS parsing fails.
-     *
-     * @return array<int, string>
-     */
-    protected function derivePathsFromUrl(string $url, string $type): array
-    {
-        $parsed = parse_url($url);
-        $path = $parsed['path'] ?? '/';
-        $paths = [];
-
-        // Add the original path itself
-        $paths[] = $path;
-
-        // Try with /api/ prefix if not already present
-        if (! str_starts_with($path, '/api/')) {
-            $paths[] = '/api'.($path === '/' ? '' : $path);
-        }
-
-        if ($type === 'login') {
-            // Generate common login variations
-            $baseParts = array_filter(explode('/', trim($path, '/')));
-            // Remove 'login' from parts to get the prefix
-            $prefix = [];
-            foreach ($baseParts as $part) {
-                if (stripos($part, 'login') !== false) {
-                    break;
-                }
-                $prefix[] = $part;
-            }
-
-            $prefixPath = empty($prefix) ? '' : '/'.implode('/', $prefix);
-            $paths[] = $prefixPath.'/auth/login';
-            $paths[] = '/api'.$prefixPath.'/auth/login';
-            $paths[] = '/api'.$prefixPath.'/login';
-        } elseif ($type === 'product') {
-            // Generate common product path variations
-            $paths[] = '/api/restaurant/food';
-            $paths[] = '/admin/product';
-            $paths[] = '/api/admin/product';
         }
 
         return array_values(array_unique($paths));
@@ -533,7 +663,6 @@ class ApiDiscoveryService
             return $host;
         }
 
-        // Return the last two or three parts depending on TLD
         return implode('.', array_slice($parts, -2));
     }
 
@@ -644,7 +773,6 @@ class ApiDiscoveryService
             return null;
         }
 
-        // Try common token locations in priority order
         $paths = [
             ['data', 'token'],
             ['token'],
@@ -679,17 +807,24 @@ class ApiDiscoveryService
      * Fetch products from discovered API with auth token.
      *
      * @param  array{base_url: string|null, login_paths: array<int, string>, product_paths: array<int, string>}  $apiConfig
+     * @param  array<int, string>  $keywords
      * @return array<int, mixed>|null
      */
-    protected function fetchProducts(array $apiConfig, string $token): ?array
+    protected function fetchProducts(array $apiConfig, string $token, array $keywords = []): ?array
     {
         $baseUrl = $apiConfig['base_url'];
+        $primaryKeyword = ! empty($keywords) ? end($keywords) : '';
+        $fallbackCandidate = null;
 
-        foreach ($apiConfig['product_paths'] as $productPath) {
-            $productUrl = rtrim($baseUrl, '/').'/'.ltrim($productPath, '/');
+        $candidatePaths = array_slice($apiConfig['product_paths'], 0, 35);
+
+        foreach ($candidatePaths as $productPath) {
+            $productUrl = (str_starts_with($productPath, 'http://') || str_starts_with($productPath, 'https://'))
+                ? $productPath
+                : rtrim($baseUrl, '/').'/'.ltrim($productPath, '/');
 
             try {
-                $response = Http::timeout(self::HTTP_TIMEOUT)
+                $response = Http::timeout(8)
                     ->withoutVerifying()
                     ->withOptions(['curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])
                     ->withHeaders([
@@ -708,14 +843,23 @@ class ApiDiscoveryService
                 }
 
                 $data = $response->json();
-                $products = $this->extractProductsList($data);
+                $products = $this->extractProductsList($data, $keywords);
 
                 if ($products !== null && count($products) > 0) {
                     Log::info(self::LOG_PREFIX." Products found at: {$productUrl}", [
                         'count' => count($products),
+                        'matched_path' => $productPath,
                     ]);
 
-                    return $products;
+                    // If this endpoint matches the primary requested keyword, return immediately
+                    if (! empty($primaryKeyword) && (stripos($productPath, $primaryKeyword) !== false)) {
+                        return $products;
+                    }
+
+                    // Otherwise keep as high quality fallback
+                    if ($fallbackCandidate === null || count($products) > count($fallbackCandidate)) {
+                        $fallbackCandidate = $products;
+                    }
                 }
             } catch (\Throwable $e) {
                 Log::debug(self::LOG_PREFIX." Product fetch exception: {$productUrl}", [
@@ -724,54 +868,212 @@ class ApiDiscoveryService
             }
         }
 
+        return $fallbackCandidate;
+    }
+
+    /**
+     * Extract the products list from an API response, using dynamic recursive unnesting.
+     *
+     * @param  array<int, string>  $keywords
+     * @return array<int, mixed>|null
+     */
+    protected function extractProductsList(mixed $data, array $keywords = []): ?array
+    {
+        if (! is_array($data) || empty($data)) {
+            return null;
+        }
+
+        // 1. Direct flat list of associative items
+        if (array_is_list($data) && count($data) > 0 && is_array($data[0])) {
+            return $this->normalizeProductItems($data);
+        }
+
+        // 2. Check prioritized keys (matching keywords first, then standard keys)
+        $priorityKeys = array_values(array_unique(array_merge($keywords, [
+            'data', 'courses', 'categories', 'products', 'foods', 'items', 'menu',
+            'results', 'payload', 'list', 'records', 'rows',
+        ])));
+
+        foreach ($priorityKeys as $key) {
+            if (isset($data[$key]) && is_array($data[$key])) {
+                $extracted = $this->extractProductsList($data[$key], $keywords);
+                if ($extracted !== null && count($extracted) > 0) {
+                    return $extracted;
+                }
+            }
+        }
+
+        // 3. Fallback: inspect every nested array value in the associative container
+        foreach ($data as $val) {
+            if (is_array($val) && ! empty($val)) {
+                $extracted = $this->extractProductsList($val, $keywords);
+                if ($extracted !== null && count($extracted) > 0) {
+                    return $extracted;
+                }
+            }
+        }
+
         return null;
     }
 
     /**
-     * Extract the products list from an API response, trying multiple nesting patterns.
+     * Normalize raw items into a unified structure compatible with FormatsChatLinks.
      *
-     * @param  mixed  $data
-     * @return array<int, mixed>|null
+     * @param  array<int, mixed>  $items
+     * @return array<int, array<string, mixed>>
      */
-    protected function extractProductsList($data): ?array
+    protected function normalizeProductItems(array $items): array
     {
-        if (! is_array($data)) {
-            return null;
+        $normalized = [];
+
+        foreach ($items as $index => $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+
+            $id = $item['id'] ?? $item['_id'] ?? $item['course_id'] ?? $item['category_id'] ?? ($index + 1);
+            $name = $item['name']
+                ?? $item['ar_name']
+                ?? $item['name_ar']
+                ?? $item['title']
+                ?? $item['ar_title']
+                ?? $item['course_name']
+                ?? $item['category_name']
+                ?? $item['label']
+                ?? null;
+
+            if (empty($name)) {
+                continue;
+            }
+
+            $price = null;
+            if (isset($item['price']) && $item['price'] !== null && $item['price'] !== '') {
+                $rawPrice = $item['price'];
+                $price = is_numeric($rawPrice)
+                    ? (floor((float) $rawPrice) == (float) $rawPrice ? (int) $rawPrice : (float) $rawPrice)
+                    : (string) $rawPrice;
+            } elseif (isset($item['cost']) && $item['cost'] !== null && $item['cost'] !== '') {
+                $rawPrice = $item['cost'];
+                $price = is_numeric($rawPrice)
+                    ? (floor((float) $rawPrice) == (float) $rawPrice ? (int) $rawPrice : (float) $rawPrice)
+                    : (string) $rawPrice;
+            } elseif (isset($item['fee']) && $item['fee'] !== null && $item['fee'] !== '') {
+                $rawPrice = $item['fee'];
+                $price = is_numeric($rawPrice)
+                    ? (floor((float) $rawPrice) == (float) $rawPrice ? (int) $rawPrice : (float) $rawPrice)
+                    : (string) $rawPrice;
+            }
+            $description = $item['description'] ?? $item['ar_description'] ?? $item['desc'] ?? $item['details'] ?? null;
+            $image = $item['image'] ?? $item['image_url'] ?? $item['thumbnail'] ?? $item['cover'] ?? null;
+
+            $normalized[] = [
+                'id' => $id,
+                'name' => (string) $name,
+                'price' => $price,
+                'description' => $description ? (string) $description : null,
+                'image' => $image ? (string) $image : null,
+                'options' => $item['options'] ?? [],
+            ];
         }
 
-        // If it's already a list of items
-        if (array_is_list($data) && ! empty($data)) {
-            return $data;
-        }
+        return $normalized;
+    }
 
-        // Try common nesting patterns
-        $nestingPaths = [
-            ['data', 'data', 'data'],
-            ['data', 'data'],
-            ['data'],
-            ['products'],
-            ['foods'],
-            ['items'],
-            ['menu'],
-            ['data', 'products'],
-            ['data', 'foods'],
-            ['data', 'items'],
-            ['data', 'menu'],
-        ];
+    /**
+     * Tier 2 Fallback: Scrape via Browserless Chromium Headless Browser if running.
+     *
+     * @return array{products: array<int, mixed>, meta: array<string, mixed>}|null
+     */
+    protected function scrapeViaBrowserless(
+        string $loginLink,
+        string $userName,
+        string $password,
+        string $productsLink,
+    ): ?array {
+        $browserlessUrl = config('services.browserless.url', env('BROWSERLESS_URL', 'http://127.0.0.1:3000'));
+        $endpoint = rtrim($browserlessUrl, '/').'/function';
 
-        foreach ($nestingPaths as $path) {
-            $value = $data;
-            foreach ($path as $key) {
-                if (! is_array($value) || ! array_key_exists($key, $value)) {
-                    $value = null;
-                    break;
+        $jsFunction = <<<'JS'
+module.exports = async ({ page }) => {
+    const loginUrl = '%LOGIN_URL%';
+    const user = '%USER%';
+    const pass = '%PASS%';
+    const targetUrl = '%TARGET_URL%';
+
+    let interceptedData = [];
+
+    // Intercept JSON responses
+    page.on('response', async (res) => {
+        try {
+            const ct = res.headers()['content-type'] || '';
+            if (ct.includes('application/json')) {
+                const json = await res.json();
+                if (json && (Array.isArray(json) || json.data || json.courses || json.products || json.items)) {
+                    interceptedData.push(json);
                 }
-                $value = $value[$key];
+            }
+        } catch (e) {}
+    });
+
+    // 1. Navigate to login
+    await page.goto(loginUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+
+    // 2. Fill login inputs
+    const emailSelector = 'input[type="email"], input[name="email"], input[name="username"], input[type="text"]';
+    const passSelector = 'input[type="password"], input[name="password"]';
+
+    if (await page.$(emailSelector) && await page.$(passSelector)) {
+        await page.type(emailSelector, user);
+        await page.type(passSelector, pass);
+        await Promise.all([
+            page.keyboard.press('Enter'),
+            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {})
+        ]);
+    }
+
+    // 3. Navigate to target products/items page
+    await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+    await new Promise(r => setTimeout(r, 2000));
+
+    return { data: interceptedData };
+};
+JS;
+
+        $code = str_replace(
+            ['%LOGIN_URL%', '%USER%', '%PASS%', '%TARGET_URL%'],
+            [addslashes($loginLink), addslashes($userName), addslashes($password), addslashes($productsLink)],
+            $jsFunction
+        );
+
+        try {
+            Log::info(self::LOG_PREFIX.' Attempting Browserless scrape fallback.', ['endpoint' => $endpoint]);
+            $response = Http::timeout(60)
+                ->withHeaders(['Content-Type' => 'application/javascript'])
+                ->withBody($code, 'application/javascript')
+                ->post($endpoint);
+
+            if (! $response->successful()) {
+                return null;
             }
 
-            if (is_array($value) && ! empty($value) && array_is_list($value)) {
-                return $value;
+            $result = $response->json();
+            $candidates = $result['data'] ?? [];
+
+            foreach ($candidates as $candidate) {
+                $items = $this->extractProductsList($candidate);
+                if (! empty($items)) {
+                    return [
+                        'products' => $items,
+                        'meta' => [
+                            'source' => 'browserless_headless',
+                            'products_count' => count($items),
+                            'scraped_at' => now()->toIso8601String(),
+                        ],
+                    ];
+                }
             }
+        } catch (\Throwable $e) {
+            Log::debug(self::LOG_PREFIX.' Browserless unreachable or failed: '.$e->getMessage());
         }
 
         return null;
