@@ -334,6 +334,34 @@ class ApiDiscoveryService
             $harvestedApis
         )));
 
+        // Extract clean single-segment sub-base prefixes (e.g. /village, /admin, /api)
+        $subBasePrefixes = [];
+        foreach ($baseUrls as $bu) {
+            $pathPart = trim((string) parse_url($bu, PHP_URL_PATH), '/');
+            if (! empty($pathPart)) {
+                $segments = explode('/', $pathPart);
+                $firstSeg = $segments[0] ?? '';
+                if (! empty($firstSeg) && ! in_array($firstSeg, ['login', 'auth', 'logout', 'signin'])) {
+                    $subBasePrefixes[] = '/'.$firstSeg;
+                }
+            }
+        }
+        $subBasePrefixes = array_values(array_unique($subBasePrefixes));
+
+        // Generate prefixed variations for all paths (e.g. /village/owner/owners, /village/owners)
+        $prefixedPaths = [];
+        foreach ($subBasePrefixes as $prefix) {
+            foreach ($allProductPaths as $p) {
+                if (! str_starts_with($p, 'http://') && ! str_starts_with($p, 'https://')) {
+                    if (! str_starts_with($p, $prefix)) {
+                        $prefixedPaths[] = $prefix.'/'.ltrim($p, '/');
+                    }
+                }
+            }
+        }
+
+        $allProductPaths = array_values(array_unique(array_merge($allProductPaths, $prefixedPaths)));
+
         // Prioritize paths with /api/, shorter depth, and matching primary entity
         $primaryKeyword = ! empty($keywords) ? end($keywords) : '';
 
@@ -513,6 +541,15 @@ class ApiDiscoveryService
             }
         }
 
+        // 3. Template literal paths like `${e}/owner/owners?page=...`
+        if (preg_match_all('/`\$\{[a-zA-Z0-9_]+\}(\/[a-zA-Z0-9_\/-]+)(?:[\?`\$]|\/\{)/i', $js, $tplMatches)) {
+            foreach ($tplMatches[1] as $p) {
+                if (! str_contains($p, '.') && ! str_contains($p, 'delete') && ! str_contains($p, 'add') && strlen($p) < 60) {
+                    $paths[] = $p;
+                }
+            }
+        }
+
         return array_values(array_unique($paths));
     }
 
@@ -587,8 +624,8 @@ class ApiDiscoveryService
             }
         }
 
-        // Pattern 2: URLs with common backend subdomains
-        $subdomainPattern = '/https?:\/\/(?:bcknd|backend|restbcknd|api|admin-api|app-api|server)\.[a-z0-9][a-z0-9.-]+/i';
+        // Pattern 2: URLs with common backend subdomains (host & paths)
+        $subdomainPattern = '/https?:\/\/(?:bcknd|backend|restbcknd|api|admin-api|app-api|server)\.[a-z0-9][a-z0-9.-]+(?:\/[a-zA-Z0-9_-]+)*/i';
         if (preg_match_all($subdomainPattern, $js, $matches)) {
             foreach ($matches[0] as $url) {
                 $urls[] = rtrim($url, '/');
@@ -702,7 +739,10 @@ class ApiDiscoveryService
 
         usort($scored, fn ($a, $b) => $b['score'] <=> $a['score']);
 
-        return $scored[0]['url'];
+        $best = $scored[0]['url'];
+        $parsed = parse_url($best);
+
+        return ($parsed['scheme'] ?? 'https').'://'.($parsed['host'] ?? '');
     }
 
     /**
@@ -892,11 +932,34 @@ class ApiDiscoveryService
                     ->get($productUrl);
 
                 if (! $response->successful()) {
-                    Log::debug(self::LOG_PREFIX." Product fetch failed: {$productUrl}", [
-                        'status' => $response->status(),
-                    ]);
+                    // If GET returns 405 (Method Not Allowed), try POST
+                    if ($response->status() === 405) {
+                        $postResponse = Http::timeout(8)
+                            ->withoutVerifying()
+                            ->withOptions(['curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])
+                            ->withHeaders([
+                                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                            ])
+                            ->acceptJson()
+                            ->withToken($token)
+                            ->post($productUrl, ['page' => 1, 'limit' => 100]);
 
-                    continue;
+                        if ($postResponse->successful()) {
+                            $response = $postResponse;
+                        } else {
+                            Log::debug(self::LOG_PREFIX." Product fetch failed: {$productUrl}", [
+                                'status' => $response->status(),
+                            ]);
+
+                            continue;
+                        }
+                    } else {
+                        Log::debug(self::LOG_PREFIX." Product fetch failed: {$productUrl}", [
+                            'status' => $response->status(),
+                        ]);
+
+                        continue;
+                    }
                 }
 
                 $data = $response->json();
@@ -948,7 +1011,7 @@ class ApiDiscoveryService
         // 2. Check prioritized keys (matching keywords first, then standard keys)
         $priorityKeys = array_values(array_unique(array_merge($keywords, [
             'data', 'courses', 'categories', 'products', 'foods', 'items', 'menu',
-            'results', 'payload', 'list', 'records', 'rows',
+            'owners', 'units', 'results', 'payload', 'list', 'records', 'rows',
         ])));
 
         foreach ($priorityKeys as $key) {
