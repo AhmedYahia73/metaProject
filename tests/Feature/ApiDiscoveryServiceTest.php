@@ -714,3 +714,108 @@ HTML;
     expect($result['products'][1]['name'])->toBe('Chemistry Level 2');
     expect($result['products'][1]['price'])->toBe(200);
 });
+
+test('scrapeViaWebSession strips layout chrome, sidebar navigation and header badges, extracting only genuine content cards', function () {
+    $loginHtml = <<<'HTML'
+<form action="https://school.test/login_store" method="POST">
+    <input type="hidden" name="_token" value="tok123">
+    <input type="email" name="email">
+    <input type="password" name="password">
+</form>
+HTML;
+
+    // A Metronic-like HTML page with sidebar navigation, header profile, notification badges, and a real package card in content
+    $packagesPageHtml = <<<'HTML'
+<!DOCTYPE html>
+<html>
+<head><title>Student Packages</title></head>
+<body>
+    <!-- Topbar / Header (must be ignored) -->
+    <header class="header">
+        <div class="user-menu">
+            <span class="user-greeting">Welcome, dev</span>
+            <div class="user-profile">
+                <a href="/profile">Amr Ahmed El-Mahalawy (dev)</a>
+                <img src="/images/users/default.png">
+            </div>
+            <div class="notifications">
+                <span class="badge">4999</span>
+                <span class="badge">5030</span>
+                <span class="badge">14727</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Sidebar Menu (must be ignored) -->
+    <aside class="sidebar">
+        <div class="menu-item">
+            <a href="/student/courses" class="menu-link">Courses</a>
+        </div>
+        <div class="menu-item">
+            <a href="/student/packages" class="menu-link">Packages</a>
+        </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main id="kt_content" class="content">
+        <div class="container">
+            <div class="card package-card">
+                <div class="card-body">
+                    <h3 class="package-title">Advanced SAT Algebra Package</h3>
+                    <p class="description">Comprehensive 30-day preparation package with full practice tests.</p>
+                    <span class="price">$199</span>
+                </div>
+            </div>
+            <div class="card package-card">
+                <div class="card-body">
+                    <h3 class="package-title">Calculus Masterclass</h3>
+                    <p class="description">Derivatives, Integrals and Limits.</p>
+                    <span class="price">1500 EGP</span>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer (must be ignored) -->
+    <footer class="footer">
+        <p>Copyright 2026</p>
+    </footer>
+</body>
+</html>
+HTML;
+
+    Http::fake([
+        'https://school.test/login' => Http::response($loginHtml, 200),
+        'https://school.test/login_store' => Http::response('', 302, [
+            'Location' => 'https://school.test/student/Student',
+        ]),
+        'https://school.test/student/Student' => Http::response('OK', 200),
+        'https://school.test/student/MyPackages' => Http::response($packagesPageHtml, 200, [
+            'Content-Type' => 'text/html; charset=UTF-8',
+        ]),
+    ]);
+
+    $service = new ApiDiscoveryService;
+    $result = $service->scrapeViaWebSession(
+        'https://school.test/login',
+        'dev@school.test',
+        'password123',
+        'https://school.test/student/MyPackages'
+    );
+
+    expect($result)->not->toBeNull();
+    expect($result['products'])->toHaveCount(2);
+
+    $names = array_column($result['products'], 'name');
+    expect($names)->toContain('Advanced SAT Algebra Package');
+    expect($names)->toContain('Calculus Masterclass');
+
+    // Ensure none of the header/navbar noise was captured
+    expect($names)->not->toContain('Courses');
+    expect($names)->not->toContain('Packages');
+    expect($names)->not->toContain('Welcome, dev');
+    expect($names)->not->toContain('Amr Ahmed El-Mahalawy (dev)');
+    expect($names)->not->toContain('4999');
+    expect($names)->not->toContain('5030');
+    expect($names)->not->toContain('14727');
+});

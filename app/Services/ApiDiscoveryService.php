@@ -1754,6 +1754,19 @@ class ApiDiscoveryService
                 return null;
             }
 
+            // Discover and log available student navigation links for user visibility
+            if (preg_match_all('/<a\b[^>]*?\bhref=["\']([^"\']*(?:student|course|package)[^"\']*)["\']/i', $bodyContent, $linkMatches)) {
+                $discoveredStudentLinks = array_values(array_unique(array_filter(
+                    $linkMatches[1],
+                    fn ($l) => ! str_contains($l, '#') && ! str_contains($l, 'logout') && strlen($l) < 80
+                )));
+                if (! empty($discoveredStudentLinks)) {
+                    Log::info(self::LOG_PREFIX.' [WebSession] Available student portal links discovered on site:', [
+                        'links' => array_slice($discoveredStudentLinks, 0, 10),
+                    ]);
+                }
+            }
+
             // 4. Extract items (supports JSON, embedded scripts/Inertia props, and HTML DOM tables/cards)
             $contentType = $productsResp->header('Content-Type') ?? '';
             $rawItems = [];
@@ -1767,9 +1780,11 @@ class ApiDiscoveryService
 
             if (empty($rawItems)) {
                 $pageTitle = preg_match('/<title[^>]*>(.*?)<\/title>/is', $bodyContent, $titleMatch) ? trim(strip_tags($titleMatch[1])) : 'Unknown';
-                Log::debug(self::LOG_PREFIX.' [WebSession] No items extracted from page.', [
+                $cleanText = trim(preg_replace('/\s+/', ' ', strip_tags($bodyContent)));
+                Log::info(self::LOG_PREFIX.' [WebSession] No course/package items found in page content area (account may have no active items on this page).', [
                     'page_title' => $pageTitle,
-                    'html_length' => strlen($bodyContent),
+                    'url' => $productsLink,
+                    'content_preview' => mb_substr($cleanText, 0, 150),
                 ]);
 
                 return null;
@@ -1873,7 +1888,56 @@ class ApiDiscoveryService
     }
 
     /**
+     * Validate whether a string is a legitimate item / product / course name
+     * (rejecting pure numbers, user greetings, navigation keywords, and empty strings).
+     */
+    protected function isValidItemName(string $name): bool
+    {
+        $clean = trim(preg_replace('/\s+/', ' ', strip_tags($name)));
+
+        if (mb_strlen($clean) < 3) {
+            return false;
+        }
+
+        // Must contain at least one letter (Latin or Arabic)
+        if (! preg_match('/[\p{L}]/u', $clean)) {
+            return false;
+        }
+
+        // Reject pure numbers and numeric identifiers (e.g. "4999", "5030", "14727")
+        if (preg_match('/^[0-9\s.,#:\/-]+$/', $clean)) {
+            return false;
+        }
+
+        // Reject user greetings in header
+        if (stripos($clean, 'welcome') === 0) {
+            return false;
+        }
+
+        $lower = strtolower($clean);
+
+        // Filter out layout, navigation, and administrative words
+        $ignoredKeywords = [
+            'courses', 'my courses', 'packages', 'my packages', 'all packages', 'all courses',
+            'home', 'dashboard', 'welcome', 'logout', 'login', 'sign in', 'sign out',
+            'profile', 'my profile', 'settings', 'account', 'notifications',
+            'student', 'admin', 'teacher', 'instructor', 'menu', 'navigation',
+            'previous', 'next', 'back', 'view', 'details', 'action', 'actions',
+            'status', 'edit', 'delete', 'filter', 'search', 'sort', 'all',
+            'dev', 'user', 'default', 'close', 'open', 'read more', 'click here',
+            'view all', 'show more', 'load more', 'select', 'choose',
+        ];
+
+        if (in_array($lower, $ignoredKeywords, true)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
      * Extract product / course / item structures from HTML DOM (tables, cards, lists, embedded JSON).
+     * Automatically strips layout chrome (header, sidebar, navbar, user profile, footer) first.
      *
      * @return array<int, array<string, mixed>>
      */
@@ -1895,7 +1959,7 @@ class ApiDiscoveryService
         }
 
         // Strategy B: Inline script JSON arrays: var courses = [...]; or items = [...]
-        if (preg_match_all('/(?:var|let|const|window\.)\s*(?:courses|products|items|data|lessons|units)\s*=\s*(\[\s*\{.*?\}\s*\])\s*;/is', $html, $scriptMatches)) {
+        if (preg_match_all('/(?:var|let|const|window\.)\s*(?:courses|packages|products|items|data|lessons|units)\s*=\s*(\[\s*\{.*?\}\s*\])\s*;/is', $html, $scriptMatches)) {
             foreach ($scriptMatches[1] as $jsonBlock) {
                 $decoded = json_decode($jsonBlock, true);
                 if ($decoded && is_array($decoded)) {
@@ -1911,15 +1975,52 @@ class ApiDiscoveryService
         @$dom->loadHTML('<?xml encoding="utf-8" ?>'.$html, LIBXML_NOERROR | LIBXML_NOWARNING);
         $xpath = new \DOMXPath($dom);
 
+        // Strip layout chrome (header, footer, nav, sidebar, offcanvas, drawers, scripts, styles)
+        $chromeQuery = '//header | //footer | //nav | //aside | //script | //style | //noscript | '
+            .'//*[contains(@class, "sidebar") or contains(@class, "aside") or contains(@class, "navbar") or contains(@class, "topbar") or contains(@class, "toolbar") or contains(@class, "header") or contains(@class, "footer") or contains(@class, "breadcrumb") or contains(@class, "drawer") or contains(@class, "menu") or contains(@class, "user-menu") or contains(@class, "profile-dropdown") or contains(@class, "notification")] | '
+            .'//*[contains(@id, "sidebar") or contains(@id, "aside") or contains(@id, "navbar") or contains(@id, "topbar") or contains(@id, "toolbar") or contains(@id, "header") or contains(@id, "footer") or contains(@id, "drawer")]';
+
+        $chromeNodes = $xpath->query($chromeQuery);
+        if ($chromeNodes && $chromeNodes->length > 0) {
+            $toRemove = [];
+            foreach ($chromeNodes as $node) {
+                $toRemove[] = $node;
+            }
+            foreach ($toRemove as $node) {
+                if ($node->parentNode) {
+                    $node->parentNode->removeChild($node);
+                }
+            }
+        }
+
         $items = [];
 
-        // Strategy C: HTML Table Rows (common in student courses, admin tables, schedules)
+        // Strategy C: HTML Table Rows in content area (common in courses, packages, schedules)
         $rows = $xpath->query('//table//tbody//tr|//table//tr[td]');
         if ($rows && $rows->length > 0) {
             foreach ($rows as $index => $row) {
                 $cells = $xpath->query('.//td', $row);
                 if ($cells && $cells->length >= 2) {
                     $name = trim($cells->item(0)->textContent);
+                    // If first cell has link or bold text, prefer that
+                    $linkInCell = $xpath->query('.//a|.//strong|.//b', $cells->item(0));
+                    if ($linkInCell && $linkInCell->length > 0) {
+                        $candidate = trim($linkInCell->item(0)->textContent);
+                        if (strlen($candidate) > 2) {
+                            $name = $candidate;
+                        }
+                    }
+
+                    if (! $this->isValidItemName($name)) {
+                        // Check second cell
+                        $name2 = trim($cells->item(1)->textContent);
+                        if ($this->isValidItemName($name2)) {
+                            $name = $name2;
+                        } else {
+                            continue;
+                        }
+                    }
+
                     $desc = $cells->length >= 3 ? trim($cells->item(1)->textContent) : null;
                     $price = null;
                     for ($i = 1; $i < $cells->length; $i++) {
@@ -1935,51 +2036,8 @@ class ApiDiscoveryService
                     $imgNode = $xpath->query('.//img', $row);
                     $img = ($imgNode && $imgNode->length > 0) ? $imgNode->item(0)->getAttribute('src') : null;
 
-                    if (! empty($name) && strlen($name) > 2) {
-                        $items[] = [
-                            'id' => $index + 1,
-                            'name' => $name,
-                            'description' => $desc,
-                            'price' => $price,
-                            'image' => $img,
-                        ];
-                    }
-                }
-            }
-
-            if (! empty($items)) {
-                return $items;
-            }
-        }
-
-        // Strategy D: Cards / Grid Items (.card, .course, .product, .item, .col-, .widget)
-        $cardQuery = '//*[contains(concat(" ", normalize-space(@class), " "), " card ") '
-            .'or contains(concat(" ", normalize-space(@class), " "), " course ") '
-            .'or contains(concat(" ", normalize-space(@class), " "), " product ") '
-            .'or contains(@class, "course-card") '
-            .'or contains(@class, "product-card") '
-            .'or contains(@class, "item-card") '
-            .'or contains(@class, "col-") '
-            .'or contains(@class, "widget")]';
-
-        $cardNodes = $xpath->query($cardQuery);
-        if ($cardNodes && $cardNodes->length >= 1) {
-            foreach ($cardNodes as $idx => $card) {
-                $titleNode = $xpath->query('.//h1|.//h2|.//h3|.//h4|.//h5|.//h6|.//a[contains(@class, "title")]|.//div[contains(@class, "title")]|.//a[contains(@class, "name")]|.//a[contains(@href, "/")]', $card);
-                $name = ($titleNode && $titleNode->length > 0) ? trim($titleNode->item(0)->textContent) : null;
-
-                $descNode = $xpath->query('.//p|.//div[contains(@class, "text")]|.//div[contains(@class, "desc")]|.//div[contains(@class, "detail")]', $card);
-                $desc = ($descNode && $descNode->length > 0) ? trim($descNode->item(0)->textContent) : null;
-
-                $priceNode = $xpath->query('.//*[contains(@class, "price") or contains(@class, "fee") or contains(@class, "cost")]', $card);
-                $price = ($priceNode && $priceNode->length > 0) ? trim($priceNode->item(0)->textContent) : null;
-
-                $imgNode = $xpath->query('.//img', $card);
-                $img = ($imgNode && $imgNode->length > 0) ? $imgNode->item(0)->getAttribute('src') : null;
-
-                if (! empty($name) && strlen($name) > 2) {
                     $items[] = [
-                        'id' => $idx + 1,
+                        'id' => $index + 1,
                         'name' => $name,
                         'description' => $desc,
                         'price' => $price,
@@ -1987,9 +2045,140 @@ class ApiDiscoveryService
                     ];
                 }
             }
+
+            if (! empty($items)) {
+                return $this->deduplicateItemsByName($items);
+            }
         }
 
-        return $items;
+        // Strategy D: Cards, Accordions & Content Items in content area
+        $cardQuery = '//*[contains(concat(" ", normalize-space(@class), " "), " card ") '
+            .'or contains(@class, "course-card") '
+            .'or contains(@class, "package-card") '
+            .'or contains(@class, "product-card") '
+            .'or contains(@class, "item-card") '
+            .'or contains(@class, "course-box") '
+            .'or contains(@class, "package-box") '
+            .'or contains(@class, "accordion-item") '
+            .'or contains(@class, "list-group-item") '
+            .'or contains(@class, "card-body")]';
+
+        $cardNodes = $xpath->query($cardQuery);
+        if ($cardNodes && $cardNodes->length >= 1) {
+            foreach ($cardNodes as $idx => $card) {
+                // Strict prioritized title discovery
+                $name = null;
+
+                // Priority 1: Elements with explicit title, name, course, package classes
+                $titleNodes = $xpath->query('.//*[contains(@class, "title") or contains(@class, "name") or contains(@class, "heading") or contains(@class, "course") or contains(@class, "package")]', $card);
+                if ($titleNodes && $titleNodes->length > 0) {
+                    foreach ($titleNodes as $tn) {
+                        $candidate = trim(preg_replace('/\s+/', ' ', strip_tags($tn->textContent)));
+                        if ($this->isValidItemName($candidate)) {
+                            $name = $candidate;
+                            break;
+                        }
+                    }
+                }
+
+                // Priority 2: Headings h1..h6
+                if (! $name) {
+                    $headingNodes = $xpath->query('.//h1|.//h2|.//h3|.//h4|.//h5|.//h6', $card);
+                    if ($headingNodes && $headingNodes->length > 0) {
+                        foreach ($headingNodes as $hn) {
+                            $candidate = trim(preg_replace('/\s+/', ' ', strip_tags($hn->textContent)));
+                            if ($this->isValidItemName($candidate)) {
+                                $name = $candidate;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Priority 3: Bold / Strong text
+                if (! $name) {
+                    $boldNodes = $xpath->query('.//strong|.//b', $card);
+                    if ($boldNodes && $boldNodes->length > 0) {
+                        foreach ($boldNodes as $bn) {
+                            $candidate = trim(preg_replace('/\s+/', ' ', strip_tags($bn->textContent)));
+                            if ($this->isValidItemName($candidate)) {
+                                $name = $candidate;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Priority 4: Anchor tags with meaningful title/text classes
+                if (! $name) {
+                    $aNodes = $xpath->query('.//a[contains(@class, "text-") or contains(@class, "title") or contains(@class, "name")]', $card);
+                    if ($aNodes && $aNodes->length > 0) {
+                        foreach ($aNodes as $an) {
+                            $candidate = trim(preg_replace('/\s+/', ' ', strip_tags($an->textContent)));
+                            if ($this->isValidItemName($candidate)) {
+                                $name = $candidate;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (! $name || ! $this->isValidItemName($name)) {
+                    continue;
+                }
+
+                // Description
+                $descNode = $xpath->query('.//p|.//div[contains(@class, "text")]|.//div[contains(@class, "desc")]|.//div[contains(@class, "detail")]', $card);
+                $desc = ($descNode && $descNode->length > 0) ? trim(strip_tags($descNode->item(0)->textContent)) : null;
+
+                // Price
+                $priceNode = $xpath->query('.//*[contains(@class, "price") or contains(@class, "fee") or contains(@class, "cost")]', $card);
+                $price = null;
+                if ($priceNode && $priceNode->length > 0) {
+                    $priceTxt = trim($priceNode->item(0)->textContent);
+                    if (preg_match('/(?:[\$£€]|EGP|LE|SAR|USD|ج\.م|جنيه|ريال)\s*([0-9]+(?:\.[0-9]+)?)/i', $priceTxt, $m)) {
+                        $price = $m[1];
+                    } elseif (preg_match('/^[0-9]+(?:\.[0-9]+)?$/', $priceTxt, $m)) {
+                        $price = $m[0];
+                    }
+                }
+
+                // Image
+                $imgNode = $xpath->query('.//img[not(contains(@src, "default.png")) and not(contains(@src, "icon")) and not(contains(@src, "arrow"))]', $card);
+                $img = ($imgNode && $imgNode->length > 0) ? $imgNode->item(0)->getAttribute('src') : null;
+
+                $items[] = [
+                    'id' => $idx + 1,
+                    'name' => $name,
+                    'description' => $desc,
+                    'price' => $price,
+                    'image' => $img,
+                ];
+            }
+        }
+
+        return $this->deduplicateItemsByName($items);
+    }
+
+    /**
+     * Deduplicate items by normalized name.
+     *
+     * @param  array<int, array<string, mixed>>  $items
+     * @return array<int, array<string, mixed>>
+     */
+    protected function deduplicateItemsByName(array $items): array
+    {
+        $seen = [];
+        $unique = [];
+        foreach ($items as $item) {
+            $key = mb_strtolower(trim($item['name'] ?? ''));
+            if ($key !== '' && ! isset($seen[$key])) {
+                $seen[$key] = true;
+                $unique[] = $item;
+            }
+        }
+
+        return array_values($unique);
     }
 
     /**
