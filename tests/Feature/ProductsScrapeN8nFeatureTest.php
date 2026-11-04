@@ -6,6 +6,7 @@ use App\Models\TelegramAccount;
 use App\Models\TikTokAccount;
 use App\Models\User;
 use App\Models\WhatsItem;
+use App\Services\ApiDiscoveryService;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Http;
@@ -47,7 +48,7 @@ test('products:scrape-n8n dry-run lists accounts without making HTTP requests', 
     ]);
 
     $this->artisan('products:scrape-n8n --dry-run')
-        ->expectsOutputToContain('[DRY-RUN] Would dispatch Instagram')
+        ->expectsOutputToContain('[DRY-RUN] Would scrape Instagram')
         ->assertSuccessful();
 
     Http::assertNothingSent();
@@ -91,9 +92,14 @@ test('products:scrape-n8n ignores accounts with api_link or missing credentials'
     });
 });
 
-test('products:scrape-n8n dispatches matching accounts across all channels to n8n webhook', function () {
+test('products:scrape-n8n uses api discovery first then falls back to n8n webhook', function () {
     Config::set('services.n8n.webhook_url', 'https://n8n.test/webhook/scrape');
     Config::set('services.n8n.webhook_secret', 'test-secret-token');
+
+    // Mock ApiDiscoveryService to return null (force n8n fallback)
+    $mockDiscovery = Mockery::mock(ApiDiscoveryService::class);
+    $mockDiscovery->shouldReceive('discoverAndFetch')->andReturn(null);
+    app()->instance(ApiDiscoveryService::class, $mockDiscovery);
 
     Http::fake([
         'https://n8n.test/webhook/scrape' => Http::response(['status' => 'queued'], 200),
@@ -130,6 +136,54 @@ test('products:scrape-n8n dispatches matching accounts across all channels to n8
             && in_array($body['channel'], ['instagram', 'whats'])
             && in_array($body['account_id'], [$instagram->id, $whats->id]);
     });
+});
+
+test('products:scrape-n8n saves products directly when api discovery succeeds', function () {
+    Config::set('services.n8n.webhook_url', 'https://n8n.test/webhook/scrape');
+
+    $discoveredProducts = [
+        ['id' => 1, 'name' => 'بيتزا مارغريتا', 'price' => 120],
+        ['id' => 2, 'name' => 'برجر كلاسيك', 'price' => 85],
+    ];
+
+    $mockDiscovery = Mockery::mock(ApiDiscoveryService::class);
+    $mockDiscovery->shouldReceive('discoverAndFetch')->andReturn([
+        'products' => $discoveredProducts,
+        'meta' => [
+            'source' => 'api_discovery',
+            'base_url' => 'https://bcknd.store.test',
+            'products_count' => 2,
+            'scraped_at' => now()->toIso8601String(),
+        ],
+    ]);
+    app()->instance(ApiDiscoveryService::class, $mockDiscovery);
+
+    Http::fake();
+
+    $user = User::factory()->create();
+
+    $whats = WhatsItem::factory()->create([
+        'user_id' => $user->id,
+        'api_link' => null,
+        'login_link' => 'https://store.test/login',
+        'user_name' => 'admin',
+        'password' => 'secret',
+        'products_link' => 'https://store.test/products',
+        'user_data' => null,
+    ]);
+
+    $this->artisan('products:scrape-n8n --channel=whats --id='.$whats->id)
+        ->assertSuccessful();
+
+    // n8n should NOT have been called since discovery succeeded
+    Http::assertNotSent(function ($request) {
+        return str_contains($request->url(), 'n8n.test');
+    });
+
+    $whats->refresh();
+    expect($whats->user_data)->toBeArray();
+    expect($whats->user_data)->toHaveCount(2);
+    expect($whats->user_data[0]['name'])->toBe('بيتزا مارغريتا');
 });
 
 test('internal webhook callback rejects request when token is invalid or missing', function () {

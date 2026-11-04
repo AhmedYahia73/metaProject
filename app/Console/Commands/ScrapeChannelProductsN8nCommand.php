@@ -7,6 +7,7 @@ use App\Models\MessengerAccount;
 use App\Models\TelegramAccount;
 use App\Models\TikTokAccount;
 use App\Models\WhatsItem;
+use App\Services\ApiDiscoveryService;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Http;
@@ -29,7 +30,7 @@ class ScrapeChannelProductsN8nCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Trigger n8n scraping workflow for channel accounts with credentials and without api_link';
+    protected $description = 'Scrape products from channel accounts via API discovery (with n8n fallback)';
 
     /**
      * Execute the console command.
@@ -98,6 +99,8 @@ class ScrapeChannelProductsN8nCommand extends Command
         $totalDispatched = 0;
         $totalFailed = 0;
 
+        $discoveryService = app(ApiDiscoveryService::class);
+
         foreach ($channels as $key => $config) {
             $channelName = $config['name'];
             /** @var class-string<Model> $modelClass */
@@ -137,6 +140,65 @@ class ScrapeChannelProductsN8nCommand extends Command
             foreach ($items as $item) {
                 $totalChecked++;
 
+                if ($isDryRun) {
+                    $this->line("  [DRY-RUN] Would scrape {$channelName} #{$item->id} (login: {$item->login_link}, products: {$item->products_link})");
+                    $totalDispatched++;
+
+                    continue;
+                }
+
+                // ── PRIMARY: Try API Discovery (universal, works for any SPA) ──
+                $this->line("  [*] Trying API discovery for {$channelName} #{$item->id}...");
+                Log::info("[products:scrape-n8n] Attempting API discovery for {$channelName} #{$item->id}.", [
+                    'channel' => $channelName,
+                    'account_id' => $item->id,
+                    'login_link' => $item->login_link,
+                    'products_link' => $item->products_link,
+                ]);
+
+                $result = $discoveryService->discoverAndFetch(
+                    $item->login_link,
+                    $item->user_name,
+                    $item->password,
+                    $item->products_link,
+                );
+
+                if ($result !== null && ! empty($result['products'])) {
+                    try {
+                        $item->update(['user_data' => $result['products']]);
+                        $count = count($result['products']);
+
+                        $this->info("  [✓] {$channelName} #{$item->id}: API discovery succeeded ({$count} products).");
+                        Log::info("[products:scrape-n8n] SUCCESS: API discovery for {$channelName} #{$item->id}.", [
+                            'channel' => $channelName,
+                            'account_id' => $item->id,
+                            'products_count' => $count,
+                            'source' => 'api_discovery',
+                            'base_url' => $result['meta']['base_url'] ?? null,
+                            'sample_item' => $result['products'][0] ?? null,
+                        ]);
+                        $totalDispatched++;
+
+                        continue;
+                    } catch (\Throwable $e) {
+                        Log::error("[products:scrape-n8n] DB error saving API discovery results for {$channelName} #{$item->id}.", [
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
+
+                // ── FALLBACK: Dispatch to n8n ──
+                if (empty($n8nUrl)) {
+                    $this->error("  [✗] {$channelName} #{$item->id}: API discovery failed and no n8n URL configured.");
+                    Log::warning("[products:scrape-n8n] API discovery failed and no n8n fallback for {$channelName} #{$item->id}.");
+                    $totalFailed++;
+
+                    continue;
+                }
+
+                $this->line("  [*] API discovery failed, falling back to n8n for {$channelName} #{$item->id}...");
+                Log::info("[products:scrape-n8n] Falling back to n8n for {$channelName} #{$item->id}.");
+
                 $payload = [
                     'channel' => $key,
                     'account_id' => $item->id,
@@ -148,21 +210,6 @@ class ScrapeChannelProductsN8nCommand extends Command
                     'secret_token' => $n8nSecret,
                     'triggered_at' => now()->toIso8601String(),
                 ];
-
-                if ($isDryRun) {
-                    $this->line("  [DRY-RUN] Would dispatch {$channelName} #{$item->id} to n8n (login: {$item->login_link}, products: {$item->products_link})");
-                    $totalDispatched++;
-
-                    continue;
-                }
-
-                $this->line("  [*] Dispatching {$channelName} #{$item->id} to n8n...");
-                Log::info("[products:scrape-n8n] Dispatching to n8n for {$channelName} #{$item->id}.", [
-                    'channel' => $channelName,
-                    'account_id' => $item->id,
-                    'login_link' => $item->login_link,
-                    'products_link' => $item->products_link,
-                ]);
 
                 try {
                     $request = Http::timeout(15)
@@ -182,7 +229,7 @@ class ScrapeChannelProductsN8nCommand extends Command
                     $response = $request->retry(2, 500, throw: false)->post($n8nUrl, $payload);
 
                     if ($response->successful()) {
-                        $this->info("  [✓] {$channelName} #{$item->id}: Successfully dispatched to n8n.");
+                        $this->info("  [✓] {$channelName} #{$item->id}: Dispatched to n8n fallback.");
                         Log::info("[products:scrape-n8n] SUCCESS: Dispatched {$channelName} #{$item->id} to n8n.", [
                             'channel' => $channelName,
                             'account_id' => $item->id,
