@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Models\Package;
 use App\Models\WhatsItem;
+use App\Services\EcommerceStoreService;
 use App\Services\EmbeddedSignupService;
 use App\Services\MetaWhatsAppService;
 use App\trait\image;
@@ -367,12 +368,65 @@ class WhatsPagesController extends Controller
         $fresh = $whatsItem->fresh()->makeVisible('user_data');
         $freshArray = $fresh->toArray();
         $freshArray['store_webhook_url'] = $fresh->getStoreWebhookUrl();
+        $freshArray['client_id'] = $fresh->user_name;
+        $freshArray['client_secret'] = $fresh->password;
 
         return response()->json([
             'status' => true,
             'message' => 'WhatsApp item updated successfully.',
             'data' => $freshArray,
         ]);
+    }
+
+    /**
+     * Connect or verify Shopify credentials and generate access token.
+     */
+    public function connectShopify(Request $request, WhatsItem $whatsItem): JsonResponse
+    {
+        $this->authorizeItem($request->user(), $whatsItem);
+
+        $validated = $request->validate([
+            'website_url' => 'sometimes|nullable|string|max:500',
+            'client_id' => 'sometimes|nullable|string|max:255',
+            'user_name' => 'sometimes|nullable|string|max:255',
+            'secret' => 'sometimes|nullable|string|max:500',
+            'client_secret' => 'sometimes|nullable|string|max:500',
+            'password' => 'sometimes|nullable|string|max:500',
+            'order_confirmation_enabled' => 'sometimes|boolean',
+        ]);
+
+        $domain = $validated['website_url'] ?? $whatsItem->website_url;
+        $clientId = $validated['client_id'] ?? ($validated['user_name'] ?? $whatsItem->user_name);
+        $secret = $validated['secret'] ?? ($validated['client_secret'] ?? ($validated['password'] ?? $whatsItem->password));
+
+        /** @var EcommerceStoreService $storeService */
+        $storeService = app(EcommerceStoreService::class);
+        $result = $storeService->connectShopify($whatsItem, $domain, $clientId, $secret);
+
+        if ($request->has('order_confirmation_enabled')) {
+            $orderConfirmationEnabled = $request->boolean('order_confirmation_enabled');
+            if ($orderConfirmationEnabled) {
+                WhatsItem::where('user_id', $request->user()->id)
+                    ->where('id', '!=', $whatsItem->id)
+                    ->update(['order_confirmation_enabled' => false]);
+            }
+            $whatsItem->update([
+                'order_confirmation_enabled' => $orderConfirmationEnabled,
+            ]);
+        }
+
+        $fresh = $whatsItem->fresh();
+        $freshArray = $fresh->toArray();
+        $freshArray['store_webhook_url'] = $fresh->getStoreWebhookUrl();
+        $freshArray['client_id'] = $fresh->user_name;
+        $freshArray['client_secret'] = $fresh->password;
+
+        return response()->json([
+            'status' => $result['status'],
+            'message' => $result['message'],
+            'data' => $freshArray,
+            'shopify' => $result,
+        ], $result['status'] ? Response::HTTP_OK : Response::HTTP_BAD_REQUEST);
     }
 
     /**

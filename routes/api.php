@@ -162,6 +162,8 @@ Route::prefix('user')->group(function () {
         Route::post('whats/items', [WhatsPagesController::class, 'store']);
         Route::get('whats/items/{whatsItem}', [WhatsPagesController::class, 'show']);
         Route::put('whats/items/{whatsItem}', [WhatsPagesController::class, 'update']);
+        Route::post('whats/items/{whatsItem}', [WhatsPagesController::class, 'update']);
+        Route::post('whats/items/{whatsItem}/connect-shopify', [WhatsPagesController::class, 'connectShopify']);
         Route::delete('whats/items/{whatsItem}', [WhatsPagesController::class, 'destroy']);
         Route::post('whats/items/{whatsItem}/request-code', [WhatsPagesController::class, 'requestCode']);
         Route::post('whats/items/{whatsItem}/verify-and-register', [WhatsPagesController::class, 'verifyAndRegister']);

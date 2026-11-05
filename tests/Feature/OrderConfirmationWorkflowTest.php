@@ -106,6 +106,43 @@ test('user can save shopify client_id and secret via API and retrieve them', fun
         ]);
 });
 
+test('user can connect shopify directly using connect-shopify endpoint', function () {
+    $user = createStoreUser();
+    $item = createStoreWhatsItem($user);
+
+    Http::fake([
+        'mystore.myshopify.com/admin/oauth/access_token' => Http::response(['access_token' => 'shpca_live_token_777']),
+        'mystore.myshopify.com/admin/api/2024-01/shop.json' => Http::response([
+            'shop' => [
+                'name' => 'متجر الأحذية العصري',
+                'email' => 'store@example.com',
+                'currency' => 'EGP',
+            ],
+        ]),
+    ]);
+
+    $response = $this->actingAs($user)
+        ->postJson("/api/user/whats/items/{$item->id}/connect-shopify", [
+            'website_url' => 'mystore.myshopify.com',
+            'client_id' => 'my_client_id_abc',
+            'secret' => 'my_secret_xyz',
+            'order_confirmation_enabled' => true,
+        ]);
+
+    $response->assertStatus(200)
+        ->assertJson([
+            'status' => true,
+            'message' => 'Shopify store connected successfully.',
+            'shopify' => [
+                'access_token' => 'shpca_live_token_777',
+            ],
+        ]);
+
+    expect($item->fresh()->shopify_access_token)->toBe('shpca_live_token_777')
+        ->and($item->fresh()->ecommerce_platform)->toBe('shopify')
+        ->and($item->fresh()->order_confirmation_enabled)->toBeTrue();
+});
+
 test('woocommerce webhook creates ecommerce order and dispatches template with approve and reject buttons', function () {
     $user = createStoreUser();
     $whatsItem = createStoreWhatsItem($user);

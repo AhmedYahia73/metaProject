@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\EcommerceOrder;
+use App\Models\WhatsItem;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -181,7 +182,7 @@ class EcommerceStoreService
     /**
      * Resolve the Shopify Access Token using direct token or client_id/secret credentials.
      */
-    protected function resolveShopifyAccessToken(WhatsItem $whatsItem, string $domain): ?string
+    public function resolveShopifyAccessToken(WhatsItem $whatsItem, string $domain): ?string
     {
         // 1. Direct saved access token
         if (! empty($whatsItem->shopify_access_token)) {
@@ -218,5 +219,92 @@ class EcommerceStoreService
         }
 
         return ! empty($secretOrToken) ? $secretOrToken : null;
+    }
+
+    /**
+     * Test and connect a Shopify store by fetching or validating its access token.
+     *
+     * @return array{status: bool, message: string, access_token?: ?string, shop?: ?array, error?: ?string}
+     */
+    public function connectShopify(WhatsItem $whatsItem, ?string $domain = null, ?string $clientId = null, ?string $secret = null): array
+    {
+        $domain = $domain ?: $whatsItem->website_url;
+        $clientId = $clientId ?: $whatsItem->user_name;
+        $secret = $secret ?: $whatsItem->password;
+
+        if (empty($domain)) {
+            return [
+                'status' => false,
+                'message' => 'Shopify store URL/domain is required (e.g. mystore.myshopify.com).',
+            ];
+        }
+
+        $cleanDomain = preg_replace('#^https?://#', '', rtrim($domain, '/'));
+
+        if (empty($secret)) {
+            return [
+                'status' => false,
+                'message' => 'Shopify secret or access token is required.',
+            ];
+        }
+
+        // 1. If secret is already an Admin API Access Token or needs exchange
+        $token = $secret;
+        if (! str_starts_with($secret, 'shpat_') && ! str_starts_with($secret, 'shpca_') && ! empty($clientId)) {
+            try {
+                $response = Http::timeout(10)->post("https://{$cleanDomain}/admin/oauth/access_token", [
+                    'client_id' => $clientId,
+                    'client_secret' => $secret,
+                    'grant_type' => 'client_credentials',
+                ]);
+
+                if ($response->successful() && $response->json('access_token')) {
+                    $token = $response->json('access_token');
+                }
+            } catch (\Throwable $e) {
+                Log::warning('EcommerceStoreService: Token exchange error: '.$e->getMessage());
+            }
+        }
+
+        // 2. Validate token against Shopify shop endpoint
+        try {
+            $shopResponse = Http::withHeaders([
+                'X-Shopify-Access-Token' => $token,
+            ])->timeout(10)->get("https://{$cleanDomain}/admin/api/2024-01/shop.json");
+
+            if ($shopResponse->successful()) {
+                $shopData = $shopResponse->json('shop', []);
+                $whatsItem->update([
+                    'website_url' => $cleanDomain,
+                    'user_name' => $clientId,
+                    'password' => $secret,
+                    'shopify_access_token' => $token,
+                    'ecommerce_platform' => 'shopify',
+                ]);
+
+                return [
+                    'status' => true,
+                    'message' => 'Shopify store connected successfully.',
+                    'access_token' => $token,
+                    'shop' => [
+                        'name' => $shopData['name'] ?? null,
+                        'email' => $shopData['email'] ?? null,
+                        'domain' => $shopData['domain'] ?? $cleanDomain,
+                        'currency' => $shopData['currency'] ?? 'EGP',
+                    ],
+                ];
+            }
+
+            return [
+                'status' => false,
+                'message' => 'Failed to connect to Shopify. Please verify your domain, client_id, and secret.',
+                'error' => $shopResponse->body(),
+            ];
+        } catch (\Throwable $e) {
+            return [
+                'status' => false,
+                'message' => 'Connection to Shopify failed: '.$e->getMessage(),
+            ];
+        }
     }
 }
