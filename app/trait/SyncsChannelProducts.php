@@ -2,16 +2,33 @@
 
 namespace App\trait;
 
+use App\Console\Commands\ScrapeChannelProductsN8nCommand;
+use App\Models\InstagramItem;
+use App\Models\MessengerAccount;
+use App\Models\TelegramAccount;
+use App\Models\TikTokAccount;
+use App\Models\WhatsItem;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\Factory;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 trait SyncsChannelProducts
 {
     /**
+     * Prevent recursion during products:scrape-n8n execution.
+     */
+    protected static bool $isScrapingChannelProducts = false;
+
+    /**
+     * Flag to enable auto-scraping products_link during unit tests.
+     */
+    public static bool $enableScrapeOnSaveInTests = false;
+
+    /**
      * Boot the SyncsChannelProducts trait for the model.
-     * Automatically triggers products sync when api_link is created or updated.
+     * Automatically triggers products sync when api_link or products_link is created or updated.
      */
     public static function bootSyncsChannelProducts(): void
     {
@@ -69,6 +86,84 @@ trait SyncsChannelProducts
                 ]);
             }
         });
+
+        static::created(function (Model $model) {
+            if (! empty($model->products_link)) {
+                static::triggerProductsScrapeIfNeeded($model, 'create');
+            }
+        });
+
+        static::updated(function (Model $model) {
+            if ($model->wasChanged('products_link') && ! empty($model->products_link)) {
+                static::triggerProductsScrapeIfNeeded($model, 'update');
+            }
+        });
+    }
+
+    /**
+     * Trigger products:scrape-n8n command for the model if conditions are met.
+     */
+    protected static function triggerProductsScrapeIfNeeded(Model $model, string $action): void
+    {
+        if (ScrapeChannelProductsN8nCommand::$isScraping) {
+            return;
+        }
+
+        if (app()->runningUnitTests() && ! config('services.products_scrape.enable_in_tests', false)) {
+            return;
+        }
+
+        // If api_link is present, api_link takes precedence over web scraping
+        if (! empty($model->api_link)) {
+            return;
+        }
+
+        $channelKey = static::resolveChannelKeyForModel($model);
+        if (! $channelKey || ! $model->id) {
+            return;
+        }
+
+        // Ensure required login credentials exist before attempting scrape
+        if (empty($model->login_link) || empty($model->user_name) || empty($model->password)) {
+            Log::info("[products_link:scrape] Model #{$model->id} has products_link but missing login credentials. Skipping immediate scrape.", [
+                'model' => class_basename($model),
+                'id' => $model->id,
+            ]);
+
+            return;
+        }
+
+        try {
+            Log::info("[products_link:scrape] Triggering products:scrape-n8n for {$channelKey} #{$model->id} on {$action}.", [
+                'channel' => $channelKey,
+                'id' => $model->id,
+                'products_link' => $model->products_link,
+            ]);
+
+            Artisan::call('products:scrape-n8n', [
+                '--channel' => $channelKey,
+                '--id' => (string) $model->id,
+            ]);
+
+            Log::info("[products_link:scrape] Completed products:scrape-n8n for {$channelKey} #{$model->id}.");
+        } catch (\Throwable $e) {
+            Log::error("[products_link:scrape] Error running products:scrape-n8n for {$channelKey} #{$model->id}: ".$e->getMessage());
+        }
+    }
+
+    /**
+     * Resolve the channel key expected by products:scrape-n8n for a given model.
+     */
+    public static function resolveChannelKeyForModel(Model $model): ?string
+    {
+        return match ($model::class) {
+            InstagramItem::class => 'instagram',
+            MessengerAccount::class => 'messenger',
+            TelegramAccount::class => 'telegram',
+            TikTokAccount::class => 'tiktok',
+            WhatsItem::class => 'whats',
+            default => null,
+        };
     }
 
     /**

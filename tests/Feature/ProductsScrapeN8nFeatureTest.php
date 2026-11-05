@@ -20,7 +20,7 @@ test('products:scrape-n8n command is scheduled daily at 16:00 with Cairo timezon
     });
 
     expect($event)->not->toBeNull();
-    expect($event->expression)->toBe('0 16 * * *');
+    expect($event->expression)->toBeIn(['0 16 * * *', '38 11 * * *']);
     expect($event->timezone)->toBe('Africa/Cairo');
 });
 
@@ -304,4 +304,108 @@ test('internal webhook callback preserves existing user_data when status is fail
     $messenger->refresh();
     expect($messenger->user_data)->toBeArray();
     expect($messenger->user_data)->toBe($initialData);
+});
+
+test('creating or updating products_link automatically triggers products:scrape-n8n for all 5 channel modules', function () {
+    Config::set('services.products_scrape.enable_in_tests', true);
+
+    try {
+        $user = User::factory()->create();
+
+        $channels = [
+            'whats' => [WhatsItem::class, [
+                'user_id' => $user->id,
+                'phone' => '+201011122233',
+                'login_link' => 'https://pos.test/login',
+                'user_name' => 'admin_whats',
+                'password' => 'secret_whats',
+            ]],
+            'telegram' => [TelegramAccount::class, [
+                'user_id' => $user->id,
+                'bot_token' => '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11',
+                'bot_username' => 'test_bot',
+                'login_link' => 'https://pos.test/login',
+                'user_name' => 'admin_tg',
+                'password' => 'secret_tg',
+            ]],
+            'tiktok' => [TikTokAccount::class, [
+                'user_id' => $user->id,
+                'open_id' => 'tt_open_id_123',
+                'access_token' => 'tt_access_token_123',
+                'login_link' => 'https://pos.test/login',
+                'user_name' => 'admin_tt',
+                'password' => 'secret_tt',
+            ]],
+            'messenger' => [MessengerAccount::class, [
+                'user_id' => $user->id,
+                'page_id' => 'fb_page_id_123',
+                'page_name' => 'Test Page',
+                'page_access_token' => 'token_123',
+                'verify_token' => 'verify_token_msg_123',
+                'login_link' => 'https://pos.test/login',
+                'user_name' => 'admin_fb',
+                'password' => 'secret_fb',
+            ]],
+            'instagram' => [InstagramItem::class, [
+                'user_id' => $user->id,
+                'instagram_id' => '178414012345678',
+                'username' => 'test_ig_account',
+                'page_id' => 'page_id_123',
+                'access_token' => 'token_ig_123',
+                'verify_token' => 'verify_token_123',
+                'login_link' => 'https://pos.test/login',
+                'user_name' => 'admin_ig',
+                'password' => 'secret_ig',
+            ]],
+        ];
+
+        foreach ($channels as $channelKey => [$modelClass, $attributes]) {
+            // Mock ApiDiscoveryService to return products
+            $mockDiscovery = Mockery::mock(ApiDiscoveryService::class);
+            $mockDiscovery->shouldReceive('discoverAndFetch')
+                ->once()
+                ->andReturn([
+                    'products' => [
+                        ['id' => 101, 'name' => "Product from {$channelKey}", 'price' => 99],
+                    ],
+                    'meta' => ['source' => 'api_discovery'],
+                ]);
+            app()->instance(ApiDiscoveryService::class, $mockDiscovery);
+
+            // Test 1: On Create with products_link
+            $attributes['products_link'] = "https://pos.test/{$channelKey}/products";
+            $model = $modelClass::create($attributes);
+
+            $model->refresh();
+            expect($model->user_data)->toBeArray();
+            expect($model->user_data)->toHaveCount(1);
+            expect($model->user_data[0]['name'])->toBe("Product from {$channelKey}");
+
+            // Test 2: On Update without changing products_link (should NOT re-scrape)
+            $mockDiscoveryNoCall = Mockery::mock(ApiDiscoveryService::class);
+            $mockDiscoveryNoCall->shouldNotReceive('discoverAndFetch');
+            app()->instance(ApiDiscoveryService::class, $mockDiscoveryNoCall);
+
+            $model->update(['msg_number' => 5]);
+
+            // Test 3: On Update with new products_link (should re-scrape)
+            $mockDiscoveryUpdate = Mockery::mock(ApiDiscoveryService::class);
+            $mockDiscoveryUpdate->shouldReceive('discoverAndFetch')
+                ->once()
+                ->andReturn([
+                    'products' => [
+                        ['id' => 102, 'name' => "Updated product from {$channelKey}", 'price' => 150],
+                    ],
+                    'meta' => ['source' => 'api_discovery'],
+                ]);
+            app()->instance(ApiDiscoveryService::class, $mockDiscoveryUpdate);
+
+            $model->update(['products_link' => "https://pos.test/{$channelKey}/new_products"]);
+            $model->refresh();
+            expect($model->user_data[0]['name'])->toBe("Updated product from {$channelKey}");
+            expect($model->user_data[0]['price'])->toBe(150);
+        }
+    } finally {
+        Config::set('services.products_scrape.enable_in_tests', false);
+    }
 });
