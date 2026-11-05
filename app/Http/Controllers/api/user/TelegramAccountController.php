@@ -51,7 +51,7 @@ class TelegramAccountController extends Controller
                     'user_name' => $account->user_name,
                     'password' => $account->password,
                     'products_link' => $account->products_link,
-                'user_data' => $account->user_data,
+                    'user_data' => $account->user_data,
                     'user_data' => $account->user_data,
                     'subscription_status' => $subInfo['subscription_status'],
                     'available_msgs' => $subInfo['available_msgs'],
@@ -85,6 +85,7 @@ class TelegramAccountController extends Controller
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
+            'product_link' => 'sometimes|nullable|string|max:500',
             'user_data' => 'sometimes|nullable',
         ]);
 
@@ -130,7 +131,7 @@ class TelegramAccountController extends Controller
             'login_link' => $validated['login_link'] ?? null,
             'user_name' => $validated['user_name'] ?? null,
             'password' => $validated['password'] ?? null,
-            'products_link' => $validated['products_link'] ?? null,
+            'products_link' => $validated['products_link'] ?? $request->input('product_link') ?? null,
             'user_data' => $validated['user_data'] ?? null,
         ];
 
@@ -250,6 +251,7 @@ class TelegramAccountController extends Controller
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
+            'product_link' => 'sometimes|nullable|string|max:500',
             'status' => 'sometimes|in:active,disabled',
             'user_data' => 'sometimes|nullable',
         ]);
@@ -297,8 +299,8 @@ class TelegramAccountController extends Controller
             $updateFields['password'] = $validated['password'];
         }
 
-        if ($request->has('products_link')) {
-            $updateFields['products_link'] = $validated['products_link'];
+        if ($request->has('products_link') || $request->has('product_link')) {
+            $updateFields['products_link'] = $request->input('products_link', $request->input('product_link'));
         }
 
         if ($request->has('status')) {

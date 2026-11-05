@@ -34,6 +34,7 @@ class TelegramAccount extends Model
         'user_name',
         'password',
         'products_link',
+        'product_link',
         'user_data',
         'msg_number',
         'start_date',

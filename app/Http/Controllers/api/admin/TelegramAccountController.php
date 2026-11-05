@@ -90,6 +90,7 @@ class TelegramAccountController extends Controller
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
+            'product_link' => 'sometimes|nullable|string|max:500',
             'msg_number' => 'sometimes|integer|min:0',
             'start_date' => 'sometimes|nullable|date',
             'end_date' => 'sometimes|nullable|date|after_or_equal:start_date',
@@ -136,7 +137,7 @@ class TelegramAccountController extends Controller
             'login_link' => $validated['login_link'] ?? null,
             'user_name' => $validated['user_name'] ?? null,
             'password' => $validated['password'] ?? null,
-            'products_link' => $validated['products_link'] ?? null,
+            'products_link' => $validated['products_link'] ?? $request->input('product_link') ?? null,
             'msg_number' => $validated['msg_number'] ?? 0,
             'start_date' => $validated['start_date'] ?? null,
             'end_date' => $validated['end_date'] ?? null,
@@ -225,6 +226,7 @@ class TelegramAccountController extends Controller
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
+            'product_link' => 'sometimes|nullable|string|max:500',
             'user_data' => 'sometimes|nullable',
             'status' => 'sometimes|in:active,disabled',
             'msg_number' => 'sometimes|integer|min:0',
@@ -275,8 +277,8 @@ class TelegramAccountController extends Controller
             $updateFields['password'] = $validated['password'];
         }
 
-        if ($request->has('products_link')) {
-            $updateFields['products_link'] = $validated['products_link'];
+        if ($request->has('products_link') || $request->has('product_link')) {
+            $updateFields['products_link'] = $request->input('products_link', $request->input('product_link'));
         }
 
         if ($request->has('status')) {

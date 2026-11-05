@@ -63,11 +63,16 @@ class WhatsItemController extends Controller
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
+            'product_link' => 'sometimes|nullable|string|max:500',
             'auto_request_code' => 'sometimes|boolean',
             'code_method' => 'sometimes|in:SMS,VOICE',
             'ai_context' => 'sometimes|nullable|string',
             'ai_file' => 'sometimes|nullable||file|mimes:txt,text,md|extensions:md|max:2048',
         ]);
+
+        if ($request->has('product_link') && ! $request->has('products_link')) {
+            $validated['products_link'] = $request->input('product_link');
+        }
 
         $phoneNumberId = null;
         $metaResponseInfo = null;
@@ -179,11 +184,16 @@ class WhatsItemController extends Controller
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
+            'product_link' => 'sometimes|nullable|string|max:500',
             'phone_status' => 'sometimes|in:pending_otp,verified,active',
             'ai_context' => 'sometimes|nullable|string',
             'ai_file' => 'sometimes|nullable',
             'user_data' => 'sometimes|nullable',
         ]);
+
+        if ($request->has('product_link') && ! $request->has('products_link')) {
+            $validated['products_link'] = $request->input('product_link');
+        }
 
         if ($request->hasFile('ai_file')) {
             $updatedPath = $this->update_image($request, $whatsItem->ai_file, 'ai_file', 'whats/ai_files');

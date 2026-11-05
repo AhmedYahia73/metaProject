@@ -89,7 +89,12 @@ class InstagramItemController extends Controller
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
+            'product_link' => 'sometimes|nullable|string|max:500',
         ]);
+
+        if ($request->has('product_link') && ! $request->has('products_link')) {
+            $validated['products_link'] = $request->input('product_link');
+        }
 
         unset($validated['msg_number']);
         $validated['user_id'] = $user->id;
@@ -171,8 +176,13 @@ class InstagramItemController extends Controller
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
+            'product_link' => 'sometimes|nullable|string|max:500',
             'user_data' => 'sometimes|nullable',
         ]);
+
+        if ($request->has('product_link') && ! $request->has('products_link')) {
+            $validated['products_link'] = $request->input('product_link');
+        }
 
         if ($request->hasFile('ai_file')) {
             $uploadedPath = $this->upload($request, 'ai_file', 'instagram/ai_files');

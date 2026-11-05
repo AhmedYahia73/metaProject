@@ -88,16 +88,37 @@ trait SyncsChannelProducts
         });
 
         static::created(function (Model $model) {
-            if (! empty($model->products_link)) {
+            $link = $model->products_link ?: ($model->product_link ?? null);
+            if (! empty($link)) {
                 static::triggerProductsScrapeIfNeeded($model, 'create');
             }
         });
 
         static::updated(function (Model $model) {
-            if ($model->wasChanged('products_link') && ! empty($model->products_link)) {
+            $linkChanged = $model->wasChanged('products_link') || $model->wasChanged('product_link');
+            $hasLink = ! empty($model->products_link) || ! empty($model->product_link);
+            $hasNoUserData = empty($model->user_data);
+
+            if ($linkChanged || ($hasLink && $hasNoUserData)) {
                 static::triggerProductsScrapeIfNeeded($model, 'update');
             }
         });
+    }
+
+    /**
+     * Mutator to allow setting products_link via product_link (singular).
+     */
+    public function setProductLinkAttribute($value): void
+    {
+        $this->attributes['products_link'] = $value;
+    }
+
+    /**
+     * Accessor to allow reading product_link (singular).
+     */
+    public function getProductLinkAttribute(): ?string
+    {
+        return $this->attributes['products_link'] ?? null;
     }
 
     /**
@@ -113,23 +134,13 @@ trait SyncsChannelProducts
             return;
         }
 
-        // If api_link is present, api_link takes precedence over web scraping
-        if (! empty($model->api_link)) {
-            return;
-        }
-
         $channelKey = static::resolveChannelKeyForModel($model);
         if (! $channelKey || ! $model->id) {
             return;
         }
 
-        // Ensure required login credentials exist before attempting scrape
-        if (empty($model->login_link) || empty($model->user_name) || empty($model->password)) {
-            Log::info("[products_link:scrape] Model #{$model->id} has products_link but missing login credentials. Skipping immediate scrape.", [
-                'model' => class_basename($model),
-                'id' => $model->id,
-            ]);
-
+        $productsLink = $model->products_link ?: ($model->product_link ?? null);
+        if (empty($productsLink)) {
             return;
         }
 
@@ -137,7 +148,7 @@ trait SyncsChannelProducts
             Log::info("[products_link:scrape] Triggering products:scrape-n8n for {$channelKey} #{$model->id} on {$action}.", [
                 'channel' => $channelKey,
                 'id' => $model->id,
-                'products_link' => $model->products_link,
+                'products_link' => $productsLink,
             ]);
 
             Artisan::call('products:scrape-n8n', [

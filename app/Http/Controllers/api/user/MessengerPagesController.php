@@ -194,6 +194,7 @@ class MessengerPagesController extends Controller
             'user_name' => 'sometimes',
             'password' => 'sometimes',
             'products_link' => 'sometimes',
+            'product_link' => 'sometimes',
             'user_data' => 'sometimes|nullable',
         ]);
 
@@ -234,8 +235,8 @@ class MessengerPagesController extends Controller
         if ($request->has('password')) {
             $updateFields['password'] = $request->password;
         }
-        if ($request->has('products_link')) {
-            $updateFields['products_link'] = $request->products_link;
+        if ($request->has('products_link') || $request->has('product_link')) {
+            $updateFields['products_link'] = $request->input('products_link', $request->input('product_link'));
         }
         if ($request->has('user_data')) {
             $updateFields['user_data'] = $request->user_data;

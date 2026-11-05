@@ -114,23 +114,27 @@ class ScrapeChannelProductsN8nCommand extends Command
                 /** @var class-string<Model> $modelClass */
                 $modelClass = $config['model'];
 
-                // Condition: has login_link, user_name, password, products_link AND does NOT have api_link
-                $query = $modelClass::query()
-                    ->where(function ($q) {
-                        $q->whereNull('api_link')
-                            ->orWhere('api_link', '');
-                    })
-                    ->whereNotNull('login_link')
-                    ->where('login_link', '!=', '')
-                    ->whereNotNull('products_link')
-                    ->where('products_link', '!=', '')
-                    ->whereNotNull('user_name')
-                    ->where('user_name', '!=', '')
-                    ->whereNotNull('password')
-                    ->where('password', '!=', '');
-
+                // When targeting a specific account by ID, scrape as long as it has a products_link.
+                // During automated batch/cron runs, only scrape accounts that don't use api_link and have credentials.
                 if ($idFilter) {
-                    $query->where('id', $idFilter);
+                    $query = $modelClass::query()
+                        ->where('id', $idFilter)
+                        ->whereNotNull('products_link')
+                        ->where('products_link', '!=', '');
+                } else {
+                    $query = $modelClass::query()
+                        ->where(function ($q) {
+                            $q->whereNull('api_link')
+                                ->orWhere('api_link', '');
+                        })
+                        ->whereNotNull('login_link')
+                        ->where('login_link', '!=', '')
+                        ->whereNotNull('products_link')
+                        ->where('products_link', '!=', '')
+                        ->whereNotNull('user_name')
+                        ->where('user_name', '!=', '')
+                        ->whereNotNull('password')
+                        ->where('password', '!=', '');
                 }
 
                 $items = $query->get();

@@ -404,7 +404,73 @@ test('creating or updating products_link automatically triggers products:scrape-
             $model->refresh();
             expect($model->user_data[0]['name'])->toBe("Updated product from {$channelKey}");
             expect($model->user_data[0]['price'])->toBe(150);
+
+            // Test 4: On Update using singular 'product_link' alias (should re-scrape)
+            $mockDiscoverySingular = Mockery::mock(ApiDiscoveryService::class);
+            $mockDiscoverySingular->shouldReceive('discoverAndFetch')
+                ->once()
+                ->andReturn([
+                    'products' => [
+                        ['id' => 103, 'name' => "Singular link product for {$channelKey}", 'price' => 175],
+                    ],
+                    'meta' => ['source' => 'api_discovery'],
+                ]);
+            app()->instance(ApiDiscoveryService::class, $mockDiscoverySingular);
+
+            $model->update(['product_link' => "https://pos.test/{$channelKey}/singular_link_products"]);
+            $model->refresh();
+            expect($model->products_link)->toBe("https://pos.test/{$channelKey}/singular_link_products");
+            expect($model->product_link)->toBe("https://pos.test/{$channelKey}/singular_link_products");
+            expect($model->user_data[0]['name'])->toBe("Singular link product for {$channelKey}");
         }
+    } finally {
+        Config::set('services.products_scrape.enable_in_tests', false);
+    }
+});
+
+test('updating product_link via admin whats-items controller triggers products:scrape-n8n and returns populated user_data', function () {
+    Config::set('services.products_scrape.enable_in_tests', true);
+
+    try {
+        $admin = User::factory()->create(['role' => 'admin']);
+        $targetUser = User::factory()->create();
+
+        $whatsItem = WhatsItem::factory()->create([
+            'user_id' => $targetUser->id,
+            'api_link' => 'https://existing-api.test',
+            'login_link' => 'https://login.mathshouse.net/login',
+            'user_name' => 'admin_test',
+            'password' => 'secret_pass',
+            'products_link' => null,
+            'user_data' => null,
+        ]);
+
+        $mockDiscovery = Mockery::mock(ApiDiscoveryService::class);
+        $mockDiscovery->shouldReceive('discoverAndFetch')
+            ->once()
+            ->andReturn([
+                'products' => [
+                    ['id' => 1, 'name' => 'Exam Algebra 1', 'price' => 250],
+                ],
+                'meta' => ['source' => 'api_discovery'],
+            ]);
+        app()->instance(ApiDiscoveryService::class, $mockDiscovery);
+
+        // Test with singular 'product_link'
+        $response = $this->actingAs($admin)
+            ->putJson("/api/admin/users/{$targetUser->id}/whats-items/{$whatsItem->id}", [
+                'product_link' => 'https://login.mathshouse.net/student/MyCourses/HistoryQuizze',
+            ]);
+
+        $response->assertOk()
+            ->assertJsonPath('status', true)
+            ->assertJsonPath('data.products_link', 'https://login.mathshouse.net/student/MyCourses/HistoryQuizze')
+            ->assertJsonPath('data.user_data.0.name', 'Exam Algebra 1');
+
+        $whatsItem->refresh();
+        expect($whatsItem->products_link)->toBe('https://login.mathshouse.net/student/MyCourses/HistoryQuizze');
+        expect($whatsItem->user_data)->toBeArray();
+        expect($whatsItem->user_data[0]['name'])->toBe('Exam Algebra 1');
     } finally {
         Config::set('services.products_scrape.enable_in_tests', false);
     }

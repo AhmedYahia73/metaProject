@@ -95,6 +95,7 @@ class TikTokAccountController extends Controller
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
+            'product_link' => 'sometimes|nullable|string|max:500',
             'msg_number' => 'sometimes|integer|min:0',
             'start_date' => 'sometimes|nullable|date',
             'end_date' => 'sometimes|nullable|date|after_or_equal:start_date',
@@ -130,7 +131,7 @@ class TikTokAccountController extends Controller
             'login_link' => $validated['login_link'] ?? null,
             'user_name' => $validated['user_name'] ?? null,
             'password' => $validated['password'] ?? null,
-            'products_link' => $validated['products_link'] ?? null,
+            'products_link' => $validated['products_link'] ?? $request->input('product_link') ?? null,
             'msg_number' => $validated['msg_number'] ?? 0,
             'start_date' => $validated['start_date'] ?? null,
             'end_date' => $validated['end_date'] ?? null,
@@ -221,12 +222,18 @@ class TikTokAccountController extends Controller
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
             'products_link' => 'sometimes|nullable|string|max:500',
+            'product_link' => 'sometimes|nullable|string|max:500',
             'user_data' => 'sometimes|nullable',
             'username' => 'sometimes|nullable|string|max:255',
             'display_name' => 'sometimes|nullable|string|max:255',
             'access_token' => 'sometimes|nullable|string',
             'refresh_token' => 'sometimes|nullable|string',
         ]);
+
+        if ($request->has('product_link') && ! $request->has('products_link')) {
+            $validated['products_link'] = $request->input('product_link');
+            $request->merge(['products_link' => $validated['products_link']]);
+        }
 
         $updateFields = [];
 
