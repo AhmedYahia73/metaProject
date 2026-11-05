@@ -435,3 +435,35 @@ test('user can list and inspect their ecommerce orders via API', function () {
         ->assertJsonPath('data.id', $order1->id)
         ->assertJsonPath('data.customer_name', 'عميل 1');
 });
+
+test('shopify oauth installation flow and callback exchanges code for access token', function () {
+    $user = createStoreUser();
+    $item = createStoreWhatsItem($user, [
+        'website_url' => 'g0dc5e-db.myshopify.com',
+        'user_name' => 'test_client_id_123',
+        'password' => 'dummy_secret_for_test_abc',
+    ]);
+
+    // 1. Test install redirect
+    $installResponse = $this->get("/api/auth/shopify/install?whats_item_id={$item->id}");
+    $installResponse->assertRedirect();
+    $targetUrl = $installResponse->headers->get('Location');
+    expect($targetUrl)->toContain('g0dc5e-db.myshopify.com/admin/oauth/authorize')
+        ->and($targetUrl)->toContain('client_id=test_client_id_123')
+        ->and($targetUrl)->toContain('state='.$item->id);
+
+    // 2. Test callback code exchange
+    Http::fake([
+        'g0dc5e-db.myshopify.com/admin/oauth/access_token' => Http::response([
+            'access_token' => 'shpat_generated_access_token_999',
+            'scope' => 'read_orders,write_orders',
+        ]),
+    ]);
+
+    $callbackResponse = $this->get("/api/auth/shopify/callback?code=mock_code_abc&shop=g0dc5e-db.myshopify.com&state={$item->id}");
+    $callbackResponse->assertStatus(200);
+
+    expect($item->fresh()->shopify_access_token)->toBe('shpat_generated_access_token_999')
+        ->and($item->fresh()->ecommerce_platform)->toBe('shopify')
+        ->and($item->fresh()->order_confirmation_enabled)->toBeTrue();
+});

@@ -19,6 +19,7 @@ use App\Http\Controllers\api\admin\TikTokAccountController as AdminTikTokAccount
 use App\Http\Controllers\api\admin\UserController;
 use App\Http\Controllers\api\admin\WhatsItemController as AdminWhatsItemController;
 use App\Http\Controllers\api\auth\LoginController;
+use App\Http\Controllers\api\auth\ShopifyOAuthController;
 use App\Http\Controllers\api\HomeController;
 use App\Http\Controllers\api\internal\ChannelProductsWebhookController;
 use App\Http\Controllers\api\PaymobCallbackController;
@@ -88,6 +89,10 @@ Route::post('/webhooks/store/{token}', [StoreWebhookController::class, 'handle']
     ->name('webhooks.store');
 Route::post('/webhooks/store/{token}/order-created', [StoreWebhookController::class, 'handle'])
     ->name('webhooks.store.order_created');
+
+// Shopify App OAuth Installation & Callback
+Route::get('/auth/shopify/install', [ShopifyOAuthController::class, 'install'])->name('shopify.oauth.install');
+Route::get('/auth/shopify/callback', [ShopifyOAuthController::class, 'callback'])->name('shopify.oauth.callback');
 
 // Internal Webhook for n8n products scraper callback
 Route::post('/internal/channel-products/webhook', [ChannelProductsWebhookController::class, 'handle'])
