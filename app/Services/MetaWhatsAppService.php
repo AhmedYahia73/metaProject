@@ -843,6 +843,70 @@ class MetaWhatsAppService
                 'error' => $error,
             ]);
 
+            // Fallback: If template is PENDING or rejected, attempt sending as an interactive button message
+            $interactivePayload = [
+                'messaging_product' => 'whatsapp',
+                'recipient_type' => 'individual',
+                'to' => $normalizedTo,
+                'type' => 'interactive',
+                'interactive' => [
+                    'type' => 'button',
+                    'body' => [
+                        'text' => "أهلاً {$customerName}، طلبك رقم {$orderNumber} من {$resolvedStoreName} بإجمالي {$total} جنيه.\nبرجاء اختيار تأكيد الطلب لتجهيزه فوراً، أو إلغاء الطلب.",
+                    ],
+                    'action' => [
+                        'buttons' => [
+                            [
+                                'type' => 'reply',
+                                'reply' => [
+                                    'id' => 'ORDER_APPROVE_'.$order->id,
+                                    'title' => 'تأكيد الطلب',
+                                ],
+                            ],
+                            [
+                                'type' => 'reply',
+                                'reply' => [
+                                    'id' => 'ORDER_REJECT_'.$order->id,
+                                    'title' => 'إلغاء الطلب',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ];
+
+            try {
+                $interactiveRes = Http::withToken($token)
+                    ->timeout(15)
+                    ->post("{$this->baseUrl}/{$phoneNumberId}/messages", $interactivePayload);
+
+                if ($interactiveRes->successful()) {
+                    $wamid = $interactiveRes->json('messages.0.id');
+                    $order->update(['meta_message_id' => $wamid]);
+
+                    if ($whatsItem->msg_number > 0) {
+                        $whatsItem->decrement('msg_number');
+                    }
+
+                    if ($whatsItem->user_id) {
+                        MsgSend::create([
+                            'user_id' => $whatsItem->user_id,
+                            'whats_item_id' => $whatsItem->id,
+                            'channel' => 'whatsapp',
+                            'status' => 'sent',
+                        ]);
+                    }
+
+                    return [
+                        'success' => true,
+                        'message' => 'Message sent successfully via interactive buttons.',
+                        'message_id' => $wamid,
+                    ];
+                }
+            } catch (\Throwable) {
+                // Ignore fallback exception, return primary error
+            }
+
             return [
                 'success' => false,
                 'message' => $error['message'] ?? 'Failed to send WhatsApp template message.',
