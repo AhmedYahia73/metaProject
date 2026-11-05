@@ -1791,64 +1791,10 @@ class ApiDiscoveryService
                 $rawItems = $this->extractItemsFromHtmlDom($bodyContent);
             }
 
-            // If requested page yielded 0 items (e.g. empty sub-page like /HistoryQuizze), check parent or discovered portal links
-            if (empty($rawItems)) {
-                $candidateFallbackUrls = [];
-                $parsedUrl = parse_url($productsLink);
-                $path = $parsedUrl['path'] ?? '';
-                $dir = dirname($path);
-                if ($dir && $dir !== '/' && $dir !== '\\' && $dir !== '.') {
-                    $parentUrl = ($parsedUrl['scheme'] ?? 'https').'://'.($parsedUrl['host'] ?? '').$dir;
-                    if ($parentUrl !== $productsLink) {
-                        $candidateFallbackUrls[] = $parentUrl;
-                    }
-                }
-
-                // Check discovered portal links (prioritizing courses, packages, sessions)
-                if (! empty($discoveredStudentLinks)) {
-                    foreach ($discoveredStudentLinks as $dl) {
-                        if ($dl !== $productsLink && ! in_array($dl, $candidateFallbackUrls, true)) {
-                            $candidateFallbackUrls[] = $dl;
-                        }
-                    }
-                }
-
-                foreach (array_slice($candidateFallbackUrls, 0, 5) as $fallbackUrl) {
-                    try {
-                        Log::info(self::LOG_PREFIX." [WebSession] Target sub-page had 0 items. Checking related portal page: {$fallbackUrl}");
-                        $fbResp = Http::timeout(self::HTTP_TIMEOUT)
-                            ->withoutVerifying()
-                            ->withOptions([
-                                'cookies' => $jar,
-                                'allow_redirects' => true,
-                                'curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4],
-                            ])
-                            ->withHeaders([
-                                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                                'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8,application/json',
-                                'Referer' => $productsLink,
-                            ])
-                            ->get($fallbackUrl);
-
-                        if ($fbResp->successful()) {
-                            $fbContent = $fbResp->body();
-                            $fbItems = $this->extractItemsFromHtmlDom($fbContent);
-                            if (! empty($fbItems)) {
-                                $rawItems = $fbItems;
-                                $productsLink = $fallbackUrl;
-                                Log::info(self::LOG_PREFIX.' [WebSession] Successfully retrieved '.count($rawItems)." items from portal page: {$fallbackUrl}");
-                                break;
-                            }
-                        }
-                    } catch (\Throwable) {
-                    }
-                }
-            }
-
             if (empty($rawItems)) {
                 $pageTitle = preg_match('/<title[^>]*>(.*?)<\/title>/is', $bodyContent, $titleMatch) ? trim(strip_tags($titleMatch[1])) : 'Unknown';
                 $cleanText = trim(preg_replace('/\s+/', ' ', strip_tags($bodyContent)));
-                Log::info(self::LOG_PREFIX.' [WebSession] No course/package items found in page content area (account may have no active items on this page).', [
+                Log::info(self::LOG_PREFIX.' [WebSession] No course/package/exam items found on target page.', [
                     'page_title' => $pageTitle,
                     'url' => $productsLink,
                     'content_preview' => mb_substr($cleanText, 0, 150),
@@ -1956,13 +1902,18 @@ class ApiDiscoveryService
 
     /**
      * Validate whether a string is a legitimate item / product / course / quiz name
-     * (rejecting pure numbers, user greetings, navigation keywords, and empty strings).
+     * (rejecting pure numbers, user greetings, navigation keywords, form labels, and profile fields).
      */
     protected function isValidItemName(string $name): bool
     {
         $clean = trim(preg_replace('/\s+/', ' ', strip_tags($name)));
 
         if (mb_strlen($clean) < 3) {
+            return false;
+        }
+
+        // Reject form labels and key-value headers ending with a colon (e.g. "Profile :", "Country:", "Email:")
+        if (str_ends_with($clean, ':') || preg_match('/:\s*$/', $clean)) {
             return false;
         }
 
@@ -1982,8 +1933,9 @@ class ApiDiscoveryService
         }
 
         $lower = strtolower($clean);
+        $normalizedKey = trim(rtrim($lower, ' :.-_'));
 
-        // Filter out layout, navigation, and administrative words
+        // Filter out layout, navigation, profile, and administrative words
         $ignoredKeywords = [
             'courses', 'my courses', 'packages', 'my packages', 'all packages', 'all courses',
             'home', 'dashboard', 'welcome', 'logout', 'login', 'sign in', 'sign out',
@@ -1993,11 +1945,14 @@ class ApiDiscoveryService
             'status', 'edit', 'delete', 'filter', 'search', 'sort', 'all',
             'dev', 'user', 'default', 'close', 'open', 'read more', 'click here',
             'view all', 'show more', 'load more', 'select', 'choose',
+            'country', 'city', 'state', 'phone', 'email', 'address', 'gender',
+            'birth', 'date of birth', 'school', 'grade', 'parent', 'father', 'mother',
+            'personal information', 'account details',
             'no data available in table', 'no data available', 'no records found',
             'no items found', 'no data found', 'no results found', 'empty', 'none', 'n/a',
         ];
 
-        if (in_array($lower, $ignoredKeywords, true)) {
+        if (in_array($lower, $ignoredKeywords, true) || in_array($normalizedKey, $ignoredKeywords, true)) {
             return false;
         }
 
@@ -2086,102 +2041,189 @@ class ApiDiscoveryService
         $items = [];
 
         // Strategy D: HTML Table Rows (common in courses, quizzes, history, packages, schedules)
-        $rows = $xpath->query('//table//tbody//tr|//table//tr[td]');
-        if ($rows && $rows->length > 0) {
-            foreach ($rows as $index => $row) {
-                $cells = $xpath->query('.//td', $row);
-                if (! $cells || $cells->length < 1) {
+        $tables = $xpath->query('//table');
+        if ($tables && $tables->length > 0) {
+            foreach ($tables as $table) {
+                // Read header columns from <thead><th> or first <tr><th>
+                $headerThs = $xpath->query('.//thead//th|.//tr[1]//th', $table);
+                $headerCols = [];
+                $nameColIdx = -1;
+                $priceColIdx = -1;
+                $actionColIdx = -1;
+
+                if ($headerThs && $headerThs->length > 0) {
+                    for ($h = 0; $h < $headerThs->length; $h++) {
+                        $thText = strtolower(trim(preg_replace('/\s+/', ' ', strip_tags($headerThs->item($h)->textContent))));
+                        $headerCols[$h] = $thText;
+
+                        // Identify price column
+                        if (preg_match('/(?:price|fee|cost|amount|سعر|المبلغ|مصاريف|تكلفة)/i', $thText)) {
+                            $priceColIdx = $h;
+                        }
+
+                        // Identify action column
+                        if (preg_match('/(?:action|actions|view|details|edit|delete|إجراء|عمليات)/i', $thText)) {
+                            $actionColIdx = $h;
+                        }
+
+                        // Identify item name column (prioritizing specific quiz/exam/package/item title over generic course/category)
+                        if (preg_match('/(?:quiz\s*name|exam\s*name|quiz|exam|test|package|product|item|title|كويز|اختبار|امتحان|باقة|اسم\s*الكويز|اسم\s*الاختبار|اسم\s*الامتحان|عنوان)/i', $thText)) {
+                            if ($nameColIdx === -1 || preg_match('/(?:quiz|exam|test|title|اسم\s*الاختبار|كويز)/i', $thText)) {
+                                $nameColIdx = $h;
+                            }
+                        } elseif ($nameColIdx === -1 && preg_match('/(?:name|course|chapter|lesson|subject|كورس|مادة|اسم)/i', $thText)) {
+                            $nameColIdx = $h;
+                        }
+                    }
+                }
+
+                $rows = $xpath->query('.//tbody//tr|.//tr[td]', $table);
+                if (! $rows || $rows->length < 1) {
                     continue;
                 }
 
-                // Skip "No data" / empty table rows
-                if ($cells->length === 1) {
-                    $singleText = strtolower(trim(preg_replace('/\s+/', ' ', strip_tags($cells->item(0)->textContent))));
-                    if (str_contains($singleText, 'no data') || str_contains($singleText, 'no record') || str_contains($singleText, 'empty') || str_contains($singleText, 'not found')) {
-                        continue;
+                // Guard: If table looks like a 2-column key-value profile/settings table (e.g. Profile : dev, Country: Egypt)
+                $firstRowCells = $xpath->query('.//td', $rows->item(0));
+                if ($firstRowCells && $firstRowCells->length === 2) {
+                    $c0 = trim(strip_tags($firstRowCells->item(0)->textContent));
+                    if (str_ends_with($c0, ':') || in_array(rtrim(strtolower($c0), ' :'), ['profile', 'country', 'email', 'phone', 'name', 'username', 'role', 'status'], true)) {
+                        continue; // Skip key-value form table
                     }
                 }
 
-                $name = null;
-                $nameCellIdx = -1;
+                $tableItems = [];
 
-                // Scan all cells across the row to find the item title/name
-                for ($i = 0; $i < $cells->length; $i++) {
-                    $cell = $cells->item($i);
-                    $candidate = null;
+                foreach ($rows as $index => $row) {
+                    $cells = $xpath->query('.//td', $row);
+                    if (! $cells || $cells->length < 1) {
+                        continue;
+                    }
 
-                    // Prefer links or strong/b or title classes inside cell
-                    $linkInCell = $xpath->query('.//a|.//strong|.//b|.//*[contains(@class, "title") or contains(@class, "name")]', $cell);
-                    if ($linkInCell && $linkInCell->length > 0) {
-                        $c = trim(preg_replace('/\s+/', ' ', strip_tags($linkInCell->item(0)->textContent)));
-                        if ($this->isValidItemName($c)) {
-                            $candidate = $c;
+                    // Skip "No data" / empty table rows
+                    if ($cells->length === 1) {
+                        $singleText = strtolower(trim(preg_replace('/\s+/', ' ', strip_tags($cells->item(0)->textContent))));
+                        if (str_contains($singleText, 'no data') || str_contains($singleText, 'no record') || str_contains($singleText, 'empty') || str_contains($singleText, 'not found')) {
+                            continue;
                         }
                     }
 
-                    if (! $candidate) {
-                        $c = trim(preg_replace('/\s+/', ' ', strip_tags($cell->textContent)));
-                        if ($this->isValidItemName($c)) {
-                            $candidate = $c;
+                    $name = null;
+                    $nameCellIdx = -1;
+
+                    // 1. If header explicitly identified the item/quiz/exam name column, use it!
+                    if ($nameColIdx >= 0 && $nameColIdx < $cells->length) {
+                        $nameCell = $cells->item($nameColIdx);
+                        $linkInCell = $xpath->query('.//a|.//strong|.//b|.//*[contains(@class, "title") or contains(@class, "name")]', $nameCell);
+                        $candidate = ($linkInCell && $linkInCell->length > 0)
+                            ? trim(preg_replace('/\s+/', ' ', strip_tags($linkInCell->item(0)->textContent)))
+                            : trim(preg_replace('/\s+/', ' ', strip_tags($nameCell->textContent)));
+
+                        if ($this->isValidItemName($candidate)) {
+                            $name = $candidate;
+                            $nameCellIdx = $nameColIdx;
                         }
                     }
 
-                    if ($candidate && $this->isValidItemName($candidate)) {
-                        $name = $candidate;
-                        $nameCellIdx = $i;
-                        break;
+                    // 2. If no name found from header, scan for links/titles inside cells (preferring clean titles over multi-colon breadcrumbs)
+                    if (! $name) {
+                        $bestCandidate = null;
+                        $bestCandidateIdx = -1;
+
+                        for ($i = 0; $i < $cells->length; $i++) {
+                            if ($i === $actionColIdx || $i === $priceColIdx) {
+                                continue;
+                            }
+                            $cell = $cells->item($i);
+                            $linkInCell = $xpath->query('.//a|.//strong|.//b|.//*[contains(@class, "title") or contains(@class, "name")]', $cell);
+                            $cand = ($linkInCell && $linkInCell->length > 0)
+                                ? trim(preg_replace('/\s+/', ' ', strip_tags($linkInCell->item(0)->textContent)))
+                                : trim(preg_replace('/\s+/', ' ', strip_tags($cell->textContent)));
+
+                            if ($this->isValidItemName($cand)) {
+                                // If candidate does not contain multi-level breadcrumb (like "Course : ... Chapter : ..."), it's preferred!
+                                if (! str_contains($cand, 'Chapter :') && ! str_contains($cand, 'Lesson :')) {
+                                    $bestCandidate = $cand;
+                                    $bestCandidateIdx = $i;
+                                    break;
+                                } elseif ($bestCandidate === null) {
+                                    $bestCandidate = $cand;
+                                    $bestCandidateIdx = $i;
+                                }
+                            }
+                        }
+
+                        if ($bestCandidate !== null) {
+                            $name = $bestCandidate;
+                            $nameCellIdx = $bestCandidateIdx;
+                        }
                     }
-                }
 
-                if (! $name) {
-                    continue;
-                }
-
-                // Extract price, score, and description from remaining cells
-                $price = null;
-                $descParts = [];
-                for ($i = 0; $i < $cells->length; $i++) {
-                    if ($i === $nameCellIdx) {
+                    if (! $name) {
                         continue;
                     }
-                    $txt = trim(preg_replace('/\s+/', ' ', strip_tags($cells->item($i)->textContent)));
-                    if (empty($txt)) {
-                        continue;
+
+                    // Extract price: only if header identified a Price column OR cell has explicit currency symbol!
+                    // (An arbitrary number like 15 or 16 without currency is NOT a price!)
+                    $currRegex = '(?:[\$£€]|(?:\b(?:EGP|LE|SAR|USD)\b)|(?:(?<!\p{L})(?:ج\.م|جنيه|ريال)(?!\p{L})))';
+                    $price = null;
+                    if ($priceColIdx >= 0 && $priceColIdx < $cells->length && $priceColIdx !== $nameCellIdx) {
+                        $pTxt = trim(preg_replace('/\s+/', ' ', strip_tags($cells->item($priceColIdx)->textContent)));
+                        if (preg_match('/'.$currRegex.'\s*([0-9]+(?:\.[0-9]+)?)/iu', $pTxt, $numMatch) ||
+                            preg_match('/([0-9]+(?:\.[0-9]+)?)\s*'.$currRegex.'/iu', $pTxt, $numMatch)) {
+                            $price = $numMatch[1];
+                        } elseif (preg_match('/^[0-9]+(?:\.[0-9]+)?$/', $pTxt, $numMatch)) {
+                            $price = $numMatch[0];
+                        }
                     }
 
-                    // Skip the table counter / row index column (e.g. # 1, 2, 3) so it's not mistaken for price or desc
-                    if ($i === 0 && $nameCellIdx > 0 && preg_match('/^[0-9]+$/', $txt)) {
-                        continue;
+                    $descParts = [];
+                    for ($i = 0; $i < $cells->length; $i++) {
+                        if ($i === $nameCellIdx || $i === $actionColIdx || $i === $priceColIdx) {
+                            continue;
+                        }
+                        $txt = trim(preg_replace('/\s+/', ' ', strip_tags($cells->item($i)->textContent)));
+                        if (empty($txt)) {
+                            continue;
+                        }
+
+                        // Skip the table counter / row index column (e.g. # 1, 2, 3)
+                        if ($i === 0 && $nameCellIdx > 0 && preg_match('/^[0-9]+$/', $txt)) {
+                            continue;
+                        }
+
+                        // Check for explicit currency in cell if price is not set yet
+                        if ($price === null && (
+                            preg_match('/'.$currRegex.'\s*([0-9]+(?:\.[0-9]+)?)/iu', $txt, $numMatch) ||
+                            preg_match('/([0-9]+(?:\.[0-9]+)?)\s*'.$currRegex.'/iu', $txt, $numMatch)
+                        )) {
+                            $price = $numMatch[1];
+                        } else {
+                            $colHeader = $headerCols[$i] ?? '';
+                            if ($colHeader && ! preg_match('/^[#0-9]+$/', $colHeader) && mb_strlen($colHeader) > 1 && ! str_contains($colHeader, 'action')) {
+                                $descParts[] = ucfirst($colHeader).': '.$txt;
+                            } else {
+                                $descParts[] = $txt;
+                            }
+                        }
                     }
 
-                    if ($price === null && (
-                        preg_match('/(?:[\$£€]|EGP|LE|SAR|USD|ج\.م|جنيه|ريال)\s*([0-9]+(?:\.[0-9]+)?)/iu', $txt, $numMatch) ||
-                        preg_match('/([0-9]+(?:\.[0-9]+)?)\s*(?:[\$£€]|EGP|LE|SAR|USD|ج\.م|جنيه|ريال)/iu', $txt, $numMatch)
-                    )) {
-                        $price = $numMatch[1];
-                    } elseif ($price === null && preg_match('/^[0-9]+(?:\.[0-9]+)?%?$/', $txt, $numMatch)) {
-                        $price = $numMatch[0];
-                    } else {
-                        $descParts[] = $txt;
-                    }
+                    $desc = ! empty($descParts) ? implode(' | ', array_slice($descParts, 0, 4)) : null;
+
+                    $imgNode = $xpath->query('.//img[not(contains(@src, "default.png")) and not(contains(@src, "icon")) and not(contains(@src, "arrow"))]', $row);
+                    $img = ($imgNode && $imgNode->length > 0) ? $imgNode->item(0)->getAttribute('src') : null;
+
+                    $tableItems[] = [
+                        'id' => $index + 1,
+                        'name' => $name,
+                        'description' => $desc,
+                        'price' => $price,
+                        'image' => $img,
+                    ];
                 }
 
-                $desc = ! empty($descParts) ? implode(' | ', array_slice($descParts, 0, 3)) : null;
-
-                $imgNode = $xpath->query('.//img[not(contains(@src, "default.png")) and not(contains(@src, "icon")) and not(contains(@src, "arrow"))]', $row);
-                $img = ($imgNode && $imgNode->length > 0) ? $imgNode->item(0)->getAttribute('src') : null;
-
-                $items[] = [
-                    'id' => $index + 1,
-                    'name' => $name,
-                    'description' => $desc,
-                    'price' => $price,
-                    'image' => $img,
-                ];
-            }
-
-            if (! empty($items)) {
-                return $this->deduplicateItemsByName($items);
+                if (! empty($tableItems)) {
+                    return $this->deduplicateItemsByName($tableItems);
+                }
             }
         }
 
@@ -2276,8 +2318,9 @@ class ApiDiscoveryService
                 $price = null;
                 if ($priceNode && $priceNode->length > 0) {
                     $priceTxt = trim($priceNode->item(0)->textContent);
-                    if (preg_match('/(?:[\$£€]|EGP|LE|SAR|USD|ج\.م|جنيه|ريال)\s*([0-9]+(?:\.[0-9]+)?)/iu', $priceTxt, $m) ||
-                        preg_match('/([0-9]+(?:\.[0-9]+)?)\s*(?:[\$£€]|EGP|LE|SAR|USD|ج\.م|جنيه|ريال)/iu', $priceTxt, $m)) {
+                    $currRegex = '(?:[\$£€]|(?:\b(?:EGP|LE|SAR|USD)\b)|(?:(?<!\p{L})(?:ج\.م|جنيه|ريال)(?!\p{L})))';
+                    if (preg_match('/'.$currRegex.'\s*([0-9]+(?:\.[0-9]+)?)/iu', $priceTxt, $m) ||
+                        preg_match('/([0-9]+(?:\.[0-9]+)?)\s*'.$currRegex.'/iu', $priceTxt, $m)) {
                         $price = $m[1];
                     } elseif (preg_match('/^[0-9]+(?:\.[0-9]+)?$/', $priceTxt, $m)) {
                         $price = $m[0];

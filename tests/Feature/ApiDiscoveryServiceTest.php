@@ -820,7 +820,7 @@ HTML;
     expect($names)->not->toContain('14727');
 });
 
-test('scrapeViaWebSession falls back to parent portal url when sub-page has empty data or quiz table', function () {
+test('scrapeViaWebSession correctly extracts quiz name from multi-column table and does not mistake questions count for price', function () {
     $loginHtml = <<<'HTML'
 <form action="https://school.test/login_store" method="POST">
     <input type="hidden" name="_token" value="tok123">
@@ -829,49 +829,43 @@ test('scrapeViaWebSession falls back to parent portal url when sub-page has empt
 </form>
 HTML;
 
-    // Sub-page with empty table
-    $emptyHistoryHtml = <<<'HTML'
+    // Simulated Mathshouse HistoryQuizze page
+    $historyQuizHtml = <<<'HTML'
 <!DOCTYPE html>
 <html>
 <head><title>Quizze History</title></head>
 <body>
     <div class="content">
-        <a href="/student/MyCourses">My Courses</a>
-        <a href="/student/MyPackages">My Packages</a>
         <table class="table">
             <thead>
-                <tr><th>#</th><th>Quiz</th><th>Score</th></tr>
-            </thead>
-            <tbody>
-                <tr><td colspan="3" class="dataTables_empty">No data available in table</td></tr>
-            </tbody>
-        </table>
-    </div>
-</body>
-</html>
-HTML;
-
-    // Parent courses page with actual enrolled courses
-    $coursesHtml = <<<'HTML'
-<!DOCTYPE html>
-<html>
-<head><title>My Courses</title></head>
-<body>
-    <div class="content">
-        <table class="table">
-            <thead>
-                <tr><th>#</th><th>Course Name</th><th>Price</th></tr>
+                <tr>
+                    <th>#</th>
+                    <th>Course / Chapter / Lesson</th>
+                    <th>Quiz Name</th>
+                    <th>Questions</th>
+                    <th>Degree</th>
+                    <th>Date</th>
+                    <th>Action</th>
+                </tr>
             </thead>
             <tbody>
                 <tr>
                     <td>1</td>
-                    <td><a href="/courses/101">ACT Math Preparation Course</a></td>
-                    <td>$350</td>
+                    <td>Course : EST 1 Chapter : Chapter 15 :Geometric figures , area and volumes Lesson : Ch 15 Lesson 1 Lines And Angles & Triangles Part 1</td>
+                    <td><a href="/quiz/view/101">Q1 Ch 15 L1 Lines And Angles & Triangles Part 1</a></td>
+                    <td>15</td>
+                    <td>87/100</td>
+                    <td>02-11-2026</td>
+                    <td><a href="/quiz/review/101" class="btn">Review</a></td>
                 </tr>
                 <tr>
                     <td>2</td>
-                    <td><a href="/courses/102">IGCSE Biology Revision</a></td>
-                    <td>500 EGP</td>
+                    <td>Course : EST 1 Chapter : Chapter 14:Trigonometric Ratios and Functions Lesson : Ch 14 Lesson 1 Degree and Radian Systems</td>
+                    <td><a href="/quiz/view/102">Q1 Ch 14 L1 Degree and Radian Systems -Trigonometric Ratios and Functions</a></td>
+                    <td>16</td>
+                    <td>94/100</td>
+                    <td>02-11-2026</td>
+                    <td><a href="/quiz/review/102" class="btn">Review</a></td>
                 </tr>
             </tbody>
         </table>
@@ -886,10 +880,7 @@ HTML;
             'Location' => 'https://school.test/student/dashboard',
         ]),
         'https://school.test/student/dashboard' => Http::response('OK', 200),
-        'https://school.test/student/MyCourses/HistoryQuizze' => Http::response($emptyHistoryHtml, 200, [
-            'Content-Type' => 'text/html; charset=UTF-8',
-        ]),
-        'https://school.test/student/MyCourses' => Http::response($coursesHtml, 200, [
+        'https://school.test/student/MyCourses/HistoryQuizze' => Http::response($historyQuizHtml, 200, [
             'Content-Type' => 'text/html; charset=UTF-8',
         ]),
     ]);
@@ -904,8 +895,137 @@ HTML;
 
     expect($result)->not->toBeNull();
     expect($result['products'])->toHaveCount(2);
-    expect($result['products'][0]['name'])->toBe('ACT Math Preparation Course');
-    expect($result['products'][0]['price'])->toBe(350);
-    expect($result['products'][1]['name'])->toBe('IGCSE Biology Revision');
-    expect($result['products'][1]['price'])->toBe(500);
+
+    // The quiz name must be the clean quiz name, NOT the course/chapter hierarchy string!
+    expect($result['products'][0]['name'])->toBe('Q1 Ch 15 L1 Lines And Angles & Triangles Part 1');
+    expect($result['products'][1]['name'])->toBe('Q1 Ch 14 L1 Degree and Radian Systems -Trigonometric Ratios and Functions');
+
+    // Questions count (15, 16) must NOT be captured as price!
+    expect($result['products'][0]['price'])->toBeNull();
+    expect($result['products'][1]['price'])->toBeNull();
+
+    // Context, Degree, and Date should be in description
+    expect($result['products'][0]['description'])->toContain('87/100');
+    expect($result['products'][0]['description'])->toContain('15');
+});
+
+test('scrapeViaWebSession ignores 2-column key-value profile and settings tables', function () {
+    $loginHtml = <<<'HTML'
+<form action="https://school.test/login_store" method="POST">
+    <input type="hidden" name="_token" value="tok123">
+    <input type="email" name="email">
+    <input type="password" name="password">
+</form>
+HTML;
+
+    $profileHtml = <<<'HTML'
+<!DOCTYPE html>
+<html>
+<head><title>My Profile</title></head>
+<body>
+    <div class="card">
+        <table class="table">
+            <tbody>
+                <tr>
+                    <td>Profile :</td>
+                    <td>Student Account</td>
+                </tr>
+                <tr>
+                    <td>Country:</td>
+                    <td>Egypt</td>
+                </tr>
+                <tr>
+                    <td>Email:</td>
+                    <td>student@mathshouse.net</td>
+                </tr>
+                <tr>
+                    <td>Phone:</td>
+                    <td>0123456789</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
+HTML;
+
+    Http::fake([
+        'https://school.test/login' => Http::response($loginHtml, 200),
+        'https://school.test/login_store' => Http::response('', 302, [
+            'Location' => 'https://school.test/student/dashboard',
+        ]),
+        'https://school.test/student/dashboard' => Http::response('OK', 200),
+        'https://school.test/student/Profile' => Http::response($profileHtml, 200, [
+            'Content-Type' => 'text/html; charset=UTF-8',
+        ]),
+    ]);
+
+    $service = new ApiDiscoveryService;
+    $result = $service->scrapeViaWebSession(
+        'https://school.test/login',
+        'student@school.test',
+        'secret123',
+        'https://school.test/student/Profile'
+    );
+
+    // Profile table must be rejected completely!
+    expect($result)->toBeNull();
+});
+
+test('scrapeViaWebSession returns null on empty target page without wandering to other URLs', function () {
+    $loginHtml = <<<'HTML'
+<form action="https://school.test/login_store" method="POST">
+    <input type="hidden" name="_token" value="tok123">
+    <input type="email" name="email">
+    <input type="password" name="password">
+</form>
+HTML;
+
+    $emptyExamHtml = <<<'HTML'
+<!DOCTYPE html>
+<html>
+<head><title>Diagnostic Exam History</title></head>
+<body>
+    <div class="content">
+        <a href="/student/Profile">My Profile</a>
+        <table class="table">
+            <thead><tr><th>#</th><th>Exam Name</th><th>Score</th></tr></thead>
+            <tbody>
+                <tr><td colspan="3" class="dataTables_empty">No data available in table</td></tr>
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
+HTML;
+
+    $profileCalled = false;
+
+    Http::fake([
+        'https://school.test/login' => Http::response($loginHtml, 200),
+        'https://school.test/login_store' => Http::response('', 302, [
+            'Location' => 'https://school.test/student/dashboard',
+        ]),
+        'https://school.test/student/dashboard' => Http::response('OK', 200),
+        'https://school.test/DiaExam/History' => Http::response($emptyExamHtml, 200, [
+            'Content-Type' => 'text/html; charset=UTF-8',
+        ]),
+        'https://school.test/student/Profile' => function () use (&$profileCalled) {
+            $profileCalled = true;
+
+            return Http::response('Profile page', 200);
+        },
+    ]);
+
+    $service = new ApiDiscoveryService;
+    $result = $service->scrapeViaWebSession(
+        'https://school.test/login',
+        'student@school.test',
+        'secret123',
+        'https://school.test/DiaExam/History'
+    );
+
+    expect($result)->toBeNull();
+    // Must NOT have crawled to Profile!
+    expect($profileCalled)->toBeFalse();
 });
