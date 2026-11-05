@@ -295,9 +295,14 @@ class EcommerceStoreService
                 ];
             }
 
+            $isAppSecret = str_starts_with((string) $secret, 'shpss_');
+            $customMsg = $isAppSecret
+                ? 'الرمز المدخل (shpss_...) هو Client Secret الخاص بالتطبيق وليس Access Token. يتطلب Shopify إدخال رمز Admin API access token (الذي يبدأ بـ shpat_). يرجى الضغط على زر Install app ثم Reveal token once داخل Shopify Admin > Develop apps > API credentials.'
+                : 'Failed to connect to Shopify. Please verify your domain and Admin API Access Token (shpat_...).';
+
             return [
                 'status' => false,
-                'message' => 'Failed to connect to Shopify. Please verify your domain, client_id, and secret.',
+                'message' => $customMsg,
                 'error' => $shopResponse->body(),
             ];
         } catch (\Throwable $e) {

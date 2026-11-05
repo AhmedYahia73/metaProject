@@ -392,12 +392,20 @@ class WhatsPagesController extends Controller
             'secret' => 'sometimes|nullable|string|max:500',
             'client_secret' => 'sometimes|nullable|string|max:500',
             'password' => 'sometimes|nullable|string|max:500',
+            'access_token' => 'sometimes|nullable|string|max:500',
+            'shopify_access_token' => 'sometimes|nullable|string|max:500',
             'order_confirmation_enabled' => 'sometimes|boolean',
         ]);
 
         $domain = $validated['website_url'] ?? $whatsItem->website_url;
         $clientId = $validated['client_id'] ?? ($validated['user_name'] ?? $whatsItem->user_name);
-        $secret = $validated['secret'] ?? ($validated['client_secret'] ?? ($validated['password'] ?? $whatsItem->password));
+        $secret = $validated['access_token']
+            ?? ($validated['shopify_access_token']
+            ?? ($validated['secret']
+            ?? ($validated['client_secret']
+            ?? ($validated['password']
+            ?? $whatsItem->shopify_access_token
+            ?? $whatsItem->password))));
 
         /** @var EcommerceStoreService $storeService */
         $storeService = app(EcommerceStoreService::class);
