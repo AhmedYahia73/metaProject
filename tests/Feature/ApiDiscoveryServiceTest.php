@@ -819,3 +819,93 @@ HTML;
     expect($names)->not->toContain('5030');
     expect($names)->not->toContain('14727');
 });
+
+test('scrapeViaWebSession falls back to parent portal url when sub-page has empty data or quiz table', function () {
+    $loginHtml = <<<'HTML'
+<form action="https://school.test/login_store" method="POST">
+    <input type="hidden" name="_token" value="tok123">
+    <input type="email" name="email">
+    <input type="password" name="password">
+</form>
+HTML;
+
+    // Sub-page with empty table
+    $emptyHistoryHtml = <<<'HTML'
+<!DOCTYPE html>
+<html>
+<head><title>Quizze History</title></head>
+<body>
+    <div class="content">
+        <a href="/student/MyCourses">My Courses</a>
+        <a href="/student/MyPackages">My Packages</a>
+        <table class="table">
+            <thead>
+                <tr><th>#</th><th>Quiz</th><th>Score</th></tr>
+            </thead>
+            <tbody>
+                <tr><td colspan="3" class="dataTables_empty">No data available in table</td></tr>
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
+HTML;
+
+    // Parent courses page with actual enrolled courses
+    $coursesHtml = <<<'HTML'
+<!DOCTYPE html>
+<html>
+<head><title>My Courses</title></head>
+<body>
+    <div class="content">
+        <table class="table">
+            <thead>
+                <tr><th>#</th><th>Course Name</th><th>Price</th></tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>1</td>
+                    <td><a href="/courses/101">ACT Math Preparation Course</a></td>
+                    <td>$350</td>
+                </tr>
+                <tr>
+                    <td>2</td>
+                    <td><a href="/courses/102">IGCSE Biology Revision</a></td>
+                    <td>500 EGP</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
+HTML;
+
+    Http::fake([
+        'https://school.test/login' => Http::response($loginHtml, 200),
+        'https://school.test/login_store' => Http::response('', 302, [
+            'Location' => 'https://school.test/student/dashboard',
+        ]),
+        'https://school.test/student/dashboard' => Http::response('OK', 200),
+        'https://school.test/student/MyCourses/HistoryQuizze' => Http::response($emptyHistoryHtml, 200, [
+            'Content-Type' => 'text/html; charset=UTF-8',
+        ]),
+        'https://school.test/student/MyCourses' => Http::response($coursesHtml, 200, [
+            'Content-Type' => 'text/html; charset=UTF-8',
+        ]),
+    ]);
+
+    $service = new ApiDiscoveryService;
+    $result = $service->scrapeViaWebSession(
+        'https://school.test/login',
+        'student@school.test',
+        'secret123',
+        'https://school.test/student/MyCourses/HistoryQuizze'
+    );
+
+    expect($result)->not->toBeNull();
+    expect($result['products'])->toHaveCount(2);
+    expect($result['products'][0]['name'])->toBe('ACT Math Preparation Course');
+    expect($result['products'][0]['price'])->toBe(350);
+    expect($result['products'][1]['name'])->toBe('IGCSE Biology Revision');
+    expect($result['products'][1]['price'])->toBe(500);
+});

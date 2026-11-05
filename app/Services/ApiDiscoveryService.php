@@ -1651,12 +1651,14 @@ class ApiDiscoveryService
 
                 // Redirected to dashboard/home -> Login successful! Initialize session
                 Log::info(self::LOG_PREFIX.' [WebSession] Login successful (redirected to '.$location.'). Initializing session.');
-                try {
-                    Http::timeout(self::HTTP_TIMEOUT)
-                        ->withoutVerifying()
-                        ->withOptions(['cookies' => $jar, 'curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])
-                        ->get($location);
-                } catch (\Throwable) {
+                if ($location !== $productsLink) {
+                    try {
+                        Http::timeout(self::HTTP_TIMEOUT)
+                            ->withoutVerifying()
+                            ->withOptions(['cookies' => $jar, 'curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])
+                            ->get($location);
+                    } catch (\Throwable) {
+                    }
                 }
             } elseif ($status === 200) {
                 $contentType = $loginResp->header('Content-Type') ?? '';
@@ -1755,11 +1757,22 @@ class ApiDiscoveryService
             }
 
             // Discover and log available student navigation links for user visibility
+            $discoveredStudentLinks = [];
             if (preg_match_all('/<a\b[^>]*?\bhref=["\']([^"\']*(?:student|course|package)[^"\']*)["\']/i', $bodyContent, $linkMatches)) {
-                $discoveredStudentLinks = array_values(array_unique(array_filter(
+                $rawDiscovered = array_values(array_unique(array_filter(
                     $linkMatches[1],
                     fn ($l) => ! str_contains($l, '#') && ! str_contains($l, 'logout') && strlen($l) < 80
                 )));
+                foreach ($rawDiscovered as $rawLink) {
+                    if (str_starts_with($rawLink, 'http://') || str_starts_with($rawLink, 'https://')) {
+                        $discoveredStudentLinks[] = $rawLink;
+                    } elseif (str_starts_with($rawLink, '/')) {
+                        $discoveredStudentLinks[] = $baseOrigin.$rawLink;
+                    } else {
+                        $discoveredStudentLinks[] = $baseOrigin.'/'.$rawLink;
+                    }
+                }
+                $discoveredStudentLinks = array_values(array_unique($discoveredStudentLinks));
                 if (! empty($discoveredStudentLinks)) {
                     Log::info(self::LOG_PREFIX.' [WebSession] Available student portal links discovered on site:', [
                         'links' => array_slice($discoveredStudentLinks, 0, 10),
@@ -1776,6 +1789,60 @@ class ApiDiscoveryService
                 $rawItems = $this->extractProductsList($jsonData) ?? [];
             } else {
                 $rawItems = $this->extractItemsFromHtmlDom($bodyContent);
+            }
+
+            // If requested page yielded 0 items (e.g. empty sub-page like /HistoryQuizze), check parent or discovered portal links
+            if (empty($rawItems)) {
+                $candidateFallbackUrls = [];
+                $parsedUrl = parse_url($productsLink);
+                $path = $parsedUrl['path'] ?? '';
+                $dir = dirname($path);
+                if ($dir && $dir !== '/' && $dir !== '\\' && $dir !== '.') {
+                    $parentUrl = ($parsedUrl['scheme'] ?? 'https').'://'.($parsedUrl['host'] ?? '').$dir;
+                    if ($parentUrl !== $productsLink) {
+                        $candidateFallbackUrls[] = $parentUrl;
+                    }
+                }
+
+                // Check discovered portal links (prioritizing courses, packages, sessions)
+                if (! empty($discoveredStudentLinks)) {
+                    foreach ($discoveredStudentLinks as $dl) {
+                        if ($dl !== $productsLink && ! in_array($dl, $candidateFallbackUrls, true)) {
+                            $candidateFallbackUrls[] = $dl;
+                        }
+                    }
+                }
+
+                foreach (array_slice($candidateFallbackUrls, 0, 5) as $fallbackUrl) {
+                    try {
+                        Log::info(self::LOG_PREFIX." [WebSession] Target sub-page had 0 items. Checking related portal page: {$fallbackUrl}");
+                        $fbResp = Http::timeout(self::HTTP_TIMEOUT)
+                            ->withoutVerifying()
+                            ->withOptions([
+                                'cookies' => $jar,
+                                'allow_redirects' => true,
+                                'curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4],
+                            ])
+                            ->withHeaders([
+                                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                                'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8,application/json',
+                                'Referer' => $productsLink,
+                            ])
+                            ->get($fallbackUrl);
+
+                        if ($fbResp->successful()) {
+                            $fbContent = $fbResp->body();
+                            $fbItems = $this->extractItemsFromHtmlDom($fbContent);
+                            if (! empty($fbItems)) {
+                                $rawItems = $fbItems;
+                                $productsLink = $fallbackUrl;
+                                Log::info(self::LOG_PREFIX.' [WebSession] Successfully retrieved '.count($rawItems)." items from portal page: {$fallbackUrl}");
+                                break;
+                            }
+                        }
+                    } catch (\Throwable) {
+                    }
+                }
             }
 
             if (empty($rawItems)) {
@@ -1888,7 +1955,7 @@ class ApiDiscoveryService
     }
 
     /**
-     * Validate whether a string is a legitimate item / product / course name
+     * Validate whether a string is a legitimate item / product / course / quiz name
      * (rejecting pure numbers, user greetings, navigation keywords, and empty strings).
      */
     protected function isValidItemName(string $name): bool
@@ -1926,6 +1993,8 @@ class ApiDiscoveryService
             'status', 'edit', 'delete', 'filter', 'search', 'sort', 'all',
             'dev', 'user', 'default', 'close', 'open', 'read more', 'click here',
             'view all', 'show more', 'load more', 'select', 'choose',
+            'no data available in table', 'no data available', 'no records found',
+            'no items found', 'no data found', 'no results found', 'empty', 'none', 'n/a',
         ];
 
         if (in_array($lower, $ignoredKeywords, true)) {
@@ -1937,7 +2006,7 @@ class ApiDiscoveryService
 
     /**
      * Extract product / course / item structures from HTML DOM (tables, cards, lists, embedded JSON).
-     * Automatically strips layout chrome (header, sidebar, navbar, user profile, footer) first.
+     * Automatically strips layout chrome (header, sidebar, navbar, user profile, footer) safely first.
      *
      * @return array<int, array<string, mixed>>
      */
@@ -1958,8 +2027,8 @@ class ApiDiscoveryService
             }
         }
 
-        // Strategy B: Inline script JSON arrays: var courses = [...]; or items = [...]
-        if (preg_match_all('/(?:var|let|const|window\.)\s*(?:courses|packages|products|items|data|lessons|units)\s*=\s*(\[\s*\{.*?\}\s*\])\s*;/is', $html, $scriptMatches)) {
+        // Strategy B: Inline script JSON arrays: var courses = [...]; or data: [...]
+        if (preg_match_all('/(?:var|let|const|window\.)\s*(?:courses|packages|quizzes|exams|products|items|data|lessons|units)\s*=\s*(\[\s*\{.*?\}\s*\])\s*;/is', $html, $scriptMatches)) {
             foreach ($scriptMatches[1] as $jsonBlock) {
                 $decoded = json_decode($jsonBlock, true);
                 if ($decoded && is_array($decoded)) {
@@ -1971,14 +2040,35 @@ class ApiDiscoveryService
             }
         }
 
+        // Strategy C: DataTables dataset object: data: [{...}] or aaData: [{...}]
+        if (preg_match_all('/(?:data|aaData|dataset)\s*:\s*(\[\s*\{.*?\}\s*\])/is', $html, $dtMatches)) {
+            foreach ($dtMatches[1] as $jsonBlock) {
+                $decoded = json_decode($jsonBlock, true);
+                if ($decoded && is_array($decoded)) {
+                    $extracted = $this->extractProductsList($decoded);
+                    if (! empty($extracted)) {
+                        return $this->deduplicateItemsByName($extracted);
+                    }
+                }
+            }
+        }
+
         $dom = new \DOMDocument;
         @$dom->loadHTML('<?xml encoding="utf-8" ?>'.$html, LIBXML_NOERROR | LIBXML_NOWARNING);
         $xpath = new \DOMXPath($dom);
 
-        // Strip layout chrome (header, footer, nav, sidebar, offcanvas, drawers, scripts, styles)
+        // Safe layout chrome stripping (strictly layout tags and specific app layout IDs/classes, preserving content cards)
         $chromeQuery = '//header | //footer | //nav | //aside | //script | //style | //noscript | '
-            .'//*[contains(@class, "sidebar") or contains(@class, "aside") or contains(@class, "navbar") or contains(@class, "topbar") or contains(@class, "toolbar") or contains(@class, "header") or contains(@class, "footer") or contains(@class, "breadcrumb") or contains(@class, "drawer") or contains(@class, "menu") or contains(@class, "user-menu") or contains(@class, "profile-dropdown") or contains(@class, "notification")] | '
-            .'//*[contains(@id, "sidebar") or contains(@id, "aside") or contains(@id, "navbar") or contains(@id, "topbar") or contains(@id, "toolbar") or contains(@id, "header") or contains(@id, "footer") or contains(@id, "drawer")]';
+            .'//*[@id="kt_header" or @id="kt_aside" or @id="kt_app_sidebar" or @id="kt_app_header" or @id="kt_footer" or @id="kt_app_footer"] | '
+            .'//*[contains(concat(" ", normalize-space(@class), " "), " app-sidebar ") '
+            .'or contains(concat(" ", normalize-space(@class), " "), " app-header ") '
+            .'or contains(concat(" ", normalize-space(@class), " "), " app-navbar ") '
+            .'or contains(concat(" ", normalize-space(@class), " "), " main-sidebar ") '
+            .'or contains(concat(" ", normalize-space(@class), " "), " topbar ") '
+            .'or contains(concat(" ", normalize-space(@class), " "), " user-menu ") '
+            .'or contains(concat(" ", normalize-space(@class), " "), " profile-dropdown ") '
+            .'or contains(concat(" ", normalize-space(@class), " "), " drawer ") '
+            .'or contains(concat(" ", normalize-space(@class), " "), " offcanvas ")]';
 
         $chromeNodes = $xpath->query($chromeQuery);
         if ($chromeNodes && $chromeNodes->length > 0) {
@@ -1995,55 +2085,99 @@ class ApiDiscoveryService
 
         $items = [];
 
-        // Strategy C: HTML Table Rows in content area (common in courses, packages, schedules)
+        // Strategy D: HTML Table Rows (common in courses, quizzes, history, packages, schedules)
         $rows = $xpath->query('//table//tbody//tr|//table//tr[td]');
         if ($rows && $rows->length > 0) {
             foreach ($rows as $index => $row) {
                 $cells = $xpath->query('.//td', $row);
-                if ($cells && $cells->length >= 2) {
-                    $name = trim($cells->item(0)->textContent);
-                    // If first cell has link or bold text, prefer that
-                    $linkInCell = $xpath->query('.//a|.//strong|.//b', $cells->item(0));
-                    if ($linkInCell && $linkInCell->length > 0) {
-                        $candidate = trim($linkInCell->item(0)->textContent);
-                        if (strlen($candidate) > 2) {
-                            $name = $candidate;
-                        }
-                    }
-
-                    if (! $this->isValidItemName($name)) {
-                        // Check second cell
-                        $name2 = trim($cells->item(1)->textContent);
-                        if ($this->isValidItemName($name2)) {
-                            $name = $name2;
-                        } else {
-                            continue;
-                        }
-                    }
-
-                    $desc = $cells->length >= 3 ? trim($cells->item(1)->textContent) : null;
-                    $price = null;
-                    for ($i = 1; $i < $cells->length; $i++) {
-                        $txt = trim($cells->item($i)->textContent);
-                        if (preg_match('/(?:[\$£€]|EGP|LE|SAR|USD|ج\.م|جنيه|ريال)\s*([0-9]+(?:\.[0-9]+)?)/i', $txt, $numMatch)) {
-                            $price = $numMatch[1];
-                            break;
-                        } elseif (preg_match('/^[0-9]+(?:\.[0-9]+)?$/', $txt, $numMatch)) {
-                            $price = $numMatch[0];
-                        }
-                    }
-
-                    $imgNode = $xpath->query('.//img', $row);
-                    $img = ($imgNode && $imgNode->length > 0) ? $imgNode->item(0)->getAttribute('src') : null;
-
-                    $items[] = [
-                        'id' => $index + 1,
-                        'name' => $name,
-                        'description' => $desc,
-                        'price' => $price,
-                        'image' => $img,
-                    ];
+                if (! $cells || $cells->length < 1) {
+                    continue;
                 }
+
+                // Skip "No data" / empty table rows
+                if ($cells->length === 1) {
+                    $singleText = strtolower(trim(preg_replace('/\s+/', ' ', strip_tags($cells->item(0)->textContent))));
+                    if (str_contains($singleText, 'no data') || str_contains($singleText, 'no record') || str_contains($singleText, 'empty') || str_contains($singleText, 'not found')) {
+                        continue;
+                    }
+                }
+
+                $name = null;
+                $nameCellIdx = -1;
+
+                // Scan all cells across the row to find the item title/name
+                for ($i = 0; $i < $cells->length; $i++) {
+                    $cell = $cells->item($i);
+                    $candidate = null;
+
+                    // Prefer links or strong/b or title classes inside cell
+                    $linkInCell = $xpath->query('.//a|.//strong|.//b|.//*[contains(@class, "title") or contains(@class, "name")]', $cell);
+                    if ($linkInCell && $linkInCell->length > 0) {
+                        $c = trim(preg_replace('/\s+/', ' ', strip_tags($linkInCell->item(0)->textContent)));
+                        if ($this->isValidItemName($c)) {
+                            $candidate = $c;
+                        }
+                    }
+
+                    if (! $candidate) {
+                        $c = trim(preg_replace('/\s+/', ' ', strip_tags($cell->textContent)));
+                        if ($this->isValidItemName($c)) {
+                            $candidate = $c;
+                        }
+                    }
+
+                    if ($candidate && $this->isValidItemName($candidate)) {
+                        $name = $candidate;
+                        $nameCellIdx = $i;
+                        break;
+                    }
+                }
+
+                if (! $name) {
+                    continue;
+                }
+
+                // Extract price, score, and description from remaining cells
+                $price = null;
+                $descParts = [];
+                for ($i = 0; $i < $cells->length; $i++) {
+                    if ($i === $nameCellIdx) {
+                        continue;
+                    }
+                    $txt = trim(preg_replace('/\s+/', ' ', strip_tags($cells->item($i)->textContent)));
+                    if (empty($txt)) {
+                        continue;
+                    }
+
+                    // Skip the table counter / row index column (e.g. # 1, 2, 3) so it's not mistaken for price or desc
+                    if ($i === 0 && $nameCellIdx > 0 && preg_match('/^[0-9]+$/', $txt)) {
+                        continue;
+                    }
+
+                    if ($price === null && (
+                        preg_match('/(?:[\$£€]|EGP|LE|SAR|USD|ج\.م|جنيه|ريال)\s*([0-9]+(?:\.[0-9]+)?)/iu', $txt, $numMatch) ||
+                        preg_match('/([0-9]+(?:\.[0-9]+)?)\s*(?:[\$£€]|EGP|LE|SAR|USD|ج\.م|جنيه|ريال)/iu', $txt, $numMatch)
+                    )) {
+                        $price = $numMatch[1];
+                    } elseif ($price === null && preg_match('/^[0-9]+(?:\.[0-9]+)?%?$/', $txt, $numMatch)) {
+                        $price = $numMatch[0];
+                    } else {
+                        $descParts[] = $txt;
+                    }
+                }
+
+                $desc = ! empty($descParts) ? implode(' | ', array_slice($descParts, 0, 3)) : null;
+
+                $imgNode = $xpath->query('.//img[not(contains(@src, "default.png")) and not(contains(@src, "icon")) and not(contains(@src, "arrow"))]', $row);
+                $img = ($imgNode && $imgNode->length > 0) ? $imgNode->item(0)->getAttribute('src') : null;
+
+                $items[] = [
+                    'id' => $index + 1,
+                    'name' => $name,
+                    'description' => $desc,
+                    'price' => $price,
+                    'image' => $img,
+                ];
             }
 
             if (! empty($items)) {
@@ -2051,14 +2185,20 @@ class ApiDiscoveryService
             }
         }
 
-        // Strategy D: Cards, Accordions & Content Items in content area
+        // Strategy E: Cards, Accordions & Content Items in content area
         $cardQuery = '//*[contains(concat(" ", normalize-space(@class), " "), " card ") '
             .'or contains(@class, "course-card") '
             .'or contains(@class, "package-card") '
             .'or contains(@class, "product-card") '
+            .'or contains(@class, "quiz-card") '
+            .'or contains(@class, "exam-card") '
+            .'or contains(@class, "session-card") '
+            .'or contains(@class, "lesson-card") '
+            .'or contains(@class, "history-card") '
             .'or contains(@class, "item-card") '
             .'or contains(@class, "course-box") '
             .'or contains(@class, "package-box") '
+            .'or contains(@class, "quiz-box") '
             .'or contains(@class, "accordion-item") '
             .'or contains(@class, "list-group-item") '
             .'or contains(@class, "card-body")]';
@@ -2069,8 +2209,8 @@ class ApiDiscoveryService
                 // Strict prioritized title discovery
                 $name = null;
 
-                // Priority 1: Elements with explicit title, name, course, package classes
-                $titleNodes = $xpath->query('.//*[contains(@class, "title") or contains(@class, "name") or contains(@class, "heading") or contains(@class, "course") or contains(@class, "package")]', $card);
+                // Priority 1: Elements with explicit title, name, course, package, quiz classes
+                $titleNodes = $xpath->query('.//*[contains(@class, "title") or contains(@class, "name") or contains(@class, "heading") or contains(@class, "course") or contains(@class, "package") or contains(@class, "quiz") or contains(@class, "exam")]', $card);
                 if ($titleNodes && $titleNodes->length > 0) {
                     foreach ($titleNodes as $tn) {
                         $candidate = trim(preg_replace('/\s+/', ' ', strip_tags($tn->textContent)));
@@ -2136,7 +2276,8 @@ class ApiDiscoveryService
                 $price = null;
                 if ($priceNode && $priceNode->length > 0) {
                     $priceTxt = trim($priceNode->item(0)->textContent);
-                    if (preg_match('/(?:[\$£€]|EGP|LE|SAR|USD|ج\.م|جنيه|ريال)\s*([0-9]+(?:\.[0-9]+)?)/i', $priceTxt, $m)) {
+                    if (preg_match('/(?:[\$£€]|EGP|LE|SAR|USD|ج\.م|جنيه|ريال)\s*([0-9]+(?:\.[0-9]+)?)/iu', $priceTxt, $m) ||
+                        preg_match('/([0-9]+(?:\.[0-9]+)?)\s*(?:[\$£€]|EGP|LE|SAR|USD|ج\.م|جنيه|ريال)/iu', $priceTxt, $m)) {
                         $price = $m[1];
                     } elseif (preg_match('/^[0-9]+(?:\.[0-9]+)?$/', $priceTxt, $m)) {
                         $price = $m[0];
