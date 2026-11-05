@@ -110,6 +110,6 @@ Schedule::command('products:sync')
 
 // Schedule daily products scraping via n8n for accounts with credentials at 4:00 PM (Africa/Cairo)
 Schedule::command('products:scrape-n8n')
-    ->dailyAt('16:00')
+    ->dailyAt('11:38')
     ->timezone('Africa/Cairo')
     ->withoutOverlapping(60);
