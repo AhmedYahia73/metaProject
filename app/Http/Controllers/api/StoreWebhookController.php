@@ -89,7 +89,7 @@ class StoreWebhookController extends Controller
         }
 
         // 6. Ensure template is registered on Meta WABA
-        $this->metaService->ensureOrderConfirmationTemplate($whatsItem);
+        $templateResult = $this->metaService->ensureOrderConfirmationTemplate($whatsItem);
 
         // 7. Store order (idempotent: prevent duplicate sending if webhook retries)
         /** @var EcommerceOrder $order */
@@ -126,6 +126,7 @@ class StoreWebhookController extends Controller
             'status' => true,
             'message' => 'Order processed successfully.',
             'order_id' => $order->id,
+            'template_result' => $templateResult,
             'whatsapp_result' => $sentResult,
         ], Response::HTTP_OK);
     }

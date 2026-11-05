@@ -718,6 +718,7 @@ class MetaWhatsAppService
             return [
                 'success' => false,
                 'message' => $error['message'] ?? 'Failed to create template on Meta.',
+                'raw' => $response->json(),
             ];
         } catch (\Throwable $e) {
             Log::error('MetaWhatsApp: Exception creating template: '.$e->getMessage(), [
