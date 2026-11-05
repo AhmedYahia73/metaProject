@@ -107,6 +107,12 @@ class WhatsPagesController extends Controller
                     'subscription_status' => $subInfo['subscription_status'],
                     'available_msgs' => $subInfo['available_msgs'],
                     'profile_picture' => $item->getProfilePictureUrl(),
+                    'order_confirmation_enabled' => (bool) $item->order_confirmation_enabled,
+                    'ecommerce_platform' => $item->ecommerce_platform ?? 'woocommerce',
+                    'client_id' => $item->user_name,
+                    'client_secret' => $item->password,
+                    'store_webhook_token' => $item->store_webhook_token,
+                    'store_webhook_url' => $item->getStoreWebhookUrl(),
                 ];
             });
 
@@ -158,13 +164,28 @@ class WhatsPagesController extends Controller
             'login_link' => 'sometimes|nullable|string|max:500',
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
+            'client_id' => 'sometimes|nullable|string|max:255',
+            'client_secret' => 'sometimes|nullable|string|max:500',
+            'secret' => 'sometimes|nullable|string|max:500',
             'products_link' => 'sometimes|nullable|string|max:500',
             'product_link' => 'sometimes|nullable|string|max:500',
             'auto_request_code' => 'sometimes|boolean',
             'code_method' => 'sometimes|in:SMS,VOICE',
             'ai_context' => 'sometimes|nullable|string',
             'ai_file' => 'sometimes|nullable||file|mimes:txt,text,md|extensions:md|max:2048',
+            'order_confirmation_enabled' => 'sometimes|boolean',
+            'ecommerce_platform' => 'sometimes|nullable|in:woocommerce,shopify',
+            'shopify_access_token' => 'sometimes|nullable|string',
         ]);
+
+        if ($request->filled('client_id') && empty($validated['user_name'])) {
+            $validated['user_name'] = $request->input('client_id');
+        }
+        if ($request->filled('client_secret') && empty($validated['password'])) {
+            $validated['password'] = $request->input('client_secret');
+        } elseif ($request->filled('secret') && empty($validated['password'])) {
+            $validated['password'] = $request->input('secret');
+        }
 
         if ($request->has('product_link') && ! $request->has('products_link')) {
             $validated['products_link'] = $request->input('product_link');
@@ -222,6 +243,11 @@ class WhatsPagesController extends Controller
             $aiFilePath = $validated['ai_file'];
         }
 
+        $orderConfirmationEnabled = $request->boolean('order_confirmation_enabled', false);
+        if ($orderConfirmationEnabled) {
+            WhatsItem::where('user_id', $user->id)->update(['order_confirmation_enabled' => false]);
+        }
+
         $whatsItem = WhatsItem::create([
             'user_id' => $user->id,
             'phone' => $validated['phone'],
@@ -240,6 +266,10 @@ class WhatsPagesController extends Controller
             'ai_file' => $aiFilePath,
             'phone_status' => 'pending_otp',
             'msg_number' => 0,
+            'order_confirmation_enabled' => $orderConfirmationEnabled,
+            'ecommerce_platform' => $validated['ecommerce_platform'] ?? 'woocommerce',
+            'store_webhook_token' => bin2hex(random_bytes(16)),
+            'shopify_access_token' => $validated['shopify_access_token'] ?? null,
         ]);
 
         return response()->json([
@@ -278,12 +308,27 @@ class WhatsPagesController extends Controller
             'login_link' => 'sometimes|nullable|string|max:500',
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
+            'client_id' => 'sometimes|nullable|string|max:255',
+            'client_secret' => 'sometimes|nullable|string|max:500',
+            'secret' => 'sometimes|nullable|string|max:500',
             'products_link' => 'sometimes|nullable|string|max:500',
             'product_link' => 'sometimes|nullable|string|max:500',
             'ai_context' => 'sometimes|nullable|string',
             'ai_file' => 'sometimes|nullable||file|mimes:txt,text,md|extensions:md|max:2048',
             'user_data' => 'sometimes|nullable',
+            'order_confirmation_enabled' => 'sometimes|boolean',
+            'ecommerce_platform' => 'sometimes|nullable|in:woocommerce,shopify',
+            'shopify_access_token' => 'sometimes|nullable|string',
         ]);
+
+        if ($request->filled('client_id') && empty($validated['user_name'])) {
+            $validated['user_name'] = $request->input('client_id');
+        }
+        if ($request->filled('client_secret') && empty($validated['password'])) {
+            $validated['password'] = $request->input('client_secret');
+        } elseif ($request->filled('secret') && empty($validated['password'])) {
+            $validated['password'] = $request->input('secret');
+        }
 
         if ($request->has('product_link') && ! $request->has('products_link')) {
             $validated['products_link'] = $request->input('product_link');
@@ -306,12 +351,27 @@ class WhatsPagesController extends Controller
             $validated['user_data'] = $whatsItem->fetchProductsPayloadFromApiLink($validated['api_link']);
         }
 
+        if ($request->has('order_confirmation_enabled') && $request->boolean('order_confirmation_enabled')) {
+            WhatsItem::where('user_id', $request->user()->id)
+                ->where('id', '!=', $whatsItem->id)
+                ->update(['order_confirmation_enabled' => false]);
+            $validated['order_confirmation_enabled'] = true;
+
+            if (empty($whatsItem->store_webhook_token)) {
+                $validated['store_webhook_token'] = bin2hex(random_bytes(16));
+            }
+        }
+
         $whatsItem->update($validated);
+
+        $fresh = $whatsItem->fresh()->makeVisible('user_data');
+        $freshArray = $fresh->toArray();
+        $freshArray['store_webhook_url'] = $fresh->getStoreWebhookUrl();
 
         return response()->json([
             'status' => true,
             'message' => 'WhatsApp item updated successfully.',
-            'data' => $whatsItem->fresh()->makeVisible('user_data'),
+            'data' => $freshArray,
         ]);
     }
 

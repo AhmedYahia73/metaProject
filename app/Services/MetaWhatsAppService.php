@@ -2,6 +2,9 @@
 
 namespace App\Services;
 
+use App\Models\EcommerceOrder;
+use App\Models\MsgSend;
+use App\Models\WhatsItem;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -555,5 +558,338 @@ class MetaWhatsAppService
         $profile = $this->getBusinessProfile($phoneNumberId, $token);
 
         return $profile['profile_picture_url'] ?? null;
+    }
+
+    /**
+     * Normalize a recipient's phone number into clean digits without leading plus,
+     * defaulting to Egypt (+20) if no country code is present.
+     */
+    public function normalizeRecipientPhone(string $phone, string $defaultCountryCode = '20'): string
+    {
+        $clean = preg_replace('/[^0-9]/', '', $phone);
+
+        if (str_starts_with($clean, '00')) {
+            $clean = substr($clean, 2);
+        }
+
+        // Egyptian local mobile format (010..., 011..., 012..., 015... - 11 digits)
+        if (preg_match('/^0(1[0125][0-9]{8})$/', $clean, $matches)) {
+            return '20'.$matches[1];
+        }
+
+        // 10 digits starting with 1 (e.g. 1012345678)
+        if (preg_match('/^(1[0125][0-9]{8})$/', $clean, $matches)) {
+            return '20'.$matches[1];
+        }
+
+        // Already Egyptian format with country code (2010... - 12 digits)
+        if (preg_match('/^20(1[0125][0-9]{8})$/', $clean)) {
+            return $clean;
+        }
+
+        // Saudi Arabia local (05xxxxxxxx)
+        if (preg_match('/^0(5[0-9]{8})$/', $clean, $matches)) {
+            return '966'.$matches[1];
+        }
+        if (preg_match('/^966(5[0-9]{8})$/', $clean)) {
+            return $clean;
+        }
+
+        // UAE local (05xxxxxxxx)
+        if (preg_match('/^0(5[0-9]{8})$/', $clean, $matches)) {
+            return '971'.$matches[1];
+        }
+        if (preg_match('/^971([0-9]{8,9})$/', $clean)) {
+            return $clean;
+        }
+
+        // If number starts with 0 and doesn't match above, strip 0 and prepend default country code (20)
+        if (str_starts_with($clean, '0')) {
+            return $defaultCountryCode.ltrim($clean, '0');
+        }
+
+        // If short national number without CC (e.g. 9 or 10 digits), prepend default country code
+        if (strlen($clean) <= 10 && ! str_starts_with($clean, $defaultCountryCode)) {
+            return $defaultCountryCode.$clean;
+        }
+
+        return $clean;
+    }
+
+    /**
+     * Ensure the Arabic order confirmation template with Quick Reply buttons exists on the WABA.
+     *
+     * @return array{success: bool, message: string, template_id?: string}
+     */
+    public function ensureOrderConfirmationTemplate(WhatsItem $whatsItem): array
+    {
+        $wabaId = $whatsItem->customer_waba_id ?: ($whatsItem->waba_id ?: $this->wabaId);
+        $token = $whatsItem->access_token ?: $this->systemUserToken;
+
+        if (empty($wabaId) || empty($token)) {
+            return [
+                'success' => false,
+                'message' => 'WABA ID or Access Token is missing.',
+            ];
+        }
+
+        // 1. Check if template already exists
+        try {
+            $checkResponse = Http::withToken($token)
+                ->timeout(15)
+                ->get("{$this->baseUrl}/{$wabaId}/message_templates", [
+                    'name' => 'order_confirmation',
+                ]);
+
+            if ($checkResponse->successful()) {
+                $existing = $checkResponse->json('data', []);
+                foreach ($existing as $t) {
+                    if (($t['name'] ?? '') === 'order_confirmation' && ($t['language'] ?? '') === 'ar') {
+                        return [
+                            'success' => true,
+                            'message' => 'Template already exists.',
+                            'template_id' => $t['id'] ?? null,
+                        ];
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('MetaWhatsApp: Failed to query existing message templates', [
+                'waba_id' => $wabaId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        // 2. Create the order_confirmation template
+        $templatePayload = [
+            'name' => 'order_confirmation',
+            'category' => 'UTILITY',
+            'language' => 'ar',
+            'components' => [
+                [
+                    'type' => 'BODY',
+                    'text' => "أهلاً {{1}}، طلبك رقم {{2}} من {{3}} بإجمالي {{4}} جنيه.\nبرجاء اختيار تأكيد الطلب لتجهيزه فوراً، أو إلغاء الطلب.",
+                    'example' => [
+                        'body_text' => [['أحمد', '1045', 'اسم المتجر', '250']],
+                    ],
+                ],
+                [
+                    'type' => 'BUTTONS',
+                    'buttons' => [
+                        ['type' => 'QUICK_REPLY', 'text' => 'تأكيد الطلب'],
+                        ['type' => 'QUICK_REPLY', 'text' => 'إلغاء الطلب'],
+                    ],
+                ],
+            ],
+        ];
+
+        try {
+            $response = Http::withToken($token)
+                ->timeout(15)
+                ->post("{$this->baseUrl}/{$wabaId}/message_templates", $templatePayload);
+
+            if ($response->successful()) {
+                Log::info('MetaWhatsApp: Order confirmation template created on WABA', [
+                    'waba_id' => $wabaId,
+                    'response' => $response->json(),
+                ]);
+
+                return [
+                    'success' => true,
+                    'message' => 'Template created successfully.',
+                    'template_id' => $response->json('id'),
+                ];
+            }
+
+            $error = $response->json('error', []);
+            // Code 100 with subcode indicates template already exists
+            if (($error['code'] ?? null) === 100 && str_contains((string) ($error['message'] ?? ''), 'already exists')) {
+                return [
+                    'success' => true,
+                    'message' => 'Template already exists on Meta.',
+                ];
+            }
+
+            Log::error('MetaWhatsApp: Failed to create order confirmation template', [
+                'waba_id' => $wabaId,
+                'error' => $error,
+            ]);
+
+            return [
+                'success' => false,
+                'message' => $error['message'] ?? 'Failed to create template on Meta.',
+            ];
+        } catch (\Throwable $e) {
+            Log::error('MetaWhatsApp: Exception creating template: '.$e->getMessage(), [
+                'waba_id' => $wabaId,
+            ]);
+
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Send an order confirmation template message with Quick Reply buttons to a customer.
+     *
+     * @return array{success: bool, message: string, message_id?: string}
+     */
+    public function sendOrderConfirmationMessage(
+        WhatsItem $whatsItem,
+        string $toPhone,
+        EcommerceOrder $order,
+        ?string $storeName = null
+    ): array {
+        $token = $whatsItem->access_token ?: $this->systemUserToken;
+        $phoneNumberId = $whatsItem->phone_number_id ?: $this->phoneNumberId;
+
+        if (empty($token) || empty($phoneNumberId)) {
+            return [
+                'success' => false,
+                'message' => 'Missing WhatsApp credentials (token or phone_number_id).',
+            ];
+        }
+
+        $normalizedTo = $this->normalizeRecipientPhone($toPhone);
+        $resolvedStoreName = $storeName ?: ($whatsItem->user?->restuarant_name ?: ($whatsItem->user?->name ?: 'المتجر'));
+        $customerName = ! empty($order->customer_name) ? $order->customer_name : 'عميلنا العزيز';
+        $orderNumber = (string) (! empty($order->order_number) ? $order->order_number : $order->external_order_id);
+        $total = (string) ($order->total_price ?? '0');
+
+        $payload = [
+            'messaging_product' => 'whatsapp',
+            'recipient_type' => 'individual',
+            'to' => $normalizedTo,
+            'type' => 'template',
+            'template' => [
+                'name' => 'order_confirmation',
+                'language' => [
+                    'code' => 'ar',
+                ],
+                'components' => [
+                    [
+                        'type' => 'body',
+                        'parameters' => [
+                            ['type' => 'text', 'text' => $customerName],
+                            ['type' => 'text', 'text' => $orderNumber],
+                            ['type' => 'text', 'text' => $resolvedStoreName],
+                            ['type' => 'text', 'text' => $total],
+                        ],
+                    ],
+                    [
+                        'type' => 'button',
+                        'sub_type' => 'quick_reply',
+                        'index' => '0',
+                        'parameters' => [
+                            ['type' => 'payload', 'payload' => 'ORDER_APPROVE_'.$order->id],
+                        ],
+                    ],
+                    [
+                        'type' => 'button',
+                        'sub_type' => 'quick_reply',
+                        'index' => '1',
+                        'parameters' => [
+                            ['type' => 'payload', 'payload' => 'ORDER_REJECT_'.$order->id],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        try {
+            $response = Http::withToken($token)
+                ->timeout(15)
+                ->post("{$this->baseUrl}/{$phoneNumberId}/messages", $payload);
+
+            if ($response->successful()) {
+                $wamid = $response->json('messages.0.id');
+                $order->update(['meta_message_id' => $wamid]);
+
+                if ($whatsItem->msg_number > 0) {
+                    $whatsItem->decrement('msg_number');
+                }
+
+                if ($whatsItem->user_id) {
+                    MsgSend::create([
+                        'user_id' => $whatsItem->user_id,
+                        'whats_item_id' => $whatsItem->id,
+                        'channel' => 'whatsapp',
+                        'status' => 'sent',
+                    ]);
+                }
+
+                Log::info('MetaWhatsApp: Order confirmation template sent successfully', [
+                    'whats_item_id' => $whatsItem->id,
+                    'order_id' => $order->id,
+                    'to' => $normalizedTo,
+                    'wamid' => $wamid,
+                ]);
+
+                return [
+                    'success' => true,
+                    'message' => 'Message sent successfully.',
+                    'message_id' => $wamid,
+                ];
+            }
+
+            $error = $response->json('error', []);
+            Log::error('MetaWhatsApp: Failed to send order confirmation template', [
+                'whats_item_id' => $whatsItem->id,
+                'order_id' => $order->id,
+                'to' => $normalizedTo,
+                'error' => $error,
+            ]);
+
+            return [
+                'success' => false,
+                'message' => $error['message'] ?? 'Failed to send WhatsApp template message.',
+                'error' => $error,
+            ];
+        } catch (\Throwable $e) {
+            Log::error('MetaWhatsApp: Exception sending template: '.$e->getMessage(), [
+                'whats_item_id' => $whatsItem->id,
+                'order_id' => $order->id,
+            ]);
+
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Send a direct WhatsApp text message to customer (e.g. status confirmation).
+     */
+    public function sendDirectTextMessage(WhatsItem $whatsItem, string $toPhone, string $text): bool
+    {
+        $token = $whatsItem->access_token ?: $this->systemUserToken;
+        $phoneNumberId = $whatsItem->phone_number_id ?: $this->phoneNumberId;
+
+        if (empty($token) || empty($phoneNumberId)) {
+            return false;
+        }
+
+        $normalizedTo = $this->normalizeRecipientPhone($toPhone);
+
+        try {
+            $response = Http::withToken($token)
+                ->timeout(10)
+                ->post("{$this->baseUrl}/{$phoneNumberId}/messages", [
+                    'messaging_product' => 'whatsapp',
+                    'recipient_type' => 'individual',
+                    'to' => $normalizedTo,
+                    'type' => 'text',
+                    'text' => ['body' => $text],
+                ]);
+
+            return $response->successful();
+        } catch (\Throwable $e) {
+            Log::warning('MetaWhatsApp: Exception sending direct text: '.$e->getMessage());
+
+            return false;
+        }
     }
 }

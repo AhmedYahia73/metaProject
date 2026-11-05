@@ -22,9 +22,11 @@ use App\Http\Controllers\api\auth\LoginController;
 use App\Http\Controllers\api\HomeController;
 use App\Http\Controllers\api\internal\ChannelProductsWebhookController;
 use App\Http\Controllers\api\PaymobCallbackController;
+use App\Http\Controllers\api\StoreWebhookController;
 use App\Http\Controllers\api\TelegramWebhookController;
 use App\Http\Controllers\api\TikTokWebhookController;
 use App\Http\Controllers\api\user\ChatController;
+use App\Http\Controllers\api\user\EcommerceOrderController;
 use App\Http\Controllers\api\user\EmbeddedSignupController;
 use App\Http\Controllers\api\user\HomeController as UserHomeController;
 use App\Http\Controllers\api\user\InstagramPagesController;
@@ -80,6 +82,12 @@ Route::match(['get', 'post'], '/tiktok-webhook', [TikTokWebhookController::class
 
 // Paymob Webhook / Redirection Callback (public)
 Route::match(['get', 'post'], '/paymob/callback', [PaymobCallbackController::class, 'callback']);
+
+// Store Webhooks (WooCommerce & Shopify order created notifications)
+Route::post('/webhooks/store/{token}', [StoreWebhookController::class, 'handle'])
+    ->name('webhooks.store');
+Route::post('/webhooks/store/{token}/order-created', [StoreWebhookController::class, 'handle'])
+    ->name('webhooks.store.order_created');
 
 // Internal Webhook for n8n products scraper callback
 Route::post('/internal/channel-products/webhook', [ChannelProductsWebhookController::class, 'handle'])
@@ -159,6 +167,11 @@ Route::prefix('user')->group(function () {
         Route::post('whats/items/{whatsItem}/verify-and-register', [WhatsPagesController::class, 'verifyAndRegister']);
         Route::get('whats/items/{whatsItem}/meta-status', [WhatsPagesController::class, 'syncMetaStatus']);
         Route::post('whats/orders', [WhatsPagesController::class, 'requestSubscription']);
+
+        // Ecommerce Orders (WooCommerce & Shopify WhatsApp Confirmations)
+        Route::get('ecommerce-orders', [EcommerceOrderController::class, 'index']);
+        Route::get('ecommerce-orders/{ecommerceOrder}', [EcommerceOrderController::class, 'show']);
+        Route::post('ecommerce-orders/{ecommerceOrder}/resend', [EcommerceOrderController::class, 'resend']);
 
         // Live Chat / Inbox (Messenger & WhatsApp)
         Route::get('chat/messenger/pages', [ChatController::class, 'messengerPages']);

@@ -99,6 +99,16 @@ class User extends Authenticatable
     }
 
     /**
+     * Get all ecommerce orders for this user (store).
+     *
+     * @return HasMany<EcommerceOrder, $this>
+     */
+    public function ecommerceOrders(): HasMany
+    {
+        return $this->hasMany(EcommerceOrder::class);
+    }
+
+    /**
      * Get all Instagram items for this user (restaurant).
      *
      * @return HasMany<InstagramItem, $this>

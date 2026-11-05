@@ -62,13 +62,28 @@ class WhatsItemController extends Controller
             'login_link' => 'sometimes|nullable|string|max:500',
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
+            'client_id' => 'sometimes|nullable|string|max:255',
+            'client_secret' => 'sometimes|nullable|string|max:500',
+            'secret' => 'sometimes|nullable|string|max:500',
             'products_link' => 'sometimes|nullable|string|max:500',
             'product_link' => 'sometimes|nullable|string|max:500',
             'auto_request_code' => 'sometimes|boolean',
             'code_method' => 'sometimes|in:SMS,VOICE',
             'ai_context' => 'sometimes|nullable|string',
             'ai_file' => 'sometimes|nullable||file|mimes:txt,text,md|extensions:md|max:2048',
+            'order_confirmation_enabled' => 'sometimes|boolean',
+            'ecommerce_platform' => 'sometimes|nullable|in:woocommerce,shopify',
+            'shopify_access_token' => 'sometimes|nullable|string',
         ]);
+
+        if ($request->filled('client_id') && empty($validated['user_name'])) {
+            $validated['user_name'] = $request->input('client_id');
+        }
+        if ($request->filled('client_secret') && empty($validated['password'])) {
+            $validated['password'] = $request->input('client_secret');
+        } elseif ($request->filled('secret') && empty($validated['password'])) {
+            $validated['password'] = $request->input('secret');
+        }
 
         if ($request->has('product_link') && ! $request->has('products_link')) {
             $validated['products_link'] = $request->input('product_link');
@@ -126,6 +141,11 @@ class WhatsItemController extends Controller
             $aiFilePath = $validated['ai_file'];
         }
 
+        $orderConfirmationEnabled = $request->boolean('order_confirmation_enabled', false);
+        if ($orderConfirmationEnabled) {
+            WhatsItem::where('user_id', $user->id)->update(['order_confirmation_enabled' => false]);
+        }
+
         $whatsItem = WhatsItem::create([
             'user_id' => $user->id,
             'phone' => $validated['phone'],
@@ -144,6 +164,10 @@ class WhatsItemController extends Controller
             'ai_file' => $aiFilePath,
             'phone_status' => 'pending_otp',
             'msg_number' => 0,
+            'order_confirmation_enabled' => $orderConfirmationEnabled,
+            'ecommerce_platform' => $validated['ecommerce_platform'] ?? 'woocommerce',
+            'store_webhook_token' => bin2hex(random_bytes(16)),
+            'shopify_access_token' => $validated['shopify_access_token'] ?? null,
         ]);
 
         return response()->json([
@@ -183,13 +207,28 @@ class WhatsItemController extends Controller
             'login_link' => 'sometimes|nullable|string|max:500',
             'user_name' => 'sometimes|nullable|string|max:255',
             'password' => 'sometimes|nullable|string|max:255',
+            'client_id' => 'sometimes|nullable|string|max:255',
+            'client_secret' => 'sometimes|nullable|string|max:500',
+            'secret' => 'sometimes|nullable|string|max:500',
             'products_link' => 'sometimes|nullable|string|max:500',
             'product_link' => 'sometimes|nullable|string|max:500',
             'phone_status' => 'sometimes|in:pending_otp,verified,active',
             'ai_context' => 'sometimes|nullable|string',
             'ai_file' => 'sometimes|nullable',
             'user_data' => 'sometimes|nullable',
+            'order_confirmation_enabled' => 'sometimes|boolean',
+            'ecommerce_platform' => 'sometimes|nullable|in:woocommerce,shopify',
+            'shopify_access_token' => 'sometimes|nullable|string',
         ]);
+
+        if ($request->filled('client_id') && empty($validated['user_name'])) {
+            $validated['user_name'] = $request->input('client_id');
+        }
+        if ($request->filled('client_secret') && empty($validated['password'])) {
+            $validated['password'] = $request->input('client_secret');
+        } elseif ($request->filled('secret') && empty($validated['password'])) {
+            $validated['password'] = $request->input('secret');
+        }
 
         if ($request->has('product_link') && ! $request->has('products_link')) {
             $validated['products_link'] = $request->input('product_link');
@@ -217,12 +256,27 @@ class WhatsItemController extends Controller
             $validated['user_data'] = null;
         }
 
+        if ($request->has('order_confirmation_enabled') && $request->boolean('order_confirmation_enabled')) {
+            WhatsItem::where('user_id', $user->id)
+                ->where('id', '!=', $whatsItem->id)
+                ->update(['order_confirmation_enabled' => false]);
+            $validated['order_confirmation_enabled'] = true;
+
+            if (empty($whatsItem->store_webhook_token)) {
+                $validated['store_webhook_token'] = bin2hex(random_bytes(16));
+            }
+        }
+
         $whatsItem->update($validated);
+
+        $fresh = $whatsItem->fresh()->makeVisible('user_data');
+        $freshArray = $fresh->toArray();
+        $freshArray['store_webhook_url'] = $fresh->getStoreWebhookUrl();
 
         return response()->json([
             'status' => true,
             'message' => 'WhatsApp item updated successfully.',
-            'data' => $whatsItem->fresh()->makeVisible('user_data'),
+            'data' => $freshArray,
         ]);
     }
 

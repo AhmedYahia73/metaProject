@@ -44,6 +44,10 @@ class WhatsItem extends Model
         'ai_file',
         'start_date',
         'end_date',
+        'order_confirmation_enabled',
+        'ecommerce_platform',
+        'store_webhook_token',
+        'shopify_access_token',
     ];
 
     /**
@@ -54,6 +58,7 @@ class WhatsItem extends Model
     protected $hidden = [
         'access_token',
         'user_data',
+        'shopify_access_token',
     ];
 
     /**
@@ -69,6 +74,7 @@ class WhatsItem extends Model
             'msg_number' => 'integer',
             'start_date' => 'date',
             'end_date' => 'date',
+            'order_confirmation_enabled' => 'boolean',
         ];
     }
 
@@ -126,6 +132,29 @@ class WhatsItem extends Model
     public function chats(): HasMany
     {
         return $this->hasMany(Chat::class, 'whats_item_id');
+    }
+
+    /**
+     * Get ecommerce orders linked to this WhatsApp item.
+     *
+     * @return HasMany<EcommerceOrder, $this>
+     */
+    public function ecommerceOrders(): HasMany
+    {
+        return $this->hasMany(EcommerceOrder::class);
+    }
+
+    /**
+     * Get or generate the unique webhook URL for WooCommerce/Shopify orders.
+     */
+    public function getStoreWebhookUrl(): string
+    {
+        if (empty($this->store_webhook_token)) {
+            $token = bin2hex(random_bytes(16));
+            $this->update(['store_webhook_token' => $token]);
+        }
+
+        return url("/api/webhooks/store/{$this->store_webhook_token}");
     }
 
     /**

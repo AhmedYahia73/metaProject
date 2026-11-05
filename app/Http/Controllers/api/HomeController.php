@@ -9,6 +9,7 @@ use App\Events\WhatsEvent;
 use App\Http\Controllers\Controller;
 use App\Models\Chat;
 use App\Models\DailyToken;
+use App\Models\EcommerceOrder;
 use App\Models\Food;
 use App\Models\InstagramItem;
 use App\Models\MessengerAccount;
@@ -17,7 +18,9 @@ use App\Models\Order;
 use App\Models\Setting;
 use App\Models\User;
 use App\Models\WhatsItem;
+use App\Services\EcommerceStoreService;
 use App\Services\MetaPageTokenService;
+use App\Services\MetaWhatsAppService;
 use App\trait\FormatsChatLinks;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -185,6 +188,30 @@ class HomeController extends Controller
 
             $senderName = data_get($data, 'entry.0.changes.0.value.contacts.0.profile.name', 'عميل');
             $messageText = trim(data_get($incomingMessage, 'text.body', ''));
+
+            $buttonPayload = (string) (data_get($incomingMessage, 'button.payload')
+                ?? data_get($incomingMessage, 'interactive.button_reply.id')
+                ?? '');
+            $buttonText = (string) (data_get($incomingMessage, 'button.text')
+                ?? data_get($incomingMessage, 'interactive.button_reply.title')
+                ?? '');
+
+            if (empty($messageText) && ! empty($buttonText)) {
+                $messageText = $buttonText;
+            }
+
+            // Intercept order confirmation actions (Approve / Reject Quick Reply buttons)
+            if ($this->isOrderConfirmationAction($buttonPayload, $messageText)) {
+                return $this->handleOrderConfirmationAction(
+                    $whatsItem,
+                    $restaurant,
+                    $senderPhone,
+                    $senderName,
+                    $buttonPayload,
+                    $messageText,
+                    $incomingMessage
+                );
+            }
 
             // Ignore non-text messages (images, stickers, etc.)
             if (empty($messageText)) {
@@ -3545,5 +3572,158 @@ class HomeController extends Controller
         ]);
 
         return false;
+    }
+
+    /**
+     * Check if the incoming WhatsApp message is an order confirmation action.
+     */
+    protected function isOrderConfirmationAction(string $payload, string $text): bool
+    {
+        if (str_starts_with($payload, 'ORDER_APPROVE_') || str_starts_with($payload, 'ORDER_REJECT_')) {
+            return true;
+        }
+
+        $trimmed = trim($text);
+        if (in_array($trimmed, ['تأكيد الطلب', 'إلغاء الطلب', 'تأكيد', 'إلغاء', 'موافق', 'رفض'], true)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Handle customer approval or rejection of an order confirmation template.
+     */
+    protected function handleOrderConfirmationAction(
+        WhatsItem $whatsItem,
+        User $restaurant,
+        string $senderPhone,
+        string $senderName,
+        string $buttonPayload,
+        string $messageText,
+        array $incomingMessage
+    ): JsonResponse {
+        $order = null;
+        $action = null;
+
+        if (preg_match('/^ORDER_APPROVE_(\d+)$/', $buttonPayload, $matches)) {
+            $order = EcommerceOrder::find($matches[1]);
+            $action = 'approved';
+        } elseif (preg_match('/^ORDER_REJECT_(\d+)$/', $buttonPayload, $matches)) {
+            $order = EcommerceOrder::find($matches[1]);
+            $action = 'rejected';
+        } else {
+            // Fallback match by customer phone & whatsItem for the latest pending order
+            $cleanSender = preg_replace('/[^0-9]/', '', $senderPhone);
+            $order = EcommerceOrder::where('whats_item_id', $whatsItem->id)
+                ->where('status', 'pending')
+                ->where(function ($q) use ($cleanSender) {
+                    $q->where('customer_phone', $cleanSender)
+                        ->orWhere('customer_phone', 'like', '%'.substr($cleanSender, -9));
+                })
+                ->latest()
+                ->first();
+
+            $trimmed = trim($messageText);
+            if (str_contains($trimmed, 'تأكيد') || str_contains($trimmed, 'موافق')) {
+                $action = 'approved';
+            } elseif (str_contains($trimmed, 'إلغاء') || str_contains($trimmed, 'رفض')) {
+                $action = 'rejected';
+            }
+        }
+
+        if (! $order) {
+            Log::info('OrderConfirmation: No pending order found for action', [
+                'sender' => $senderPhone,
+                'payload' => $buttonPayload,
+                'text' => $messageText,
+            ]);
+
+            return response()->json(['status' => 'order_not_found'], Response::HTTP_OK);
+        }
+
+        /** @var EcommerceStoreService $storeService */
+        $storeService = app(EcommerceStoreService::class);
+        /** @var MetaWhatsAppService $metaService */
+        $metaService = app(MetaWhatsAppService::class);
+
+        $orderNumber = $order->order_number ?: $order->external_order_id;
+
+        if ($action === 'approved') {
+            $order->update([
+                'status' => 'confirmed',
+                'confirmed_at' => now(),
+            ]);
+
+            $storeService->updateOrderStatus($order, 'approved');
+
+            $replyText = "أهلاً بك {$senderName}! تم تأكيد طلبك رقم #{$orderNumber} بنجاح وجارٍ تجهيزه وتوصيله الآن. شكراً لاختيارك لنا! 🛍️";
+        } else {
+            $order->update([
+                'status' => 'cancelled',
+                'cancelled_at' => now(),
+            ]);
+
+            $storeService->updateOrderStatus($order, 'rejected');
+
+            $replyText = "تم إلغاء طلبك رقم #{$orderNumber} بنجاح. نأمل أن نخدمك مرة أخرى قريباً!";
+        }
+
+        // Record incoming button tap in chat
+        $displayMsg = $messageText ?: ($action === 'approved' ? 'تأكيد الطلب' : 'إلغاء الطلب');
+        $chat = Chat::create([
+            'user_id' => $restaurant->id,
+            'whats_item_id' => $whatsItem->id,
+            'name' => $senderName,
+            'phone' => $senderPhone,
+            'message' => $displayMsg,
+            'is_image' => false,
+            'is_admin' => false,
+            'sender_type' => 'customer',
+            'is_read' => true,
+            'channel' => 'whatsapp',
+            'meta_message_id' => data_get($incomingMessage, 'id'),
+        ]);
+
+        try {
+            WhatsEvent::dispatch($chat);
+        } catch (\Throwable) {
+            // Ignore broadcast failure
+        }
+
+        // Send direct confirmation text message back to customer
+        $metaService->sendDirectTextMessage($whatsItem, $senderPhone, $replyText);
+
+        // Record bot confirmation message in chat
+        $botChat = Chat::create([
+            'user_id' => $restaurant->id,
+            'whats_item_id' => $whatsItem->id,
+            'name' => $restaurant->restuarant_name ?: 'المتجر',
+            'phone' => $senderPhone,
+            'message' => $replyText,
+            'is_image' => false,
+            'is_admin' => true,
+            'sender_type' => 'bot',
+            'is_read' => true,
+            'channel' => 'whatsapp',
+        ]);
+
+        try {
+            WhatsEvent::dispatch($botChat);
+        } catch (\Throwable) {
+            // Ignore broadcast failure
+        }
+
+        Log::info("OrderConfirmation: Order #{$order->id} (External: #{$orderNumber}) marked as [{$action}]", [
+            'whats_item_id' => $whatsItem->id,
+            'customer_phone' => $senderPhone,
+        ]);
+
+        return response()->json([
+            'status' => 'order_action_processed',
+            'action' => $action,
+            'order_id' => $order->id,
+            'order_number' => $orderNumber,
+        ], Response::HTTP_OK);
     }
 }
