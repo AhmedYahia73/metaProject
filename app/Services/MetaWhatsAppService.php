@@ -836,6 +836,40 @@ class MetaWhatsAppService
             }
 
             $error = $response->json('error', []);
+
+            // Fallback: If customer token failed, try with system user token
+            if (! empty($this->systemUserToken) && $token !== $this->systemUserToken) {
+                $fallbackResponse = Http::withToken($this->systemUserToken)
+                    ->timeout(15)
+                    ->post("{$this->baseUrl}/{$phoneNumberId}/messages", $payload);
+
+                if ($fallbackResponse->successful()) {
+                    $wamid = $fallbackResponse->json('messages.0.id');
+                    $order->update(['meta_message_id' => $wamid]);
+
+                    if ($whatsItem->msg_number > 0) {
+                        $whatsItem->decrement('msg_number');
+                    }
+
+                    if ($whatsItem->user_id) {
+                        MsgSend::create([
+                            'user_id' => $whatsItem->user_id,
+                            'whats_item_id' => $whatsItem->id,
+                            'channel' => 'whatsapp',
+                            'status' => 'sent',
+                        ]);
+                    }
+
+                    Log::info("MetaWhatsApp: Order confirmation template sent via fallback system_user_token for {$phoneNumberId}");
+
+                    return [
+                        'success' => true,
+                        'message' => 'Message sent successfully via system token.',
+                        'message_id' => $wamid,
+                    ];
+                }
+            }
+
             Log::error('MetaWhatsApp: Failed to send order confirmation template', [
                 'whats_item_id' => $whatsItem->id,
                 'order_id' => $order->id,
@@ -902,6 +936,36 @@ class MetaWhatsAppService
                         'message' => 'Message sent successfully via interactive buttons.',
                         'message_id' => $wamid,
                     ];
+                }
+
+                if (! empty($this->systemUserToken) && $token !== $this->systemUserToken) {
+                    $fallbackInteractive = Http::withToken($this->systemUserToken)
+                        ->timeout(15)
+                        ->post("{$this->baseUrl}/{$phoneNumberId}/messages", $interactivePayload);
+
+                    if ($fallbackInteractive->successful()) {
+                        $wamid = $fallbackInteractive->json('messages.0.id');
+                        $order->update(['meta_message_id' => $wamid]);
+
+                        if ($whatsItem->msg_number > 0) {
+                            $whatsItem->decrement('msg_number');
+                        }
+
+                        if ($whatsItem->user_id) {
+                            MsgSend::create([
+                                'user_id' => $whatsItem->user_id,
+                                'whats_item_id' => $whatsItem->id,
+                                'channel' => 'whatsapp',
+                                'status' => 'sent',
+                            ]);
+                        }
+
+                        return [
+                            'success' => true,
+                            'message' => 'Message sent successfully via interactive buttons (system token).',
+                            'message_id' => $wamid,
+                        ];
+                    }
                 }
             } catch (\Throwable) {
                 // Ignore fallback exception, return primary error
