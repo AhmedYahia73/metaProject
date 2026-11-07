@@ -28,6 +28,7 @@ class EcommerceStoreService
 
         return match ($platform) {
             'shopify' => $this->updateShopifyOrder($order, $action),
+            'custom' => $this->updateCustomOrder($order, $action),
             default => $this->updateWooCommerceOrder($order, $action),
         };
     }
@@ -103,6 +104,82 @@ class EcommerceStoreService
     }
 
     /**
+     * Update custom external store via its configured confirm or reject API endpoints.
+     * Passes the order id in query params and api_key in the headers.
+     */
+    protected function updateCustomOrder(EcommerceOrder $order, string $action): bool
+    {
+        $whatsItem = $order->whatsItem;
+
+        if (! $whatsItem) {
+            Log::warning('EcommerceStoreService: No WhatsItem linked to custom order', ['order_id' => $order->id]);
+
+            return false;
+        }
+
+        $callbackUrl = $action === 'approved'
+            ? $whatsItem->api_confirm_url
+            : $whatsItem->api_reject_url;
+
+        if (empty($callbackUrl)) {
+            Log::warning("EcommerceStoreService: Custom store callback URL is not configured for [{$action}]", [
+                'whats_item_id' => $whatsItem->id,
+                'order_id' => $order->id,
+                'action' => $action,
+            ]);
+
+            return false;
+        }
+
+        $apiKey = (string) ($whatsItem->custom_api_key ?: ($whatsItem->store_webhook_token ?: ''));
+        $externalOrderId = (string) ($order->external_order_id ?: $order->id);
+
+        // Append id to query parameters: (?id=...)
+        $separator = str_contains($callbackUrl, '?') ? '&' : '?';
+        $finalUrl = $callbackUrl.$separator.'id='.urlencode($externalOrderId);
+
+        try {
+            $response = Http::withHeaders([
+                'X-API-KEY' => $apiKey,
+                'Authorization' => 'Bearer '.$apiKey,
+                'Accept' => 'application/json',
+                'Content-Type' => 'application/json',
+            ])->timeout(15)->post($finalUrl, [
+                'id' => $externalOrderId,
+                'order_id' => $externalOrderId,
+                'status' => $action === 'approved' ? 'confirmed' : 'cancelled',
+                'action' => $action,
+            ]);
+
+            if ($response->successful()) {
+                Log::info("EcommerceStoreService: Custom order #{$externalOrderId} updated to [{$action}] on [{$callbackUrl}]", [
+                    'order_id' => $order->id,
+                    'http_status' => $response->status(),
+                ]);
+
+                return true;
+            }
+
+            Log::error('EcommerceStoreService: Failed to update custom order on external API', [
+                'order_id' => $order->id,
+                'external_order_id' => $externalOrderId,
+                'http_status' => $response->status(),
+                'response' => $response->body(),
+            ]);
+
+            return false;
+        } catch (\Throwable $e) {
+            Log::error('EcommerceStoreService: Exception updating custom order: '.$e->getMessage(), [
+                'order_id' => $order->id,
+                'external_order_id' => $externalOrderId,
+                'url' => $finalUrl,
+            ]);
+
+            return false;
+        }
+    }
+
+    /**
      * Update Shopify order status or cancel via Admin API.
      */
     protected function updateShopifyOrder(EcommerceOrder $order, string $action): bool
@@ -141,7 +218,7 @@ class EcommerceStoreService
                     'email' => false,
                 ]);
             } else {
-                // Tag or note order as WhatsApp Confirmed
+                // Tag order as Processing and WhatsApp-Confirmed
                 $endpoint = "https://{$domain}/admin/api/2024-01/orders/{$order->external_order_id}.json";
                 $response = Http::withHeaders([
                     'X-Shopify-Access-Token' => $accessToken,
@@ -149,8 +226,8 @@ class EcommerceStoreService
                 ])->timeout(15)->put($endpoint, [
                     'order' => [
                         'id' => $order->external_order_id,
-                        'tags' => 'WhatsApp-Confirmed',
-                        'note' => 'تم تأكيد الطلب بنجاح عبر رسائل واتساب التفاعلية.',
+                        'tags' => 'Processing, WhatsApp-Confirmed',
+                        'note' => 'تم تأكيد الطلب بنجاح عبر رسائل واتساب التفاعلية (جاهز للتجهيز - Processing).',
                     ],
                 ]);
             }

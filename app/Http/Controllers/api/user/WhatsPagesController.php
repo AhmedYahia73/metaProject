@@ -114,6 +114,9 @@ class WhatsPagesController extends Controller
                     'client_secret' => $item->password,
                     'store_webhook_token' => $item->store_webhook_token,
                     'store_webhook_url' => $item->getStoreWebhookUrl(),
+                    'api_key' => $item->getApiKey(),
+                    'api_confirm_url' => $item->api_confirm_url,
+                    'api_reject_url' => $item->api_reject_url,
                 ];
             });
 
@@ -175,8 +178,11 @@ class WhatsPagesController extends Controller
             'ai_context' => 'sometimes|nullable|string',
             'ai_file' => 'sometimes|nullable||file|mimes:txt,text,md|extensions:md|max:2048',
             'order_confirmation_enabled' => 'sometimes|boolean',
-            'ecommerce_platform' => 'sometimes|nullable|in:woocommerce,shopify',
+            'ecommerce_platform' => 'sometimes|nullable|in:woocommerce,shopify,custom',
             'shopify_access_token' => 'sometimes|nullable|string',
+            'api_confirm_url' => 'sometimes|nullable|url|max:500',
+            'api_reject_url' => 'sometimes|nullable|url|max:500',
+            'custom_api_key' => 'sometimes|nullable|string|max:255',
         ]);
 
         if ($request->filled('client_id') && empty($validated['user_name'])) {
@@ -318,8 +324,11 @@ class WhatsPagesController extends Controller
             'ai_file' => 'sometimes|nullable||file|mimes:txt,text,md|extensions:md|max:2048',
             'user_data' => 'sometimes|nullable',
             'order_confirmation_enabled' => 'sometimes|boolean',
-            'ecommerce_platform' => 'sometimes|nullable|in:woocommerce,shopify',
+            'ecommerce_platform' => 'sometimes|nullable|in:woocommerce,shopify,custom',
             'shopify_access_token' => 'sometimes|nullable|string',
+            'api_confirm_url' => 'sometimes|nullable|url|max:500',
+            'api_reject_url' => 'sometimes|nullable|url|max:500',
+            'custom_api_key' => 'sometimes|nullable|string|max:255',
         ]);
 
         if ($request->filled('client_id') && empty($validated['user_name'])) {

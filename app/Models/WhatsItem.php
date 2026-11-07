@@ -48,6 +48,9 @@ class WhatsItem extends Model
         'ecommerce_platform',
         'store_webhook_token',
         'shopify_access_token',
+        'custom_api_key',
+        'api_confirm_url',
+        'api_reject_url',
     ];
 
     /**
@@ -155,6 +158,23 @@ class WhatsItem extends Model
         }
 
         return url("/api/webhooks/store/{$this->store_webhook_token}");
+    }
+
+    /**
+     * Get or generate the unique API Key for custom external platforms.
+     */
+    public function getApiKey(): string
+    {
+        if (! empty($this->custom_api_key)) {
+            return $this->custom_api_key;
+        }
+
+        if (empty($this->store_webhook_token)) {
+            $token = bin2hex(random_bytes(16));
+            $this->update(['store_webhook_token' => $token]);
+        }
+
+        return $this->store_webhook_token;
     }
 
     /**

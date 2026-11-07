@@ -467,3 +467,293 @@ test('shopify oauth installation flow and callback exchanges code for access tok
         ->and($item->fresh()->ecommerce_platform)->toBe('shopify')
         ->and($item->fresh()->order_confirmation_enabled)->toBeTrue();
 });
+
+test('custom platform webhook creates order with 5 standard variables via header X-API-KEY', function () {
+    $user = createStoreUser();
+    $whatsItem = createStoreWhatsItem($user, [
+        'ecommerce_platform' => 'custom',
+        'custom_api_key' => 'custom_secret_key_777',
+        'api_confirm_url' => 'https://custom-shop.com/api/orders/confirm',
+        'api_reject_url' => 'https://custom-shop.com/api/orders/reject',
+    ]);
+
+    Http::fake([
+        'graph.facebook.com/*/message_templates*' => Http::response(['data' => []]),
+        'graph.facebook.com/*/messages' => Http::response(['messages' => [['id' => 'wamid.custom_001']]]),
+    ]);
+
+    $payload = [
+        'id' => 'CUSTOM-9901',
+        'customer_name' => 'ياسر خالد',
+        'customer_phone' => '01099887766',
+        'total_price' => 750.50,
+        'currency' => 'SAR',
+    ];
+
+    $response = $this->postJson('/api/webhooks/custom/order', $payload, [
+        'X-API-KEY' => 'custom_secret_key_777',
+    ]);
+
+    $response->assertStatus(200)
+        ->assertJson([
+            'status' => true,
+            'message' => 'Order processed successfully.',
+        ]);
+
+    $order = EcommerceOrder::where('external_order_id', 'CUSTOM-9901')->first();
+    expect($order)->not->toBeNull()
+        ->and($order->platform)->toBe('custom')
+        ->and($order->customer_name)->toBe('ياسر خالد')
+        ->and($order->customer_phone)->toBe('01099887766')
+        ->and((float) $order->total_price)->toBe(750.50)
+        ->and($order->currency)->toBe('SAR')
+        ->and($order->meta_message_id)->toBe('wamid.custom_001');
+});
+
+test('whatsapp button approve sends http request to custom store api_confirm_url with id in params and api_key in header', function () {
+    $user = createStoreUser();
+    $whatsItem = createStoreWhatsItem($user, [
+        'ecommerce_platform' => 'custom',
+        'custom_api_key' => 'custom_key_xyz_888',
+        'api_confirm_url' => 'https://my-custom-store.com/webhooks/order-confirmed',
+        'api_reject_url' => 'https://my-custom-store.com/webhooks/order-rejected',
+    ]);
+
+    $order = EcommerceOrder::create([
+        'user_id' => $user->id,
+        'whats_item_id' => $whatsItem->id,
+        'platform' => 'custom',
+        'external_order_id' => 'EXT-1234',
+        'order_number' => 'EXT-1234',
+        'customer_name' => 'كريم فهمي',
+        'customer_phone' => '201099998888',
+        'total_price' => 320.00,
+        'status' => 'pending',
+    ]);
+
+    Http::fake([
+        'my-custom-store.com/webhooks/order-confirmed*' => Http::response(['status' => 'success']),
+        'graph.facebook.com/*/messages' => Http::response(['messages' => [['id' => 'wamid.reply_custom_app']]]),
+    ]);
+
+    $webhookPayload = [
+        'object' => 'whatsapp_business_account',
+        'entry' => [
+            [
+                'id' => 'entry_1',
+                'changes' => [
+                    [
+                        'field' => 'messages',
+                        'value' => [
+                            'metadata' => [
+                                'display_phone_number' => '201012345678',
+                                'phone_number_id' => $whatsItem->phone_number_id,
+                            ],
+                            'contacts' => [
+                                ['profile' => ['name' => 'كريم فهمي']],
+                            ],
+                            'messages' => [
+                                [
+                                    'from' => '201099998888',
+                                    'id' => 'wamid.custom_btn_1',
+                                    'type' => 'button',
+                                    'button' => [
+                                        'payload' => "ORDER_APPROVE_{$order->id}",
+                                        'text' => 'تأكيد الطلب',
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ],
+    ];
+
+    $response = $this->postJson('/api/web-hook', $webhookPayload);
+
+    $response->assertStatus(200)
+        ->assertJson([
+            'status' => 'order_action_processed',
+            'action' => 'approved',
+            'order_id' => $order->id,
+        ]);
+
+    expect($order->fresh()->status)->toBe('confirmed')
+        ->and($order->fresh()->confirmed_at)->not->toBeNull();
+
+    // Verify external custom API was called with id in query params and X-API-KEY in headers
+    Http::assertSent(function (Request $request) {
+        if (! str_contains($request->url(), 'my-custom-store.com/webhooks/order-confirmed')) {
+            return false;
+        }
+
+        $hasCorrectUrl = str_contains($request->url(), 'id=EXT-1234');
+        $hasCorrectHeader = ($request->header('X-API-KEY')[0] ?? null) === 'custom_key_xyz_888';
+
+        return $hasCorrectUrl && $hasCorrectHeader;
+    });
+});
+
+test('whatsapp button reject sends http request to custom store api_reject_url with id in params and api_key in header', function () {
+    $user = createStoreUser();
+    $whatsItem = createStoreWhatsItem($user, [
+        'ecommerce_platform' => 'custom',
+        'custom_api_key' => 'custom_key_xyz_888',
+        'api_confirm_url' => 'https://my-custom-store.com/webhooks/order-confirmed',
+        'api_reject_url' => 'https://my-custom-store.com/webhooks/order-rejected',
+    ]);
+
+    $order = EcommerceOrder::create([
+        'user_id' => $user->id,
+        'whats_item_id' => $whatsItem->id,
+        'platform' => 'custom',
+        'external_order_id' => 'EXT-5678',
+        'order_number' => 'EXT-5678',
+        'customer_name' => 'عمر خالد',
+        'customer_phone' => '201200001111',
+        'total_price' => 190.00,
+        'status' => 'pending',
+    ]);
+
+    Http::fake([
+        'my-custom-store.com/webhooks/order-rejected*' => Http::response(['status' => 'cancelled']),
+        'graph.facebook.com/*/messages' => Http::response(['messages' => [['id' => 'wamid.reply_custom_rej']]]),
+    ]);
+
+    $webhookPayload = [
+        'object' => 'whatsapp_business_account',
+        'entry' => [
+            [
+                'id' => 'entry_1',
+                'changes' => [
+                    [
+                        'field' => 'messages',
+                        'value' => [
+                            'metadata' => [
+                                'display_phone_number' => '201012345678',
+                                'phone_number_id' => $whatsItem->phone_number_id,
+                            ],
+                            'contacts' => [
+                                ['profile' => ['name' => 'عمر خالد']],
+                            ],
+                            'messages' => [
+                                [
+                                    'from' => '201200001111',
+                                    'id' => 'wamid.custom_btn_2',
+                                    'type' => 'button',
+                                    'button' => [
+                                        'payload' => "ORDER_REJECT_{$order->id}",
+                                        'text' => 'إلغاء الطلب',
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ],
+    ];
+
+    $response = $this->postJson('/api/web-hook', $webhookPayload);
+
+    $response->assertStatus(200)
+        ->assertJson([
+            'status' => 'order_action_processed',
+            'action' => 'rejected',
+            'order_id' => $order->id,
+        ]);
+
+    expect($order->fresh()->status)->toBe('cancelled')
+        ->and($order->fresh()->cancelled_at)->not->toBeNull();
+
+    // Verify external custom API was called with id in query params and X-API-KEY in headers
+    Http::assertSent(function (Request $request) {
+        if (! str_contains($request->url(), 'my-custom-store.com/webhooks/order-rejected')) {
+            return false;
+        }
+
+        $hasCorrectUrl = str_contains($request->url(), 'id=EXT-5678');
+        $hasCorrectHeader = ($request->header('X-API-KEY')[0] ?? null) === 'custom_key_xyz_888';
+
+        return $hasCorrectUrl && $hasCorrectHeader;
+    });
+});
+
+test('shopify order approve updates tags to include Processing and WhatsApp-Confirmed', function () {
+    $user = createStoreUser();
+    $whatsItem = createStoreWhatsItem($user, [
+        'ecommerce_platform' => 'shopify',
+        'website_url' => 'test-shop.myshopify.com',
+        'shopify_access_token' => 'shpat_shopify_test_token_111',
+    ]);
+
+    $order = EcommerceOrder::create([
+        'user_id' => $user->id,
+        'whats_item_id' => $whatsItem->id,
+        'platform' => 'shopify',
+        'external_order_id' => '99887766',
+        'order_number' => '1099',
+        'customer_name' => 'ماجد حسني',
+        'customer_phone' => '201500002222',
+        'total_price' => 500.00,
+        'status' => 'pending',
+    ]);
+
+    Http::fake([
+        'test-shop.myshopify.com/admin/api/2024-01/orders/99887766.json' => Http::response(['order' => ['id' => 99887766]]),
+        'graph.facebook.com/*/messages' => Http::response(['messages' => [['id' => 'wamid.reply_sh_app']]]),
+    ]);
+
+    $webhookPayload = [
+        'object' => 'whatsapp_business_account',
+        'entry' => [
+            [
+                'id' => 'entry_1',
+                'changes' => [
+                    [
+                        'field' => 'messages',
+                        'value' => [
+                            'metadata' => [
+                                'display_phone_number' => '201012345678',
+                                'phone_number_id' => $whatsItem->phone_number_id,
+                            ],
+                            'contacts' => [
+                                ['profile' => ['name' => 'ماجد حسني']],
+                            ],
+                            'messages' => [
+                                [
+                                    'from' => '201500002222',
+                                    'id' => 'wamid.shopify_btn_1',
+                                    'type' => 'button',
+                                    'button' => [
+                                        'payload' => "ORDER_APPROVE_{$order->id}",
+                                        'text' => 'تأكيد الطلب',
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ],
+    ];
+
+    $response = $this->postJson('/api/web-hook', $webhookPayload);
+
+    $response->assertStatus(200);
+
+    expect($order->fresh()->status)->toBe('confirmed');
+
+    // Verify Shopify API was called with tags Processing, WhatsApp-Confirmed
+    Http::assertSent(function (Request $request) {
+        if (! str_contains($request->url(), 'test-shop.myshopify.com/admin/api/2024-01/orders/99887766.json')) {
+            return false;
+        }
+
+        $orderData = $request->data()['order'] ?? [];
+
+        return str_contains($orderData['tags'] ?? '', 'Processing')
+            && str_contains($orderData['tags'] ?? '', 'WhatsApp-Confirmed');
+    });
+});

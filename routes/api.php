@@ -84,11 +84,13 @@ Route::match(['get', 'post'], '/tiktok-webhook', [TikTokWebhookController::class
 // Paymob Webhook / Redirection Callback (public)
 Route::match(['get', 'post'], '/paymob/callback', [PaymobCallbackController::class, 'callback']);
 
-// Store Webhooks (WooCommerce & Shopify order created notifications)
+// Store Webhooks (WooCommerce, Shopify, and Custom Platform order notifications)
 Route::post('/webhooks/store/{token}', [StoreWebhookController::class, 'handle'])
     ->name('webhooks.store');
 Route::post('/webhooks/store/{token}/order-created', [StoreWebhookController::class, 'handle'])
     ->name('webhooks.store.order_created');
+Route::post('/webhooks/custom/order', [StoreWebhookController::class, 'handleCustom'])
+    ->name('webhooks.custom.order');
 
 // Shopify App OAuth Installation & Callback
 Route::get('/auth/shopify/install', [ShopifyOAuthController::class, 'install'])->name('shopify.oauth.install');
