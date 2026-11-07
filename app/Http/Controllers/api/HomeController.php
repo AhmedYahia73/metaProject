@@ -167,7 +167,30 @@ class HomeController extends Controller
                 return response()->json(['status' => 'restaurant_not_found'], Response::HTTP_OK);
             }
 
-            // 3. Extract incoming message
+            // 3. Intercept Meta delivery status callbacks (sent, delivered, read, failed)
+            $statusUpdate = data_get($data, 'entry.0.changes.0.value.statuses.0');
+            if ($statusUpdate) {
+                $statusName = $statusUpdate['status'] ?? 'unknown';
+                $recipientId = $statusUpdate['recipient_id'] ?? 'unknown';
+                $wamid = $statusUpdate['id'] ?? 'unknown';
+                $statusErrors = $statusUpdate['errors'] ?? [];
+
+                if ($statusName === 'failed' || ! empty($statusErrors)) {
+                    Log::error("MetaWhatsApp Message Delivery FAILED: [{$statusName}] for [{$recipientId}] (wamid: {$wamid})", [
+                        'status' => $statusName,
+                        'recipient' => $recipientId,
+                        'wamid' => $wamid,
+                        'errors' => $statusErrors,
+                        'raw' => $statusUpdate,
+                    ]);
+                } else {
+                    Log::info("MetaWhatsApp Message Delivery Status: [{$statusName}] for [{$recipientId}] (wamid: {$wamid})");
+                }
+
+                return response()->json(['status' => 'status_logged'], Response::HTTP_OK);
+            }
+
+            // 4. Extract incoming message
             $incomingMessage = data_get($data, 'entry.0.changes.0.value.messages.0');
 
             if (! $incomingMessage) {

@@ -860,7 +860,13 @@ class MetaWhatsAppService
                         ]);
                     }
 
-                    Log::info("MetaWhatsApp: Order confirmation template sent via fallback system_user_token for {$phoneNumberId}");
+                    Log::info("MetaWhatsApp: Order confirmation template sent via fallback system_user_token for {$phoneNumberId}", [
+                        'whats_item_id' => $whatsItem->id,
+                        'order_id' => $order->id,
+                        'to' => $normalizedTo,
+                        'wamid' => $wamid,
+                        'meta_response' => $fallbackResponse->json(),
+                    ]);
 
                     return [
                         'success' => true,
