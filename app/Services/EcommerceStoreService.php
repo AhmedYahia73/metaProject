@@ -141,15 +141,7 @@ class EcommerceStoreService
         try {
             $response = Http::withHeaders([
                 'X-API-KEY' => $apiKey,
-                'Authorization' => 'Bearer '.$apiKey,
-                'Accept' => 'application/json',
-                'Content-Type' => 'application/json',
-            ])->timeout(15)->post($finalUrl, [
-                'id' => $externalOrderId,
-                'order_id' => $externalOrderId,
-                'status' => $action === 'approved' ? 'confirmed' : 'cancelled',
-                'action' => $action,
-            ]);
+            ])->timeout(15)->post($finalUrl);
 
             if ($response->successful()) {
                 Log::info("EcommerceStoreService: Custom order #{$externalOrderId} updated to [{$action}] on [{$callbackUrl}]", [
