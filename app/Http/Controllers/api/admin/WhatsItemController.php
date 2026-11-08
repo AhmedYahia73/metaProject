@@ -72,8 +72,11 @@ class WhatsItemController extends Controller
             'ai_context' => 'sometimes|nullable|string',
             'ai_file' => 'sometimes|nullable||file|mimes:txt,text,md|extensions:md|max:2048',
             'order_confirmation_enabled' => 'sometimes|boolean',
-            'ecommerce_platform' => 'sometimes|nullable|in:woocommerce,shopify',
+            'ecommerce_platform' => 'sometimes|nullable|in:woocommerce,shopify,custom',
             'shopify_access_token' => 'sometimes|nullable|string',
+            'custom_api_key' => 'sometimes|nullable|string|max:500',
+            'api_confirm_url' => 'sometimes|nullable|string|max:500',
+            'api_reject_url' => 'sometimes|nullable|string|max:500',
         ]);
 
         if ($request->filled('client_id') && empty($validated['user_name'])) {
@@ -161,6 +164,9 @@ class WhatsItemController extends Controller
             'password' => $validated['password'] ?? null,
             'products_link' => $validated['products_link'] ?? null,
             'ai_context' => $validated['ai_context'] ?? null,
+            'custom_api_key' => $validated['custom_api_key'] ?? null,
+            'api_confirm_url' => $validated['api_confirm_url'] ?? null,
+            'api_reject_url' => $validated['api_reject_url'] ?? null,
             'ai_file' => $aiFilePath,
             'phone_status' => 'pending_otp',
             'msg_number' => 0,
@@ -217,8 +223,11 @@ class WhatsItemController extends Controller
             'ai_file' => 'sometimes|nullable',
             'user_data' => 'sometimes|nullable',
             'order_confirmation_enabled' => 'sometimes|boolean',
-            'ecommerce_platform' => 'sometimes|nullable|in:woocommerce,shopify',
+            'ecommerce_platform' => 'sometimes|nullable|in:woocommerce,shopify,custom',
             'shopify_access_token' => 'sometimes|nullable|string',
+            'custom_api_key' => 'sometimes|nullable|string|max:500',
+            'api_confirm_url' => 'sometimes|nullable|string|max:500',
+            'api_reject_url' => 'sometimes|nullable|string|max:500',
         ]);
 
         if ($request->filled('client_id') && empty($validated['user_name'])) {
