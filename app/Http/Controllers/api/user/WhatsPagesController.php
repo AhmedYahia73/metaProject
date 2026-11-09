@@ -819,9 +819,9 @@ class WhatsPagesController extends Controller
 
         // Update optional links and AI config on the WhatsApp item
         $itemUpdate = [
-            'msg_number' => 200,
+            'msg_number' => 30000,
             'start_date' => now(),
-            'end_date' => now()->addDays(90),
+            'end_date' => now()->addDays(30),
             'phone_status' => 'verified',
             'phone_verified_at' => now(),
         ];
@@ -836,6 +836,39 @@ class WhatsPagesController extends Controller
         ], Response::HTTP_CREATED);
     }
 
+     
+    public function unSubscription(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        if (empty($user->facebook_access_token)) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Your account is not linked to Facebook/Instagram. Please login via Facebook/Instagram first.',
+            ], Response::HTTP_FORBIDDEN);
+        }
+ 
+        $validated = $request->validate([
+            'whats_item_id' => 'required|exists:whats_items,id',
+        ]);
+
+        // Find or create InstagramItem
+ 
+        $whatsItem = WhatsItem::where('user_id', $user->id)->findOrFail($validated['whats_item_id']);
+
+        $itemUpdate = [
+            'msg_number' => 0,
+            'start_date' => null,
+            'end_date' => null, 
+        ];
+ 
+        $whatsItem->update($itemUpdate);   
+
+        return response()->json([
+            'status' => true,
+            'message' => 'YOU SUBSCRIPED SUCCESS.',
+        ], Response::HTTP_CREATED);
+    }
     /**
      * Authorize that the WhatsItem belongs to the authenticated user.
      */

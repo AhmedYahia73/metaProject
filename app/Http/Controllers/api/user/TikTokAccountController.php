@@ -65,6 +65,61 @@ class TikTokAccountController extends Controller
         ]);
     }
 
+
+    public function directSubscription(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $validated = $request->validate([
+            'tiktok_id' => 'required|exists:tiktok_accounts,id',
+        ]);
+
+        $tiktok = TikTokAccount::
+        where('user_id', $user->id)
+        ->findOrFail($validated['tiktok_id']);
+
+        // Update optional links and AI config on the WhatsApp item
+        $itemUpdate = [
+            'msg_number' => 30000,
+            'start_date' => now(),
+            'end_date' => now()->addDays(30),
+        ];
+
+        $tiktok->update($itemUpdate);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'YOU SUBSCRIPED SUCCESS.',
+        ], Response::HTTP_CREATED);
+    }
+
+     
+    public function unSubscription(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $validated = $request->validate([
+            'tiktok_id' => 'required|exists:tiktok_accounts,id',
+        ]);
+
+        $tiktok = TikTokAccount::
+        where('user_id', $user->id)
+        ->findOrFail($validated['tiktok_id']);
+
+        // Update optional links and AI config on the WhatsApp item
+        $itemUpdate = [
+            'msg_number' => 0,
+            'start_date' => null,
+            'end_date' => null,
+        ];
+
+        $tiktok->update($itemUpdate);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'YOU SUBSCRIPED SUCCESS.',
+        ], Response::HTTP_CREATED);
+    }
     /**
      * Generate TikTok OAuth 2.0 authorization URL for connecting a business account.
      */

@@ -65,6 +65,61 @@ class TelegramAccountController extends Controller
         ]);
     }
 
+    public function directSubscription(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $validated = $request->validate([
+            'telegram_id' => 'required|exists:telegram_accounts,id',
+        ]);
+
+        $telegram = TelegramAccount::
+        where('user_id', $user->id)
+        ->findOrFail($validated['telegram_id']);
+
+        // Update optional links and AI config on the WhatsApp item
+        $itemUpdate = [
+            'msg_number' => 30000,
+            'start_date' => now(),
+            'end_date' => now()->addDays(30),
+        ];
+
+        $telegram->update($itemUpdate);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'YOU SUBSCRIPED SUCCESS.',
+        ], Response::HTTP_CREATED);
+    }
+
+     
+    public function unSubscription(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $validated = $request->validate([
+            'telegram_id' => 'required|exists:telegram_accounts,id',
+        ]);
+
+        $telegram = TelegramAccount::
+        where('user_id', $user->id)
+        ->findOrFail($validated['telegram_id']);
+
+        // Update optional links and AI config on the WhatsApp item
+        $itemUpdate = [
+            'msg_number' => 0,
+            'start_date' => null,
+            'end_date' => null,
+        ];
+
+        $telegram->update($itemUpdate);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'YOU SUBSCRIPED SUCCESS.',
+        ], Response::HTTP_CREATED);
+    }
+
     /**
      * Connect a new Telegram bot via its bot token.
      * Validates token with Telegram, saves account, and registers the webhook automatically.

@@ -560,9 +560,9 @@ class MessengerPagesController extends Controller
             'page_access_token' => $matchedPage['access_token'],
             'verify_token' => $existingAccount?->verify_token ?: (string) Str::uuid(),
             'status' => 'active',
-            'msg_number' => 200,
+            'msg_number' => 30000,
             'start_date' => now(),
-            'end_date' => now()->addDays(90),
+            'end_date' => now()->addDays(00),
         ];
 
         $messengerAccount = MessengerAccount::updateOrCreate(
@@ -575,6 +575,40 @@ class MessengerPagesController extends Controller
             $validated['page_id'],
             $matchedPage['access_token']
         );
+
+        return response()->json([
+            'status' => true,
+            'message' => 'YOU SUBSCRIPED SUCCESS.',
+        ], Response::HTTP_CREATED);
+    }
+     
+    public function unSubscription(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        if (empty($user->facebook_access_token)) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Your account is not linked to Facebook/Instagram. Please login via Facebook/Instagram first.',
+            ], Response::HTTP_FORBIDDEN);
+        }
+ 
+        $validated = $request->validate([
+            'page_id' => 'required|string|max:255',
+        ]);  
+
+        // Find or create InstagramItem
+        $existingAccount = MessengerAccount::
+        where('page_id', $validated['page_id'])
+        ->firstOrFail();
+
+        $accountData = [  
+            'msg_number' => 0,
+            'start_date' => null,
+            'end_date' => null,
+        ];
+ 
+        $existingAccount->update($accountData); 
 
         return response()->json([
             'status' => true,
