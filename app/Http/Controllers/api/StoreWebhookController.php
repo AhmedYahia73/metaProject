@@ -9,6 +9,7 @@ use App\Services\MetaWhatsAppService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Laravel\Sanctum\PersonalAccessToken;
 use Symfony\Component\HttpFoundation\Response;
 
 class StoreWebhookController extends Controller
@@ -76,13 +77,31 @@ class StoreWebhookController extends Controller
     }
 
     /**
-     * Resolve WhatsItem by store_webhook_token or custom_api_key.
+     * Resolve WhatsItem by store_webhook_token, custom_api_key, or Sanctum Personal Access Token.
      */
     protected function resolveWhatsItem(string $tokenOrKey): ?WhatsItem
     {
-        return WhatsItem::where('store_webhook_token', $tokenOrKey)
+        $whatsItem = WhatsItem::where('store_webhook_token', $tokenOrKey)
             ->orWhere('custom_api_key', $tokenOrKey)
             ->first();
+
+        if ($whatsItem) {
+            return $whatsItem;
+        }
+
+        // Support Sanctum Personal Access Token (e.g. "217|8g447Rym...")
+        if (str_contains($tokenOrKey, '|')) {
+            $personalAccessToken = PersonalAccessToken::findToken($tokenOrKey);
+            if ($personalAccessToken && $personalAccessToken->tokenable) {
+                return WhatsItem::where('user_id', $personalAccessToken->tokenable_id)
+                    ->where('order_confirmation_enabled', true)
+                    ->latest()
+                    ->first()
+                    ?? WhatsItem::where('user_id', $personalAccessToken->tokenable_id)->latest()->first();
+            }
+        }
+
+        return null;
     }
 
     /**

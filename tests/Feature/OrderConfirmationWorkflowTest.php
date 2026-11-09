@@ -757,3 +757,36 @@ test('shopify order approve updates tags to include Processing and WhatsApp-Conf
             && str_contains($orderData['tags'] ?? '', 'WhatsApp-Confirmed');
     });
 });
+
+test('store webhook resolves whats_item using sanctum personal access token', function () {
+    $user = createStoreUser();
+    $whatsItem = createStoreWhatsItem($user, [
+        'order_confirmation_enabled' => true,
+    ]);
+
+    $tokenResult = $user->createToken('test_sanctum_token');
+    $plainToken = $tokenResult->plainTextToken;
+
+    Http::fake([
+        'graph.facebook.com/*/message_templates*' => Http::response(['data' => [['name' => 'order_confirmation', 'language' => 'ar']]]),
+        'graph.facebook.com/*/messages' => Http::response(['messages' => [['id' => 'wamid.sanctum_test_123']]]),
+    ]);
+
+    $payload = [
+        'id' => 'ORDER_SANCTUM_1',
+        'customer_name' => 'محمد أحمد',
+        'customer_phone' => '01012345678',
+        'total_price' => 200,
+        'currency' => 'EGP',
+    ];
+
+    $response = $this->postJson("/api/webhooks/store/{$plainToken}", $payload);
+
+    $response->assertStatus(200)
+        ->assertJson([
+            'status' => true,
+            'message' => 'Order processed successfully.',
+        ]);
+
+    expect(EcommerceOrder::where('external_order_id', 'ORDER_SANCTUM_1')->exists())->toBeTrue();
+});
