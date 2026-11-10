@@ -149,6 +149,7 @@ Route::prefix('user')->group(function () {
 
         // Messenger Self-Service — list pages & request subscription
         Route::post('messenger/ai_data', [MessengerPagesController::class, 'ai_data']);
+        Route::post('messenger/unSubscription', [MessengerPagesController::class, 'unSubscription']);
         Route::post('messenger/directSubscription', [MessengerPagesController::class, 'directSubscription']);
         Route::get('messenger/facebook_packages', [MessengerPagesController::class, 'facebook_packages']);
         Route::get('messenger/pages', [MessengerPagesController::class, 'pages']);
@@ -156,6 +157,7 @@ Route::prefix('user')->group(function () {
 
         // WhatsApp Embedded Signup — connect customer's own WABA (no 20-number limit)
         Route::post('whats/embedded-signup', [EmbeddedSignupController::class, 'completeSignup']);
+        Route::post('whats/unSubscription', [EmbeddedSignupController::class, 'unSubscription']);
         Route::post('whats/embedded-signup/inspect', [EmbeddedSignupController::class, 'inspectCode']);
         Route::post('whats/items/{whatsItem}/resubscribe-webhook', [EmbeddedSignupController::class, 'resubscribeWebhook']);
         Route::post('whats/items/{whatsItem}/register', [EmbeddedSignupController::class, 'registerPhone']);
@@ -194,6 +196,7 @@ Route::prefix('user')->group(function () {
         Route::post('chat/whatsapp/send', [ChatController::class, 'sendWhatsMessage']);
 
         // Instagram Self-Service — list accounts & request subscription
+        Route::post('instagram/unSubscription', [InstagramPagesController::class, 'unSubscription']);
         Route::post('instagram/directSubscription', [InstagramPagesController::class, 'directSubscription']);
         Route::post('instagram/ai_data', [InstagramPagesController::class, 'ai_data']);
         Route::get('instagram/packages', [InstagramPagesController::class, 'instagram_packages']);
@@ -209,6 +212,7 @@ Route::prefix('user')->group(function () {
         Route::post('chat/instagram/send', [ChatController::class, 'sendInstagramMessage']);
 
         // Telegram Self-Service — connect bot, manage AI data & status
+        Route::get('telegram/unSubscription', [UserTelegramAccountController::class, 'unSubscription']);
         Route::get('telegram/accounts', [UserTelegramAccountController::class, 'index']);
         Route::post('telegram/connect', [UserTelegramAccountController::class, 'connect']);
         Route::get('telegram/accounts/{telegramAccount}', [UserTelegramAccountController::class, 'show']);
@@ -225,6 +229,7 @@ Route::prefix('user')->group(function () {
         Route::post('chat/telegram/send', [TelegramChatController::class, 'sendMessage']);
 
         // TikTok Self-Service — connect account, manage AI data & status
+        Route::get('tiktok/unSubscription', [UserTikTokAccountController::class, 'unSubscription']);
         Route::get('tiktok/accounts', [UserTikTokAccountController::class, 'index']);
         Route::get('tiktok/auth-url', [UserTikTokAccountController::class, 'getAuthUrl']);
         Route::post('tiktok/connect', [UserTikTokAccountController::class, 'connect']);

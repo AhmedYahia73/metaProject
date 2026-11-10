@@ -48,6 +48,29 @@ test('OrderEditService extracts WooCommerce line items properly', function () {
         ->and($items[1]['variant'])->toBe('Variation #52');
 });
 
+test('OrderEditService derives unit price from subtotal or total when price is zero or not explicit', function () {
+    $service = new OrderEditService;
+
+    $order = new EcommerceOrder;
+    $order->platform = 'woocommerce';
+    $order->raw_payload = [
+        'line_items' => [
+            [
+                'id' => 103,
+                'name' => 'عصير مانجو',
+                'quantity' => 3,
+                'subtotal' => '150.00',
+                'total' => '150.00',
+            ],
+        ],
+    ];
+
+    $items = $service->extractLineItems($order);
+
+    expect($items)->toHaveCount(1)
+        ->and((float) $items[0]['price'])->toEqual(50.0);
+});
+
 test('OrderEditService extracts Shopify line items properly', function () {
     $service = new OrderEditService;
 

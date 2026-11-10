@@ -50,10 +50,19 @@ class OrderEditService
                 }
             }
 
+            $unitPrice = 0.0;
+            if (isset($item['price']) && (float) $item['price'] > 0) {
+                $unitPrice = (float) $item['price'];
+            } elseif (! empty($item['subtotal']) && ! empty($item['quantity'])) {
+                $unitPrice = (float) $item['subtotal'] / (float) $item['quantity'];
+            } elseif (! empty($item['total']) && ! empty($item['quantity'])) {
+                $unitPrice = (float) $item['total'] / (float) $item['quantity'];
+            }
+
             return [
                 'name' => $item['name'] ?? 'منتج',
                 'quantity' => (int) ($item['quantity'] ?? 1),
-                'price' => $item['price'] ?? $item['total'] ?? 0,
+                'price' => $unitPrice ?: ($item['price'] ?? $item['total'] ?? 0),
                 'variant' => ! empty($item['variation_id']) ? ('Variation #'.$item['variation_id']) : null,
                 'attributes' => $attributes,
                 'platform_item_id' => $item['id'] ?? null,
@@ -169,7 +178,6 @@ class OrderEditService
         $footer = "\n━━━━━━━━━━━━━━━━\n";
         $footer .= "💵 *الإجمالي: {$total} {$currency}*\n\n";
         $footer .= "✏️ *اكتب التعديل المطلوب*\n";
-        $footer .= '_مثال: غير كمية الصنف 2 لـ 3، أو شيل الصنف 1، أو ضيف 2 بيتزا مارجريتا_';
 
         return $header.$body.$footer;
     }
@@ -370,10 +378,39 @@ PROMPT;
             if ($action === 'update_quantity') {
                 $idx = ($edit['item_index'] ?? 0) - 1;
                 if (isset($items[$idx]) && ! empty($items[$idx]['platform_item_id'])) {
-                    $lineItemUpdates[] = [
+                    $newQty = (int) $edit['new_quantity'];
+
+                    // Determine unit price
+                    $unitPrice = 0.0;
+                    if (! empty($items[$idx]['price']) && (float) $items[$idx]['price'] > 0) {
+                        $unitPrice = (float) $items[$idx]['price'];
+                    }
+
+                    // Fallback to raw_payload if snapshot had missing or zero unit price
+                    if ($unitPrice <= 0 && ! empty($order->raw_payload['line_items'])) {
+                        foreach ($order->raw_payload['line_items'] as $rawItem) {
+                            if (($rawItem['id'] ?? null) == $items[$idx]['platform_item_id']) {
+                                $unitPrice = (float) ($rawItem['price'] ?? 0);
+                                if ($unitPrice <= 0 && ! empty($rawItem['quantity']) && (int) $rawItem['quantity'] > 0) {
+                                    $unitPrice = (float) ($rawItem['total'] ?? $rawItem['subtotal'] ?? 0) / (int) $rawItem['quantity'];
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    $update = [
                         'id' => $items[$idx]['platform_item_id'],
-                        'quantity' => (int) $edit['new_quantity'],
+                        'quantity' => $newQty,
                     ];
+
+                    if ($unitPrice > 0) {
+                        $subtotalStr = number_format($unitPrice * $newQty, 2, '.', '');
+                        $update['subtotal'] = $subtotalStr;
+                        $update['total'] = $subtotalStr;
+                    }
+
+                    $lineItemUpdates[] = $update;
                 }
             } elseif ($action === 'remove_item') {
                 $idx = ($edit['item_index'] ?? 0) - 1;
@@ -457,6 +494,7 @@ PROMPT;
                     'message' => 'Order updated successfully on WooCommerce.',
                     'updated_items' => $updatedOrder['line_items'] ?? [],
                     'new_total' => $newTotal,
+                    'raw_order' => $updatedOrder,
                 ];
             }
 
@@ -791,6 +829,7 @@ PROMPT;
                     'message' => 'Order edit sent to custom platform.',
                     'updated_items' => $data['items'] ?? $data['line_items'] ?? [],
                     'new_total' => $data['total'] ?? $data['new_total'] ?? $order->total_price,
+                    'raw_order' => $data,
                 ];
             }
 

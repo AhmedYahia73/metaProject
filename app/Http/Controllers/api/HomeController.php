@@ -3877,11 +3877,19 @@ class HomeController extends Controller
             $applyResult = $editService->applyEdits($order, $aiParsed);
 
             if ($applyResult['success']) {
-                $order->update([
+                $orderUpdates = [
                     'edit_state' => 'edited',
                     'edited_at' => now(),
                     'total_price' => $applyResult['new_total'] ?? $order->total_price,
-                ]);
+                ];
+
+                if (! empty($applyResult['raw_order']) && is_array($applyResult['raw_order'])) {
+                    $orderUpdates['raw_payload'] = $applyResult['raw_order'];
+                    $order->raw_payload = $applyResult['raw_order'];
+                    $orderUpdates['edit_items_snapshot'] = $editService->extractLineItems($order);
+                }
+
+                $order->update($orderUpdates);
 
                 $replyText = $editService->buildUpdatedOrderSummary($order, $applyResult, $aiParsed['summary_ar'] ?? '');
             } else {
