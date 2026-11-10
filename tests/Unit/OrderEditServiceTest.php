@@ -194,3 +194,51 @@ test('OrderEditService builds updated summary, error, and clarification messages
     expect($clarification)->toContain('لم أفهم التعديل المطلوب')
         ->and($clarification)->toContain('إلغاء التعديل');
 });
+
+test('OrderEditService normalizes attributes replacement or quantity edits into replace_item', function () {
+    $service = new OrderEditService;
+
+    $reflection = new ReflectionClass($service);
+    $method = $reflection->getMethod('validateEditInstructions');
+    $method->setAccessible(true);
+
+    $items = [
+        ['index' => 1, 'name' => 'منتج جديد', 'quantity' => 3, 'price' => 99, 'platform_item_id' => 6],
+    ];
+
+    // Case 1: AI put product replacement inside update_attributes
+    $edits = [
+        [
+            'action' => 'update_attributes',
+            'item_index' => 1,
+            'attributes' => [
+                'النوع' => 'فستان',
+                'الكمية' => 2,
+            ],
+        ],
+    ];
+
+    $result = $method->invoke($service, $edits, $items);
+
+    expect($result)->toHaveCount(1)
+        ->and($result[0]['action'])->toBe('replace_item')
+        ->and($result[0]['item_index'])->toBe(1)
+        ->and($result[0]['product_name'])->toBe('فستان')
+        ->and($result[0]['quantity'])->toBe(2);
+
+    // Case 2: AI returned explicit replace_item
+    $edits2 = [
+        [
+            'action' => 'replace_item',
+            'item_index' => 1,
+            'product_name' => 'فستان',
+            'quantity' => 2,
+        ],
+    ];
+
+    $result2 = $method->invoke($service, $edits2, $items);
+    expect($result2)->toHaveCount(1)
+        ->and($result2[0]['action'])->toBe('replace_item')
+        ->and($result2[0]['product_name'])->toBe('فستان')
+        ->and($result2[0]['quantity'])->toBe(2);
+});

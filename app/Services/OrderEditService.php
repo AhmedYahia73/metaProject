@@ -194,28 +194,31 @@ class OrderEditService
         $systemPrompt = <<<'PROMPT'
 أنت مساعد ذكي متخصص في تعديل طلبات المتاجر الإلكترونية.
 سيتم إرسال قائمة بأصناف الطلب الحالي ورسالة العميل.
-مطلوب منك تحليل رسالة العميل وإرجاع JSON يحتوي على التعديلات المطلوبة.
+مطلوب منك تحليل رسالة العميل وإرجاع JSON يحتوي على التعديلات المطلوبة بدقة.
+
+أنواع التعديلات المدعومة حصراً:
+1. "update_quantity": تغيير كمية صنف موجود في القائمة (يتطلب item_index و new_quantity > 0).
+2. "remove_item": حذف صنف موجود في القائمة نهائياً (يتطلب item_index).
+3. "replace_item": استبدال صنف موجود بصنف مختلف (مثل: "بدل الصنف 1 هات فستان قطعتين" أو "غير منتج كذا لـ فستان" أو "شيل كذا وحط مكانه كذا"). يتطلب item_index و product_name و quantity.
+4. "add_item": إضافة صنف جديد إضافي إلى الطلب (يتطلب product_name و quantity).
+5. "update_attributes": تعديل خصائص فرعية لصنف موجود (مثل المقاس، اللون، الحجم، درجة الحلاوة، إلخ).
 
 القواعد الصارمة:
 1. أرجع JSON فقط بدون أي نص إضافي أو markdown أو شرح.
-2. أنواع التعديلات المدعومة:
-   - "update_quantity": تغيير كمية صنف موجود (يجب أن يكون item_index صحيح وnew_quantity > 0)
-   - "remove_item": حذف صنف موجود (يجب أن يكون item_index صحيح)
-   - "update_attributes": تعديل خصائص صنف (مقاس، لون، حجم، إلخ)
-   - "add_item": إضافة صنف جديد (يجب تحديد product_name والquantity)
-3. item_index يبدأ من 1 حسب الترقيم في القائمة المرسلة.
-4. تأكد أن item_index يشير لصنف موجود فعلاً في القائمة.
-5. إذا طلب العميل تعديل صنف غير موجود أو رقم غير صحيح، أرجع error.
-6. إذا كانت الرسالة غير واضحة أو لا تتعلق بتعديل الطلب، أرجع edits فارغ مع error.
-7. لا تخترع أي أصناف أو أسعار. اعمل فقط بناءً على ما هو مذكور في القائمة ورسالة العميل.
+2. item_index يبدأ من 1 حسب الترقيم في قائمة أصناف الطلب المرسلة.
+3. عند استبدال منتج بمنتج آخر (مثل: "بدل منتج جديد فستان 2 قطعة"): استخدم دائماً "replace_item" مع اسم المنتج الجديد البديل وكميته.
+4. ممنوع نهائياً استخدام "update_attributes" لتغيير اسم الصنف أو استبداله أو تغيير كميته! الـ update_attributes مخصصة فقط للخصائص مثل المقاس أو اللون.
+5. إذا طلب العميل تغيير كمية منتج فقط دون استبداله (مثل "عاوز قطعتين فقط"): استخدم دائماً "update_quantity".
+6. إذا كانت الرسالة غير واضحة أو لا تتعلق بتعديل الطلب، أرجع edits فارغ.
 
 الصيغة المطلوبة:
 {
   "edits": [
-    {"action": "update_quantity", "item_index": 2, "new_quantity": 3},
-    {"action": "remove_item", "item_index": 4},
-    {"action": "update_attributes", "item_index": 1, "attributes": {"المقاس": "كبير"}},
-    {"action": "add_item", "product_name": "اسم المنتج", "quantity": 1}
+    {"action": "update_quantity", "item_index": 1, "new_quantity": 2},
+    {"action": "replace_item", "item_index": 1, "product_name": "فستان", "quantity": 2},
+    {"action": "remove_item", "item_index": 2},
+    {"action": "add_item", "product_name": "اسم المنتج", "quantity": 1},
+    {"action": "update_attributes", "item_index": 1, "attributes": {"المقاس": "كبير"}}
   ],
   "summary_ar": "ملخص التعديلات بالعربية بأسلوب مختصر وودي"
 }
@@ -288,11 +291,50 @@ PROMPT;
                 continue;
             }
 
+            if ($action === 'replace_item') {
+                if (! empty($edit['product_name'])) {
+                    $validated[] = [
+                        'action' => 'replace_item',
+                        'item_index' => $index,
+                        'product_name' => (string) $edit['product_name'],
+                        'quantity' => (int) ($edit['quantity'] ?? $edit['new_quantity'] ?? 1),
+                    ];
+                }
+
+                continue;
+            }
+
             if ($action === 'update_quantity' && ($edit['new_quantity'] ?? 0) > 0) {
                 $validated[] = $edit;
             } elseif ($action === 'remove_item') {
                 $validated[] = $edit;
             } elseif ($action === 'update_attributes' && ! empty($edit['attributes'])) {
+                // Defensive normalization: If AI put replacement or quantity inside attributes
+                $attrs = $edit['attributes'];
+                $productName = $attrs['النوع'] ?? $attrs['المنتج'] ?? $attrs['اسم المنتج'] ?? null;
+                $quantity = $attrs['الكمية'] ?? $attrs['quantity'] ?? $attrs['العدد'] ?? null;
+
+                if (! empty($productName)) {
+                    $validated[] = [
+                        'action' => 'replace_item',
+                        'item_index' => $index,
+                        'product_name' => (string) $productName,
+                        'quantity' => (int) ($quantity ?: ($edit['new_quantity'] ?? 1)),
+                    ];
+
+                    continue;
+                }
+
+                if (! empty($quantity) && count($attrs) === 1) {
+                    $validated[] = [
+                        'action' => 'update_quantity',
+                        'item_index' => $index,
+                        'new_quantity' => (int) $quantity,
+                    ];
+
+                    continue;
+                }
+
                 $validated[] = $edit;
             }
         }
@@ -412,6 +454,35 @@ PROMPT;
 
                     $lineItemUpdates[] = $update;
                 }
+            } elseif ($action === 'replace_item') {
+                $idx = ($edit['item_index'] ?? 0) - 1;
+                if (isset($items[$idx]) && ! empty($items[$idx]['platform_item_id'])) {
+                    // 1. Remove old item
+                    $lineItemUpdates[] = [
+                        'id' => $items[$idx]['platform_item_id'],
+                        'quantity' => 0,
+                    ];
+
+                    // 2. Add replacement product
+                    $productName = $edit['product_name'] ?? $edit['new_product_name'] ?? '';
+                    $newQty = (int) ($edit['quantity'] ?? $edit['new_quantity'] ?? 1);
+
+                    $productId = $this->searchWooCommerceProduct(
+                        $baseUrl,
+                        $consumerKey,
+                        $consumerSecret,
+                        $productName
+                    );
+
+                    if ($productId) {
+                        $lineItemUpdates[] = [
+                            'product_id' => $productId,
+                            'quantity' => max(1, $newQty),
+                        ];
+                    } else {
+                        Log::warning("OrderEditService: Replacement product '{$productName}' not found in WooCommerce");
+                    }
+                }
             } elseif ($action === 'remove_item') {
                 $idx = ($edit['item_index'] ?? 0) - 1;
                 if (isset($items[$idx]) && ! empty($items[$idx]['platform_item_id'])) {
@@ -522,24 +593,23 @@ PROMPT;
         }
 
         try {
-            $url = "{$baseUrl}/wp-json/wc/v3/products?consumer_key={$key}&consumer_secret={$secret}";
+            $params = [
+                'consumer_key' => $key,
+                'consumer_secret' => $secret,
+                'search' => $name,
+                'per_page' => 1,
+                'status' => 'publish',
+            ];
+
             $response = Http::withBasicAuth($key, $secret)
                 ->timeout(10)
-                ->get($url, [
-                    'search' => $name,
-                    'per_page' => 1,
-                    'status' => 'publish',
-                ]);
+                ->get("{$baseUrl}/wp-json/wc/v3/products", $params);
 
-            if ($response->status() === 404) {
-                $url = "{$baseUrl}/index.php?rest_route=/wc/v3/products&consumer_key={$key}&consumer_secret={$secret}";
+            if ($response->status() === 404 || ! $response->successful()) {
+                $params['rest_route'] = '/wc/v3/products';
                 $response = Http::withBasicAuth($key, $secret)
                     ->timeout(10)
-                    ->get($url, [
-                        'search' => $name,
-                        'per_page' => 1,
-                        'status' => 'publish',
-                    ]);
+                    ->get("{$baseUrl}/index.php", $params);
             }
 
             if ($response->successful()) {
