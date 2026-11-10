@@ -1101,23 +1101,58 @@ class MetaWhatsAppService
         $phoneNumberId = $whatsItem->phone_number_id ?: $this->phoneNumberId;
 
         if (empty($token) || empty($phoneNumberId)) {
+            Log::warning('MetaWhatsApp: Cannot send direct text, token or phoneNumberId missing');
+
             return false;
         }
 
         $normalizedTo = $this->normalizeRecipientPhone($toPhone);
 
         try {
+            $payload = [
+                'messaging_product' => 'whatsapp',
+                'recipient_type' => 'individual',
+                'to' => $normalizedTo,
+                'type' => 'text',
+                'text' => ['body' => $text],
+            ];
+
             $response = Http::withToken($token)
                 ->timeout(10)
-                ->post("{$this->baseUrl}/{$phoneNumberId}/messages", [
-                    'messaging_product' => 'whatsapp',
-                    'recipient_type' => 'individual',
+                ->post("{$this->baseUrl}/{$phoneNumberId}/messages", $payload);
+
+            if ($response->successful()) {
+                Log::info('MetaWhatsApp: Direct text message sent successfully', [
                     'to' => $normalizedTo,
-                    'type' => 'text',
-                    'text' => ['body' => $text],
+                    'message_id' => $response->json('messages.0.id'),
                 ]);
 
-            return $response->successful();
+                return true;
+            }
+
+            // Fallback: If customer token failed, try with system user token
+            if (! empty($this->systemUserToken) && $token !== $this->systemUserToken) {
+                $fallback = Http::withToken($this->systemUserToken)
+                    ->timeout(10)
+                    ->post("{$this->baseUrl}/{$phoneNumberId}/messages", $payload);
+
+                if ($fallback->successful()) {
+                    Log::info('MetaWhatsApp: Direct text message sent via systemUserToken', [
+                        'to' => $normalizedTo,
+                        'message_id' => $fallback->json('messages.0.id'),
+                    ]);
+
+                    return true;
+                }
+            }
+
+            Log::warning('MetaWhatsApp: Failed to send direct text message', [
+                'to' => $normalizedTo,
+                'status' => $response->status(),
+                'response' => $response->json(),
+            ]);
+
+            return false;
         } catch (\Throwable $e) {
             Log::warning('MetaWhatsApp: Exception sending direct text: '.$e->getMessage());
 
