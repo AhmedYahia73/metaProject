@@ -240,7 +240,7 @@ class HomeController extends Controller
             // Check if customer is currently in an active order edit session
             $awaitingOrder = $this->getAwaitingEditOrder($whatsItem, $senderPhone);
             if ($awaitingOrder && ! empty($messageText)) {
-                return $this->handleOrderEditCustomerMessage(
+                $editResponse = $this->handleOrderEditCustomerMessage(
                     $whatsItem,
                     $restaurant,
                     $awaitingOrder,
@@ -249,6 +249,10 @@ class HomeController extends Controller
                     $messageText,
                     $incomingMessage
                 );
+
+                if ($editResponse !== null) {
+                    return $editResponse;
+                }
             }
 
             // Ignore non-text messages (images, stickers, etc.)
@@ -3838,11 +3842,12 @@ class HomeController extends Controller
             // Ignore broadcast failure
         }
 
-        // Check if user requested cancellation of edit mode
+        // 1. Check if user requested cancellation of edit mode
         $trimmed = trim($messageText);
-        if (in_array($trimmed, ['إلغاء التعديل', 'الغاء التعديل', 'رجوع', 'تراجع', 'إلغاء', 'الغاء'], true)) {
+        $cancelKeywords = ['إلغاء التعديل', 'الغاء التعديل', 'رجوع', 'تراجع', 'إلغاء', 'الغاء', 'مش عاوز اعدل', 'مش عايز اعدل'];
+        if (in_array($trimmed, $cancelKeywords, true)) {
             $order->update(['edit_state' => null]);
-            $replyText = 'تم إلغاء وضع تعديل الطلب. يمكنك تأكيد طلبك الحالي أو الاستفسار عن أي شيء آخر.';
+            $replyText = 'تم إلغاء وضع تعديل الطلب. طلبك الحالي ما زال معلقاً، يمكنك تأكيده في أي وقت.';
             $token = $this->resolveWhatsToken($whatsItem);
             $this->sendTextMessage(
                 accessToken: (string) $token,
@@ -3854,6 +3859,11 @@ class HomeController extends Controller
             $this->recordBotChat($restaurant, $whatsItem, $senderPhone, $replyText);
 
             return response()->json(['status' => 'order_edit_cancelled'], Response::HTTP_OK);
+        }
+
+        // 2. Check Fast-path Confirmation Intent
+        if ($editService->isConfirmationIntent($messageText)) {
+            return $this->confirmOrderFromEditSession($whatsItem, $restaurant, $order, $senderPhone);
         }
 
         // Show typing indicator
@@ -3868,20 +3878,65 @@ class HomeController extends Controller
             );
         }
 
-        // 1. Ask ChatGPT to parse the customer's edit request
+        // 3. Fetch recent conversation history for this edit session
+        $conversationHistory = Chat::where('whats_item_id', $whatsItem->id)
+            ->where('phone', $senderPhone)
+            ->latest('id')
+            ->take(8)
+            ->get()
+            ->reverse()
+            ->map(function (Chat $c) {
+                $role = $c->sender_type === 'customer' ? 'العميل' : 'المساعد';
+
+                return "{$role}: {$c->message}";
+            })
+            ->values()
+            ->toArray();
+
+        // 4. Ask ChatGPT to parse the customer's intent & edits
         $items = $order->edit_items_snapshot ?? $editService->extractLineItems($order);
-        $aiParsed = $editService->parseEditRequestWithAi($items, $messageText);
+        $aiParsed = $editService->parseEditRequestWithAi($items, $messageText, $conversationHistory);
 
-        if (! empty($aiParsed['edits'])) {
-            // Mark state as editing
-            $order->update(['edit_state' => 'editing']);
+        $intent = $aiParsed['intent'] ?? (! empty($aiParsed['edits']) ? 'edit' : 'unknown');
 
-            // 2. Apply edits to the platform (Shopify, WooCommerce, Custom)
+        // Case 1: AI detected confirmation intent
+        if ($intent === 'confirm') {
+            return $this->confirmOrderFromEditSession($whatsItem, $restaurant, $order, $senderPhone);
+        }
+
+        // Case 2: AI detected cancellation intent
+        if ($intent === 'cancel') {
+            $order->update(['edit_state' => null]);
+            $replyText = 'تم إلغاء وضع تعديل الطلب. طلبك الحالي ما زال معلقاً، يمكنك تأكيده في أي وقت.';
+            $token = $this->resolveWhatsToken($whatsItem);
+            $this->sendTextMessage(
+                accessToken: (string) $token,
+                phoneNumberId: (string) $whatsItem->phone_number_id,
+                to: $senderPhone,
+                body: $replyText,
+            );
+
+            $this->recordBotChat($restaurant, $whatsItem, $senderPhone, $replyText);
+
+            return response()->json(['status' => 'order_edit_cancelled'], Response::HTTP_OK);
+        }
+
+        // Case 3: Out of context inquiry (question about working hours, other services, etc.)
+        if ($intent === 'out_of_context') {
+            Log::info("OrderEditService: Customer message is out of order context. Leaving order #{$order->id} as is.");
+
+            // Return null so the webhook controller falls through to regular chatbot
+            return null;
+        }
+
+        // Case 4: Edit requested
+        if ($intent === 'edit' && ! empty($aiParsed['edits'])) {
+            // Apply edits to the platform (Shopify, WooCommerce, Custom)
             $applyResult = $editService->applyEdits($order, $aiParsed);
 
             if ($applyResult['success']) {
                 $orderUpdates = [
-                    'edit_state' => 'edited',
+                    'edit_state' => 'awaiting_edit', // Keep awaiting_edit to allow multi-turn edits!
                     'edited_at' => now(),
                     'total_price' => $applyResult['new_total'] ?? $order->total_price,
                 ];
@@ -3896,8 +3951,6 @@ class HomeController extends Controller
 
                 $replyText = $editService->buildUpdatedOrderSummary($order, $applyResult, $aiParsed['summary_ar'] ?? '');
             } else {
-                // Revert state to awaiting_edit so customer can retry or cancel
-                $order->update(['edit_state' => 'awaiting_edit']);
                 $replyText = $editService->buildEditErrorMessage($order, $applyResult['message'] ?? '');
             }
         } else {
@@ -3923,6 +3976,51 @@ class HomeController extends Controller
 
         return response()->json([
             'status' => 'order_edit_processed',
+            'order_id' => $order->id,
+        ], Response::HTTP_OK);
+    }
+
+    /**
+     * Finalize and confirm the order from an edit session, updating store status to processing.
+     */
+    protected function confirmOrderFromEditSession(
+        WhatsItem $whatsItem,
+        User $restaurant,
+        EcommerceOrder $order,
+        string $senderPhone
+    ): JsonResponse {
+        /** @var OrderEditService $editService */
+        $editService = app(OrderEditService::class);
+        /** @var EcommerceStoreService $storeService */
+        $storeService = app(EcommerceStoreService::class);
+
+        $order->update([
+            'status' => 'confirmed',
+            'confirmed_at' => now(),
+            'edit_state' => null,
+        ]);
+
+        // Updates store order status to approved (WooCommerce status -> processing)
+        $storeService->updateOrderStatus($order, 'approved');
+
+        $replyText = $editService->buildFinalConfirmationMessage($order);
+
+        $token = $this->resolveWhatsToken($whatsItem);
+        $this->sendTextMessage(
+            accessToken: (string) $token,
+            phoneNumberId: (string) $whatsItem->phone_number_id,
+            to: $senderPhone,
+            body: $replyText,
+        );
+
+        $this->recordBotChat($restaurant, $whatsItem, $senderPhone, $replyText);
+
+        if ((int) $whatsItem->msg_number > 0) {
+            $whatsItem->decrement('msg_number');
+        }
+
+        return response()->json([
+            'status' => 'order_confirmed_from_edit',
             'order_id' => $order->id,
         ], Response::HTTP_OK);
     }

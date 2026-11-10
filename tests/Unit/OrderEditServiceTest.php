@@ -287,3 +287,35 @@ test('OrderEditService remaps outdated line item IDs to fresh live WooCommerce i
         ->and($remapped[0]['quantity'])->toBe(2)
         ->and($remapped[0]['total'])->toBe('198.00');
 });
+
+test('OrderEditService detects fast-path confirmation intent properly', function () {
+    $service = new OrderEditService;
+
+    expect($service->isConfirmationIntent('تأكيد'))->toBeTrue()
+        ->and($service->isConfirmationIntent('تمام'))->toBeTrue()
+        ->and($service->isConfirmationIntent('كده تمام'))->toBeTrue()
+        ->and($service->isConfirmationIntent('اعتمد يا باشا'))->toBeTrue()
+        ->and($service->isConfirmationIntent('اوكي'))->toBeTrue()
+        ->and($service->isConfirmationIntent('عاوز قطعتين فقط'))->toBeFalse()
+        ->and($service->isConfirmationIntent('مكانكم فين؟'))->toBeFalse();
+});
+
+test('OrderEditService builds final confirmation message properly', function () {
+    $service = new OrderEditService;
+
+    $order = new EcommerceOrder;
+    $order->order_number = '23';
+    $order->total_price = 198.0;
+    $order->currency = 'EGP';
+    $order->edit_items_snapshot = [
+        ['index' => 1, 'name' => 'منتج جديد', 'quantity' => 2, 'price' => 99, 'attributes' => []],
+    ];
+
+    $message = $service->buildFinalConfirmationMessage($order);
+
+    expect($message)->toContain('تم تأكيد طلبك رقم #23 بنجاح')
+        ->and($message)->toContain('*1.* منتج جديد')
+        ->and($message)->toContain('📦 الكمية: 2')
+        ->and($message)->toContain('💵 *الإجمالي النهائي: 198 EGP*')
+        ->and($message)->toContain('جارٍ تجهيز طلبك');
+});

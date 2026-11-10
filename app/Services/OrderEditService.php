@@ -183,48 +183,70 @@ class OrderEditService
     }
 
     /**
-     * Use ChatGPT (OpenAI) to parse the customer's edit request into structured instructions.
+     * Use ChatGPT (OpenAI) to parse the customer's edit request or confirmation intent into structured instructions.
      *
-     * @return array{edits: array, summary_ar: string, error?: string}|null
+     * @param  array<int, array<string, mixed>>  $items
+     * @param  array<int, string>  $conversationHistory
+     * @return array{intent?: string, edits?: array, summary_ar?: string, error?: string}|null
      */
-    public function parseEditRequestWithAi(array $items, string $customerMessage): ?array
+    public function parseEditRequestWithAi(array $items, string $customerMessage, array $conversationHistory = []): ?array
     {
         $itemsContext = $this->buildItemsContextForAi($items);
+        $historyText = ! empty($conversationHistory)
+            ? implode("\n", $conversationHistory)
+            : 'لا يوجد سجل سابق';
 
         $systemPrompt = <<<'PROMPT'
-أنت مساعد ذكي متخصص في تعديل طلبات المتاجر الإلكترونية.
-سيتم إرسال قائمة بأصناف الطلب الحالي ورسالة العميل.
-مطلوب منك تحليل رسالة العميل وإرجاع JSON يحتوي على التعديلات المطلوبة بدقة.
+أنت مساعد ذكي لإدارة وتأكيد وتعديل طلبات المتاجر الإلكترونية عبر واتساب.
+أمامك أصناف الطلب الحالي، وسجل المحادثة الأخيرة، والرسالة الحالية من العميل.
 
-أنواع التعديلات المدعومة حصراً:
-1. "update_quantity": تغيير كمية صنف موجود في القائمة (يتطلب item_index و new_quantity > 0).
-2. "remove_item": حذف صنف موجود في القائمة نهائياً (يتطلب item_index).
-3. "replace_item": استبدال صنف موجود بصنف مختلف (مثل: "بدل الصنف 1 هات فستان قطعتين" أو "غير منتج كذا لـ فستان" أو "شيل كذا وحط مكانه كذا"). يتطلب item_index و product_name و quantity.
-4. "add_item": إضافة صنف جديد إضافي إلى الطلب (يتطلب product_name و quantity).
-5. "update_attributes": تعديل خصائص فرعية لصنف موجود (مثل المقاس، اللون، الحجم، درجة الحلاوة، إلخ).
+مهمتك تحديد نية العميل بدقة من بين 4 حالات حصراً:
+
+1. "confirm": إذا كان فحوى رسالة العميل هو تأكيد أو اعتماد الطلب النهائي أو الموافقة عليه (مثل: "تأكيد", "تاكيد", "تمام", "أكد الطلب", "كده حلو", "اعتمد", "كده تمام التمام", "تمام ابعتهم", "خلاص تمام", "أيوة كده تمام", "اعتمد يا باشا", إلخ).
+   الصيغة المطلوبة:
+   {
+     "intent": "confirm",
+     "summary_ar": "تم تأكيد طلبك بنجاح"
+   }
+
+2. "edit": إذا كان العميل يطلب أي تعديل على الطلب (تعديل كمية، استبدال منتج بمنتج آخر، حذف صنف، إضافة صنف، تعديل مواصفات).
+   أنواع التعديلات المدعومة داخل "edits":
+   - "update_quantity": تغيير كمية صنف موجود (يتطلب item_index و new_quantity > 0)
+   - "replace_item": استبدال صنف موجود بصنف مختلف (مثل: "بدل الصنف 1 هات فستان قطعتين" أو "غير منتج كذا لـ كذا")، يتطلب item_index و product_name و quantity.
+   - "remove_item": حذف صنف موجود (يتطلب item_index)
+   - "add_item": إضافة صنف جديد (يتطلب product_name و quantity)
+   - "update_attributes": تعديل خصائص فرعية لصنف (مثل المقاس أو اللون)
+   الصيغة المطلوبة:
+   {
+     "intent": "edit",
+     "edits": [
+       {"action": "update_quantity", "item_index": 1, "new_quantity": 2}
+     ],
+     "summary_ar": "ملخص التعديلات بالعربية بأسلوب مختصر وودي"
+   }
+
+3. "cancel": إذا كان العميل يريد إلغاء التعديل أو التراجع (مثل: "إلغاء التعديل", "تراجع", "رجوع", "مش عاوز اعدل").
+   الصيغة المطلوبة:
+   {
+     "intent": "cancel",
+     "summary_ar": "تم إلغاء التعديل"
+   }
+
+4. "out_of_context": إذا خرج العميل تماماً عن موضوع الطلب وسأل عن شيء عام غير متعلق بتعديل أو تأكيد هذا الطلب (مثل: السؤال عن مواعيد العمل، فروع المحل، الاستفسار عن كورس، شكوى غير مرتبطة، إلخ).
+   الصيغة المطلوبة:
+   {
+     "intent": "out_of_context"
+   }
 
 القواعد الصارمة:
 1. أرجع JSON فقط بدون أي نص إضافي أو markdown أو شرح.
-2. item_index يبدأ من 1 حسب الترقيم في قائمة أصناف الطلب المرسلة.
-3. عند استبدال منتج بمنتج آخر (مثل: "بدل منتج جديد فستان 2 قطعة"): استخدم دائماً "replace_item" مع اسم المنتج الجديد البديل وكميته.
-4. ممنوع نهائياً استخدام "update_attributes" لتغيير اسم الصنف أو استبداله أو تغيير كميته! الـ update_attributes مخصصة فقط للخصائص مثل المقاس أو اللون.
-5. إذا طلب العميل تغيير كمية منتج فقط دون استبداله (مثل "عاوز قطعتين فقط"): استخدم دائماً "update_quantity".
-6. إذا كانت الرسالة غير واضحة أو لا تتعلق بتعديل الطلب، أرجع edits فارغ.
-
-الصيغة المطلوبة:
-{
-  "edits": [
-    {"action": "update_quantity", "item_index": 1, "new_quantity": 2},
-    {"action": "replace_item", "item_index": 1, "product_name": "فستان", "quantity": 2},
-    {"action": "remove_item", "item_index": 2},
-    {"action": "add_item", "product_name": "اسم المنتج", "quantity": 1},
-    {"action": "update_attributes", "item_index": 1, "attributes": {"المقاس": "كبير"}}
-  ],
-  "summary_ar": "ملخص التعديلات بالعربية بأسلوب مختصر وودي"
-}
+2. اقرأ سياق المحادثة بدقة: إذا كان البوت قد طلب من العميل كتابة "تأكيد" والعميل رد بـ "تمام" أو "أكد" أو "كده تمام" أو أي كلمة تعبر عن الرضا والموافقة، فهذه نية "confirm".
+3. item_index يبدأ من 1 حسب الترقيم في قائمة أصناف الطلب المرسلة.
+4. عند استبدال منتج بمنتج آخر (مثل: "بدل منتج جديد فستان 2 قطعة"): استخدم دائماً "replace_item" مع اسم المنتج الجديد البديل وكميته.
+5. ممنوع نهائياً استخدام "update_attributes" لتغيير اسم الصنف أو استبداله أو تغيير كميته!
 PROMPT;
 
-        $userMessage = "الطلب الحالي:\n{$itemsContext}\n\nرسالة العميل: \"{$customerMessage}\"";
+        $userMessage = "أصناف الطلب الحالي:\n{$itemsContext}\n\nسجل المحادثة الأخيرة:\n{$historyText}\n\nرسالة العميل الحالية: \"{$customerMessage}\"";
 
         try {
             $model = env('OPENAI_MODEL', 'gpt-4o-mini');
@@ -251,9 +273,16 @@ PROMPT;
                 return null;
             }
 
-            // Validate edit instructions
-            $validEdits = $this->validateEditInstructions($parsed['edits'] ?? [], $items);
-            $parsed['edits'] = $validEdits;
+            $intent = $parsed['intent'] ?? (! empty($parsed['edits']) ? 'edit' : 'unknown');
+            $parsed['intent'] = $intent;
+
+            if ($intent === 'edit' || ! empty($parsed['edits'])) {
+                $validEdits = $this->validateEditInstructions($parsed['edits'] ?? [], $items);
+                $parsed['edits'] = $validEdits;
+                if (! empty($validEdits)) {
+                    $parsed['intent'] = 'edit';
+                }
+            }
 
             return $parsed;
         } catch (\Throwable $e) {
@@ -1129,24 +1158,97 @@ PROMPT;
     }
 
     /**
-     * Build an updated order summary message to send back to the customer.
+     * Check if a text message clearly conveys customer confirmation intent.
+     */
+    public function isConfirmationIntent(string $text): bool
+    {
+        $trimmed = trim(preg_replace('/[^\p{L}\p{N}\s]/u', '', $text));
+        $confirmExact = [
+            'تأكيد', 'تاكيد', 'أكد', 'اكد', 'اعتمد', 'تمام', 'موافق', 'كده تمام', 'تمام كدة',
+            'تمام كده', 'كده مظبوط', 'كده تمام يا غالي', 'اعتمد الطلب', 'أكد الطلب', 'اكد الطلب',
+            'تمام اعتمد', 'تمام توكل على الله', 'خلاص تمام', 'خلاص اكد', 'أيوة تمام', 'ايوه تمام',
+            'ايوه', 'أيوة', 'تمام جدا', 'تسلم تمام', 'كده حلو', 'اعتمد يا باشا', 'تمام كده تسلم',
+            'تمام شكرا', 'شكرا خلاص', 'نعم', 'اكيد', 'أكيد', 'اوك', 'اوكي', 'ok',
+        ];
+
+        return in_array($trimmed, $confirmExact, true);
+    }
+
+    /**
+     * Build an updated order summary message to send back to the customer after each edit.
+     * Shows current order items and invites further edits or confirmation.
      */
     public function buildUpdatedOrderSummary(EcommerceOrder $order, array $editResult, string $aiSummary = ''): string
     {
         $orderNumber = $order->order_number ?: $order->external_order_id;
         $currency = $order->currency ?: 'EGP';
+        $items = $order->edit_items_snapshot ?? $this->extractLineItems($order);
 
         $message = "✅ *تم تعديل طلبك رقم #{$orderNumber} بنجاح!*\n\n";
 
         if (! empty($aiSummary)) {
-            $message .= "📝 التعديلات:\n{$aiSummary}\n\n";
+            $message .= "📝 *التعديلات:*\n{$aiSummary}\n\n";
         }
 
-        if (isset($editResult['new_total'])) {
-            $message .= "💵 *الإجمالي الجديد: {$editResult['new_total']} {$currency}*\n";
+        $message .= "📋 *تفاصيل الطلب بعد التعديل:*\n";
+        $message .= "━━━━━━━━━━━━━━━━\n";
+
+        $lines = [];
+        foreach ($items as $item) {
+            $line = "*{$item['index']}.* {$item['name']}";
+            if (! empty($item['variant'])) {
+                $line .= " ({$item['variant']})";
+            }
+            $line .= "\n   📦 الكمية: {$item['quantity']} | 💰 السعر: {$item['price']} {$currency}";
+            if (! empty($item['attributes'])) {
+                foreach ($item['attributes'] as $key => $value) {
+                    $line .= "\n   🏷️ {$key}: {$value}";
+                }
+            }
+            $lines[] = $line;
         }
 
-        $message .= "\nشكراً لاختيارك لنا! 🛍️";
+        $message .= implode("\n\n", $lines);
+        $total = $editResult['new_total'] ?? $order->total_price ?: '0';
+        $message .= "\n━━━━━━━━━━━━━━━━\n";
+        $message .= "💵 *الإجمالي الجديد: {$total} {$currency}*\n\n";
+        $message .= "✏️ *اكتب تعديل إضافي لو حابب، أو اكتب 'تأكيد' لتأكيد الطلب نهائياً.*";
+
+        return $message;
+    }
+
+    /**
+     * Build a final confirmation message once the customer confirms their edited order.
+     */
+    public function buildFinalConfirmationMessage(EcommerceOrder $order): string
+    {
+        $orderNumber = $order->order_number ?: $order->external_order_id;
+        $currency = $order->currency ?: 'EGP';
+        $items = $order->edit_items_snapshot ?? $this->extractLineItems($order);
+
+        $message = "✅ *تم تأكيد طلبك رقم #{$orderNumber} بنجاح!*\n";
+        $message .= "━━━━━━━━━━━━━━━━\n";
+
+        $lines = [];
+        foreach ($items as $item) {
+            $line = "*{$item['index']}.* {$item['name']}";
+            if (! empty($item['variant'])) {
+                $line .= " ({$item['variant']})";
+            }
+            $line .= "\n   📦 الكمية: {$item['quantity']} | 💰 السعر: {$item['price']} {$currency}";
+            if (! empty($item['attributes'])) {
+                foreach ($item['attributes'] as $key => $value) {
+                    $line .= "\n   🏷️ {$key}: {$value}";
+                }
+            }
+            $lines[] = $line;
+        }
+
+        $message .= implode("\n\n", $lines);
+        $total = $order->total_price ?: '0';
+        $message .= "\n━━━━━━━━━━━━━━━━\n";
+        $message .= "💵 *الإجمالي النهائي: {$total} {$currency}*\n\n";
+        $message .= "🚀 جارٍ تجهيز طلبك وتوصيله إليك في أقرب وقت.\nشكراً لاختيارك لنا! 🛍️";
 
         return $message;
     }
@@ -1164,7 +1266,7 @@ PROMPT;
             $message .= "السبب: {$reason}\n";
         }
 
-        $message .= "\nيرجى التواصل مع خدمة العملاء للمساعدة.";
+        $message .= "\nيرجى المحاولة مرة أخرى أو التواصل مع خدمة العملاء للمساعدة.";
 
         return $message;
     }
@@ -1177,9 +1279,9 @@ PROMPT;
         return "🤔 عذراً، لم أفهم التعديل المطلوب.\n\n"
             ."يرجى كتابة التعديل بوضوح مثل:\n"
             ."• _غير كمية الصنف 2 لـ 3_\n"
+            ."• _بدل الصنف 1 بـ فستان قطعتين_\n"
             ."• _شيل الصنف 1_\n"
-            ."• _ضيف 2 بيتزا مارجريتا_\n"
-            ."• _غير المقاس بتاع الصنف 3 لـ كبير_\n\n"
-            .'أو اكتب *إلغاء التعديل* للرجوع.';
+            ."• _ضيف 2 كذا_\n\n"
+            .'أو اكتب *تأكيد* لتأكيد الطلب الحالي، أو *إلغاء التعديل* للرجوع.';
     }
 }
