@@ -3714,6 +3714,9 @@ class HomeController extends Controller
         $orderNumber = $order->order_number ?: $order->external_order_id;
 
         if ($action === 'edit') {
+            // Refresh order from store platform (WooCommerce / Shopify) so line items & IDs are 100% current
+            $editService->refreshOrderFromPlatform($order);
+
             // Extract items snapshot from order payload
             $items = $editService->extractLineItems($order);
 

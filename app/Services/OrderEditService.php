@@ -554,6 +554,31 @@ PROMPT;
                 }
             }
 
+            // If WooCommerce returns invalid item ID error, refresh order and retry with fresh item IDs
+            if ($response->status() === 400 && str_contains($response->body(), 'woocommerce_rest_invalid_item_id')) {
+                Log::warning("OrderEditService: Invalid item ID detected for order #{$order->external_order_id}. Refreshing order and retrying...");
+                $freshOrder = $this->refreshWooCommerceOrder($order);
+                if (! empty($freshOrder['line_items'])) {
+                    $remappedUpdates = $this->remapWooCommerceItemUpdates($lineItemUpdates, $items, $freshOrder['line_items']);
+                    if (! empty($remappedUpdates)) {
+                        $retryResponse = Http::withBasicAuth($consumerKey, $consumerSecret)
+                            ->timeout(20)
+                            ->put($finalUrl, ['line_items' => $remappedUpdates]);
+
+                        if ($retryResponse->status() === 404 && ! str_contains($endpoint, 'rest_route')) {
+                            $retryFallbackUrl = "{$baseUrl}/index.php?rest_route=/wc/v3/orders/{$order->external_order_id}&consumer_key={$consumerKey}&consumer_secret={$consumerSecret}";
+                            $retryResponse = Http::withBasicAuth($consumerKey, $consumerSecret)
+                                ->timeout(20)
+                                ->put($retryFallbackUrl, ['line_items' => $remappedUpdates]);
+                        }
+
+                        if ($retryResponse->successful()) {
+                            $response = $retryResponse;
+                        }
+                    }
+                }
+            }
+
             if ($response->successful()) {
                 $updatedOrder = $response->json();
                 $newTotal = $updatedOrder['total'] ?? $order->total_price;
@@ -619,6 +644,192 @@ PROMPT;
             }
         } catch (\Throwable $e) {
             Log::warning("OrderEditService: WooCommerce product search failed: {$e->getMessage()}");
+        }
+
+        return null;
+    }
+
+    /**
+     * Remap outdated line item IDs to fresh live line item IDs from WooCommerce.
+     *
+     * @param  array<int, array<string, mixed>>  $updates
+     * @param  array<int, array<string, mixed>>  $oldItems
+     * @param  array<int, array<string, mixed>>  $freshLineItems
+     * @return array<int, array<string, mixed>>
+     */
+    protected function remapWooCommerceItemUpdates(array $updates, array $oldItems, array $freshLineItems): array
+    {
+        $remapped = [];
+        foreach ($updates as $update) {
+            if (empty($update['id'])) {
+                $remapped[] = $update;
+
+                continue;
+            }
+
+            $oldId = $update['id'];
+            $matchedFreshId = null;
+
+            $targetOld = null;
+            foreach ($oldItems as $oldItem) {
+                if (($oldItem['platform_item_id'] ?? null) == $oldId) {
+                    $targetOld = $oldItem;
+                    break;
+                }
+            }
+
+            // Match by product_id
+            if ($targetOld && ! empty($targetOld['product_id'])) {
+                foreach ($freshLineItems as $fItem) {
+                    if (($fItem['product_id'] ?? null) == $targetOld['product_id']) {
+                        $matchedFreshId = $fItem['id'];
+                        break;
+                    }
+                }
+            }
+
+            // Fallback match by index
+            if (! $matchedFreshId && $targetOld && isset($freshLineItems[($targetOld['index'] ?? 1) - 1])) {
+                $matchedFreshId = $freshLineItems[($targetOld['index'] ?? 1) - 1]['id'];
+            }
+
+            // Fallback: If only 1 line item exists in the fresh order, map to it
+            if (! $matchedFreshId && count($freshLineItems) === 1) {
+                $matchedFreshId = $freshLineItems[0]['id'];
+            }
+
+            if ($matchedFreshId) {
+                $update['id'] = $matchedFreshId;
+                $remapped[] = $update;
+            }
+        }
+
+        return $remapped;
+    }
+
+    /**
+     * Fetch fresh live order data from the store platform (WooCommerce / Shopify) and update local order.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function refreshOrderFromPlatform(EcommerceOrder $order): ?array
+    {
+        $platform = strtolower((string) ($order->platform ?: 'woocommerce'));
+
+        if ($platform === 'shopify') {
+            return $this->refreshShopifyOrder($order);
+        }
+
+        return $this->refreshWooCommerceOrder($order);
+    }
+
+    /**
+     * Refresh WooCommerce order details from store REST API.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function refreshWooCommerceOrder(EcommerceOrder $order): ?array
+    {
+        $whatsItem = $order->whatsItem;
+        if (! $whatsItem) {
+            return null;
+        }
+
+        $baseUrl = rtrim((string) $whatsItem->website_url, '/');
+        if (empty($baseUrl)) {
+            return null;
+        }
+
+        if (! str_starts_with($baseUrl, 'http://') && ! str_starts_with($baseUrl, 'https://')) {
+            $baseUrl = 'https://'.$baseUrl;
+        }
+
+        $consumerKey = (string) $whatsItem->user_name;
+        $consumerSecret = (string) $whatsItem->password;
+
+        if (empty($consumerKey) || empty($consumerSecret)) {
+            return null;
+        }
+
+        $selfLink = data_get($order->raw_payload, '_links.self.0.href');
+        $endpoint = ! empty($selfLink)
+            ? (string) $selfLink
+            : "{$baseUrl}/wp-json/wc/v3/orders/{$order->external_order_id}";
+
+        $separator = str_contains($endpoint, '?') ? '&' : '?';
+        $finalUrl = "{$endpoint}{$separator}consumer_key={$consumerKey}&consumer_secret={$consumerSecret}";
+
+        try {
+            $response = Http::withBasicAuth($consumerKey, $consumerSecret)
+                ->timeout(15)
+                ->get($finalUrl);
+
+            if ($response->status() === 404 && ! str_contains($endpoint, 'rest_route')) {
+                $fallbackUrl = "{$baseUrl}/index.php?rest_route=/wc/v3/orders/{$order->external_order_id}&consumer_key={$consumerKey}&consumer_secret={$consumerSecret}";
+                $fallbackResponse = Http::withBasicAuth($consumerKey, $consumerSecret)
+                    ->timeout(15)
+                    ->get($fallbackUrl);
+
+                if ($fallbackResponse->successful()) {
+                    $response = $fallbackResponse;
+                }
+            }
+
+            if ($response->successful()) {
+                $data = $response->json();
+                if (is_array($data) && ! empty($data['id'])) {
+                    $order->update([
+                        'raw_payload' => $data,
+                        'total_price' => $data['total'] ?? $order->total_price,
+                    ]);
+
+                    return $data;
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning("OrderEditService: Could not refresh WooCommerce order #{$order->external_order_id}: {$e->getMessage()}");
+        }
+
+        return null;
+    }
+
+    /**
+     * Refresh Shopify order details from Admin API.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function refreshShopifyOrder(EcommerceOrder $order): ?array
+    {
+        $whatsItem = $order->whatsItem;
+        if (! $whatsItem) {
+            return null;
+        }
+
+        $domain = rtrim((string) $whatsItem->website_url, '/');
+        $accessToken = (string) $whatsItem->custom_api_key;
+
+        if (empty($domain) || empty($accessToken)) {
+            return null;
+        }
+
+        try {
+            $response = Http::withHeaders([
+                'X-Shopify-Access-Token' => $accessToken,
+            ])->timeout(15)->get("https://{$domain}/admin/api/2024-01/orders/{$order->external_order_id}.json");
+
+            if ($response->successful()) {
+                $data = $response->json('order');
+                if (is_array($data)) {
+                    $order->update([
+                        'raw_payload' => $data,
+                        'total_price' => $data['total_price'] ?? $order->total_price,
+                    ]);
+
+                    return $data;
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning("OrderEditService: Could not refresh Shopify order #{$order->external_order_id}: {$e->getMessage()}");
         }
 
         return null;

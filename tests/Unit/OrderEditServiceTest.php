@@ -242,3 +242,48 @@ test('OrderEditService normalizes attributes replacement or quantity edits into 
         ->and($result2[0]['product_name'])->toBe('فستان')
         ->and($result2[0]['quantity'])->toBe(2);
 });
+
+test('OrderEditService remaps outdated line item IDs to fresh live WooCommerce item IDs', function () {
+    $service = new OrderEditService;
+
+    $reflection = new ReflectionClass($service);
+    $method = $reflection->getMethod('remapWooCommerceItemUpdates');
+    $method->setAccessible(true);
+
+    $oldItems = [
+        [
+            'index' => 1,
+            'name' => 'منتج جديد',
+            'product_id' => 15,
+            'platform_item_id' => 6, // old ID
+            'quantity' => 3,
+            'price' => 99,
+        ],
+    ];
+
+    $freshLineItems = [
+        [
+            'id' => 8, // new live ID on WooCommerce
+            'name' => 'منتج جديد',
+            'product_id' => 15,
+            'quantity' => 3,
+            'total' => '297.00',
+        ],
+    ];
+
+    $updates = [
+        [
+            'id' => 6,
+            'quantity' => 2,
+            'subtotal' => '198.00',
+            'total' => '198.00',
+        ],
+    ];
+
+    $remapped = $method->invoke($service, $updates, $oldItems, $freshLineItems);
+
+    expect($remapped)->toHaveCount(1)
+        ->and($remapped[0]['id'])->toBe(8)
+        ->and($remapped[0]['quantity'])->toBe(2)
+        ->and($remapped[0]['total'])->toBe('198.00');
+});
