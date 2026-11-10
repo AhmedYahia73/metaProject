@@ -3773,7 +3773,13 @@ class HomeController extends Controller
         }
 
         // Send direct confirmation/items list text message back to customer
-        $metaService->sendDirectTextMessage($whatsItem, $senderPhone, $replyText);
+        $token = $this->resolveWhatsToken($whatsItem);
+        $this->sendTextMessage(
+            accessToken: (string) $token,
+            phoneNumberId: (string) $whatsItem->phone_number_id,
+            to: $senderPhone,
+            body: $replyText,
+        );
 
         // Record bot message in chat
         $this->recordBotChat($restaurant, $whatsItem, $senderPhone, $replyText);
@@ -3834,7 +3840,13 @@ class HomeController extends Controller
         if (in_array($trimmed, ['إلغاء التعديل', 'الغاء التعديل', 'رجوع', 'تراجع', 'إلغاء', 'الغاء'], true)) {
             $order->update(['edit_state' => null]);
             $replyText = 'تم إلغاء وضع تعديل الطلب. يمكنك تأكيد طلبك الحالي أو الاستفسار عن أي شيء آخر.';
-            $metaService->sendDirectTextMessage($whatsItem, $senderPhone, $replyText);
+            $token = $this->resolveWhatsToken($whatsItem);
+            $this->sendTextMessage(
+                accessToken: (string) $token,
+                phoneNumberId: (string) $whatsItem->phone_number_id,
+                to: $senderPhone,
+                body: $replyText,
+            );
 
             $this->recordBotChat($restaurant, $whatsItem, $senderPhone, $replyText);
 
@@ -3883,7 +3895,13 @@ class HomeController extends Controller
         }
 
         // Send reply to customer
-        $metaService->sendDirectTextMessage($whatsItem, $senderPhone, $replyText);
+        $token = $this->resolveWhatsToken($whatsItem);
+        $this->sendTextMessage(
+            accessToken: (string) $token,
+            phoneNumberId: (string) $whatsItem->phone_number_id,
+            to: $senderPhone,
+            body: $replyText,
+        );
 
         // Record bot message in Chat
         $this->recordBotChat($restaurant, $whatsItem, $senderPhone, $replyText);
