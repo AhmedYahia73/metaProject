@@ -25,6 +25,9 @@ class EcommerceOrder extends Model
         'raw_payload',
         'confirmed_at',
         'cancelled_at',
+        'edit_state',
+        'edit_items_snapshot',
+        'edited_at',
     ];
 
     /**
@@ -36,10 +39,20 @@ class EcommerceOrder extends Model
     {
         return [
             'raw_payload' => 'array',
+            'edit_items_snapshot' => 'array',
             'total_price' => 'float',
             'confirmed_at' => 'datetime',
             'cancelled_at' => 'datetime',
+            'edited_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Check if this order is currently awaiting an edit from the customer.
+     */
+    public function isAwaitingEdit(): bool
+    {
+        return $this->edit_state === 'awaiting_edit';
     }
 
     /**

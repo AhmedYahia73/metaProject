@@ -77,6 +77,7 @@ class WhatsItemController extends Controller
             'custom_api_key' => 'sometimes|nullable|string|max:500',
             'api_confirm_url' => 'sometimes|nullable|string|max:500',
             'api_reject_url' => 'sometimes|nullable|string|max:500',
+            'api_edit_url' => 'sometimes|nullable|string|max:500',
         ]);
 
         if ($request->filled('client_id') && empty($validated['user_name'])) {
@@ -167,6 +168,7 @@ class WhatsItemController extends Controller
             'custom_api_key' => $validated['custom_api_key'] ?? null,
             'api_confirm_url' => $validated['api_confirm_url'] ?? null,
             'api_reject_url' => $validated['api_reject_url'] ?? null,
+            'api_edit_url' => $validated['api_edit_url'] ?? null,
             'ai_file' => $aiFilePath,
             'phone_status' => 'pending_otp',
             'msg_number' => 0,
@@ -228,6 +230,7 @@ class WhatsItemController extends Controller
             'custom_api_key' => 'sometimes|nullable|string|max:500',
             'api_confirm_url' => 'sometimes|nullable|string|max:500',
             'api_reject_url' => 'sometimes|nullable|string|max:500',
+            'api_edit_url' => 'sometimes|nullable|string|max:500',
         ]);
 
         if ($request->filled('client_id') && empty($validated['user_name'])) {

@@ -117,6 +117,7 @@ class WhatsPagesController extends Controller
                     'api_key' => $item->getApiKey(),
                     'api_confirm_url' => $item->api_confirm_url,
                     'api_reject_url' => $item->api_reject_url,
+                    'api_edit_url' => $item->api_edit_url,
                 ];
             });
 
@@ -182,6 +183,7 @@ class WhatsPagesController extends Controller
             'shopify_access_token' => 'sometimes|nullable|string',
             'api_confirm_url' => 'sometimes|nullable|url|max:500',
             'api_reject_url' => 'sometimes|nullable|url|max:500',
+            'api_edit_url' => 'sometimes|nullable|url|max:500',
             'custom_api_key' => 'sometimes|nullable|string|max:255',
         ]);
 
@@ -328,6 +330,7 @@ class WhatsPagesController extends Controller
             'shopify_access_token' => 'sometimes|nullable|string',
             'api_confirm_url' => 'sometimes|nullable|url|max:500',
             'api_reject_url' => 'sometimes|nullable|url|max:500',
+            'api_edit_url' => 'sometimes|nullable|url|max:500',
             'custom_api_key' => 'sometimes|nullable|string|max:255',
         ]);
 
@@ -836,7 +839,6 @@ class WhatsPagesController extends Controller
         ], Response::HTTP_CREATED);
     }
 
-     
     public function unSubscription(Request $request): JsonResponse
     {
         $user = $request->user();
@@ -847,28 +849,29 @@ class WhatsPagesController extends Controller
                 'message' => 'Your account is not linked to Facebook/Instagram. Please login via Facebook/Instagram first.',
             ], Response::HTTP_FORBIDDEN);
         }
- 
+
         $validated = $request->validate([
             'whats_item_id' => 'required|exists:whats_items,id',
         ]);
 
         // Find or create InstagramItem
- 
+
         $whatsItem = WhatsItem::where('user_id', $user->id)->findOrFail($validated['whats_item_id']);
 
         $itemUpdate = [
             'msg_number' => 0,
             'start_date' => null,
-            'end_date' => null, 
+            'end_date' => null,
         ];
- 
-        $whatsItem->update($itemUpdate);   
+
+        $whatsItem->update($itemUpdate);
 
         return response()->json([
             'status' => true,
             'message' => 'YOU SUBSCRIPED SUCCESS.',
         ], Response::HTTP_CREATED);
     }
+
     /**
      * Authorize that the WhatsItem belongs to the authenticated user.
      */

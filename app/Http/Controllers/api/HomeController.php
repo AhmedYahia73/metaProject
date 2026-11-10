@@ -21,6 +21,7 @@ use App\Models\WhatsItem;
 use App\Services\EcommerceStoreService;
 use App\Services\MetaPageTokenService;
 use App\Services\MetaWhatsAppService;
+use App\Services\OrderEditService;
 use App\trait\FormatsChatLinks;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -223,7 +224,7 @@ class HomeController extends Controller
                 $messageText = $buttonText;
             }
 
-            // Intercept order confirmation actions (Approve / Reject Quick Reply buttons)
+            // Intercept order confirmation actions (Approve / Reject / Edit Quick Reply buttons)
             if ($this->isOrderConfirmationAction($buttonPayload, $messageText)) {
                 return $this->handleOrderConfirmationAction(
                     $whatsItem,
@@ -231,6 +232,20 @@ class HomeController extends Controller
                     $senderPhone,
                     $senderName,
                     $buttonPayload,
+                    $messageText,
+                    $incomingMessage
+                );
+            }
+
+            // Check if customer is currently in an active order edit session
+            $awaitingOrder = $this->getAwaitingEditOrder($whatsItem, $senderPhone);
+            if ($awaitingOrder && ! empty($messageText)) {
+                return $this->handleOrderEditCustomerMessage(
+                    $whatsItem,
+                    $restaurant,
+                    $awaitingOrder,
+                    $senderPhone,
+                    $senderName,
                     $messageText,
                     $incomingMessage
                 );
@@ -3602,12 +3617,14 @@ class HomeController extends Controller
      */
     protected function isOrderConfirmationAction(string $payload, string $text): bool
     {
-        if (str_starts_with($payload, 'ORDER_APPROVE_') || str_starts_with($payload, 'ORDER_REJECT_')) {
+        if (str_starts_with($payload, 'ORDER_APPROVE_')
+            || str_starts_with($payload, 'ORDER_REJECT_')
+            || str_starts_with($payload, 'ORDER_EDIT_')) {
             return true;
         }
 
         $trimmed = trim($text);
-        if (in_array($trimmed, ['تأكيد الطلب', 'إلغاء الطلب', 'تأكيد', 'إلغاء', 'موافق', 'رفض'], true)) {
+        if (in_array($trimmed, ['تأكيد الطلب', 'إلغاء الطلب', 'تأكيد', 'إلغاء', 'موافق', 'رفض', 'تعديل الطلب', 'تعديل', 'تعديل الاوردر'], true)) {
             return true;
         }
 
@@ -3615,7 +3632,24 @@ class HomeController extends Controller
     }
 
     /**
-     * Handle customer approval or rejection of an order confirmation template.
+     * Get the latest order for this customer that is currently awaiting an edit instruction.
+     */
+    protected function getAwaitingEditOrder(WhatsItem $whatsItem, string $senderPhone): ?EcommerceOrder
+    {
+        $cleanSender = preg_replace('/[^0-9]/', '', $senderPhone);
+
+        return EcommerceOrder::where('whats_item_id', $whatsItem->id)
+            ->where('edit_state', 'awaiting_edit')
+            ->where(function ($q) use ($cleanSender) {
+                $q->where('customer_phone', $cleanSender)
+                    ->orWhere('customer_phone', 'like', '%'.substr($cleanSender, -9));
+            })
+            ->latest()
+            ->first();
+    }
+
+    /**
+     * Handle customer approval, rejection, or edit request of an order confirmation template.
      */
     protected function handleOrderConfirmationAction(
         WhatsItem $whatsItem,
@@ -3635,6 +3669,9 @@ class HomeController extends Controller
         } elseif (preg_match('/^ORDER_REJECT_(\d+)$/', $buttonPayload, $matches)) {
             $order = EcommerceOrder::find($matches[1]);
             $action = 'rejected';
+        } elseif (preg_match('/^ORDER_EDIT_(\d+)$/', $buttonPayload, $matches)) {
+            $order = EcommerceOrder::find($matches[1]);
+            $action = 'edit';
         } else {
             // Fallback match by customer phone & whatsItem for the latest pending order
             $cleanSender = preg_replace('/[^0-9]/', '', $senderPhone);
@@ -3652,6 +3689,8 @@ class HomeController extends Controller
                 $action = 'approved';
             } elseif (str_contains($trimmed, 'إلغاء') || str_contains($trimmed, 'رفض')) {
                 $action = 'rejected';
+            } elseif (str_contains($trimmed, 'تعديل')) {
+                $action = 'edit';
             }
         }
 
@@ -3669,13 +3708,26 @@ class HomeController extends Controller
         $storeService = app(EcommerceStoreService::class);
         /** @var MetaWhatsAppService $metaService */
         $metaService = app(MetaWhatsAppService::class);
+        /** @var OrderEditService $editService */
+        $editService = app(OrderEditService::class);
 
         $orderNumber = $order->order_number ?: $order->external_order_id;
 
-        if ($action === 'approved') {
+        if ($action === 'edit') {
+            // Extract items snapshot from order payload
+            $items = $editService->extractLineItems($order);
+
+            $order->update([
+                'edit_state' => 'awaiting_edit',
+                'edit_items_snapshot' => $items,
+            ]);
+
+            $replyText = $editService->formatItemsListMessage($items, $order);
+        } elseif ($action === 'approved') {
             $order->update([
                 'status' => 'confirmed',
                 'confirmed_at' => now(),
+                'edit_state' => null,
             ]);
 
             $storeService->updateOrderStatus($order, 'approved');
@@ -3685,6 +3737,7 @@ class HomeController extends Controller
             $order->update([
                 'status' => 'cancelled',
                 'cancelled_at' => now(),
+                'edit_state' => null,
             ]);
 
             $storeService->updateOrderStatus($order, 'rejected');
@@ -3693,7 +3746,12 @@ class HomeController extends Controller
         }
 
         // Record incoming button tap in chat
-        $displayMsg = $messageText ?: ($action === 'approved' ? 'تأكيد الطلب' : 'إلغاء الطلب');
+        $displayMsg = $messageText ?: match ($action) {
+            'approved' => 'تأكيد الطلب',
+            'edit' => 'تعديل الطلب',
+            default => 'إلغاء الطلب',
+        };
+
         $chat = Chat::create([
             'user_id' => $restaurant->id,
             'whats_item_id' => $whatsItem->id,
@@ -3714,10 +3772,137 @@ class HomeController extends Controller
             // Ignore broadcast failure
         }
 
-        // Send direct confirmation text message back to customer
+        // Send direct confirmation/items list text message back to customer
         $metaService->sendDirectTextMessage($whatsItem, $senderPhone, $replyText);
 
-        // Record bot confirmation message in chat
+        // Record bot message in chat
+        $this->recordBotChat($restaurant, $whatsItem, $senderPhone, $replyText);
+
+        Log::info("OrderConfirmation: Order #{$order->id} (External: #{$orderNumber}) marked as [{$action}]", [
+            'whats_item_id' => $whatsItem->id,
+            'customer_phone' => $senderPhone,
+        ]);
+
+        return response()->json([
+            'status' => 'order_action_processed',
+            'action' => $action,
+            'order_id' => $order->id,
+            'order_number' => $orderNumber,
+        ], Response::HTTP_OK);
+    }
+
+    /**
+     * Handle incoming text message from a customer who is currently in an order editing session.
+     */
+    protected function handleOrderEditCustomerMessage(
+        WhatsItem $whatsItem,
+        User $restaurant,
+        EcommerceOrder $order,
+        string $senderPhone,
+        string $senderName,
+        string $messageText,
+        array $incomingMessage
+    ): JsonResponse {
+        /** @var OrderEditService $editService */
+        $editService = app(OrderEditService::class);
+        /** @var MetaWhatsAppService $metaService */
+        $metaService = app(MetaWhatsAppService::class);
+
+        // Record customer incoming message in Chat
+        $chat = Chat::create([
+            'user_id' => $restaurant->id,
+            'whats_item_id' => $whatsItem->id,
+            'name' => $senderName,
+            'phone' => $senderPhone,
+            'message' => $messageText,
+            'is_image' => false,
+            'is_admin' => false,
+            'sender_type' => 'customer',
+            'is_read' => true,
+            'channel' => 'whatsapp',
+            'meta_message_id' => data_get($incomingMessage, 'id'),
+        ]);
+
+        try {
+            WhatsEvent::dispatch($chat);
+        } catch (\Throwable) {
+            // Ignore broadcast failure
+        }
+
+        // Check if user requested cancellation of edit mode
+        $trimmed = trim($messageText);
+        if (in_array($trimmed, ['إلغاء التعديل', 'الغاء التعديل', 'رجوع', 'تراجع', 'إلغاء', 'الغاء'], true)) {
+            $order->update(['edit_state' => null]);
+            $replyText = 'تم إلغاء وضع تعديل الطلب. يمكنك تأكيد طلبك الحالي أو الاستفسار عن أي شيء آخر.';
+            $metaService->sendDirectTextMessage($whatsItem, $senderPhone, $replyText);
+
+            $this->recordBotChat($restaurant, $whatsItem, $senderPhone, $replyText);
+
+            return response()->json(['status' => 'order_edit_cancelled'], Response::HTTP_OK);
+        }
+
+        // Show typing indicator
+        $incomingMessageId = data_get($incomingMessage, 'id');
+        $token = $this->resolveWhatsToken($whatsItem);
+        if ($incomingMessageId) {
+            $this->showWhatsAppTyping(
+                accessToken: (string) $token,
+                phoneNumberId: $whatsItem->phone_number_id,
+                senderPhone: $senderPhone,
+                incomingMessageId: $incomingMessageId,
+            );
+        }
+
+        // 1. Ask ChatGPT to parse the customer's edit request
+        $items = $order->edit_items_snapshot ?? $editService->extractLineItems($order);
+        $aiParsed = $editService->parseEditRequestWithAi($items, $messageText);
+
+        if (! empty($aiParsed['edits'])) {
+            // Mark state as editing
+            $order->update(['edit_state' => 'editing']);
+
+            // 2. Apply edits to the platform (Shopify, WooCommerce, Custom)
+            $applyResult = $editService->applyEdits($order, $aiParsed);
+
+            if ($applyResult['success']) {
+                $order->update([
+                    'edit_state' => 'edited',
+                    'edited_at' => now(),
+                    'total_price' => $applyResult['new_total'] ?? $order->total_price,
+                ]);
+
+                $replyText = $editService->buildUpdatedOrderSummary($order, $applyResult, $aiParsed['summary_ar'] ?? '');
+            } else {
+                // Revert state to awaiting_edit so customer can retry or cancel
+                $order->update(['edit_state' => 'awaiting_edit']);
+                $replyText = $editService->buildEditErrorMessage($order, $applyResult['message'] ?? '');
+            }
+        } else {
+            // AI could not understand or invalid instruction
+            $replyText = $editService->buildClarificationMessage($order);
+        }
+
+        // Send reply to customer
+        $metaService->sendDirectTextMessage($whatsItem, $senderPhone, $replyText);
+
+        // Record bot message in Chat
+        $this->recordBotChat($restaurant, $whatsItem, $senderPhone, $replyText);
+
+        if ((int) $whatsItem->msg_number > 0) {
+            $whatsItem->decrement('msg_number');
+        }
+
+        return response()->json([
+            'status' => 'order_edit_processed',
+            'order_id' => $order->id,
+        ], Response::HTTP_OK);
+    }
+
+    /**
+     * Record a bot message in the chat history and dispatch broadcast event.
+     */
+    protected function recordBotChat(User $restaurant, WhatsItem $whatsItem, string $senderPhone, string $replyText): Chat
+    {
         $botChat = Chat::create([
             'user_id' => $restaurant->id,
             'whats_item_id' => $whatsItem->id,
@@ -3737,16 +3922,6 @@ class HomeController extends Controller
             // Ignore broadcast failure
         }
 
-        Log::info("OrderConfirmation: Order #{$order->id} (External: #{$orderNumber}) marked as [{$action}]", [
-            'whats_item_id' => $whatsItem->id,
-            'customer_phone' => $senderPhone,
-        ]);
-
-        return response()->json([
-            'status' => 'order_action_processed',
-            'action' => $action,
-            'order_id' => $order->id,
-            'order_number' => $orderNumber,
-        ], Response::HTTP_OK);
+        return $botChat;
     }
 }

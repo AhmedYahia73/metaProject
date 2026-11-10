@@ -51,6 +51,7 @@ class WhatsItem extends Model
         'custom_api_key',
         'api_confirm_url',
         'api_reject_url',
+        'api_edit_url',
     ];
 
     /**

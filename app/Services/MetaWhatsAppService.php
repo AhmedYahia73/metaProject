@@ -633,22 +633,23 @@ class MetaWhatsAppService
             ];
         }
 
-        // 1. Check if template already exists
+        // 1. Check if v2 template already exists (with edit button)
         try {
             $checkResponse = Http::withToken($token)
                 ->timeout(15)
                 ->get("{$this->baseUrl}/{$wabaId}/message_templates", [
-                    'name' => 'order_confirmation',
+                    'name' => 'order_confirmation_v2',
                 ]);
 
             if ($checkResponse->successful()) {
                 $existing = $checkResponse->json('data', []);
                 foreach ($existing as $t) {
-                    if (($t['name'] ?? '') === 'order_confirmation' && ($t['language'] ?? '') === 'ar') {
+                    if (($t['name'] ?? '') === 'order_confirmation_v2' && ($t['language'] ?? '') === 'ar') {
                         return [
                             'success' => true,
-                            'message' => 'Template already exists.',
+                            'message' => 'Template v2 already exists.',
                             'template_id' => $t['id'] ?? null,
+                            'template_name' => 'order_confirmation_v2',
                         ];
                     }
                 }
@@ -660,15 +661,36 @@ class MetaWhatsAppService
             ]);
         }
 
-        // 2. Create the order_confirmation template
+        // 1b. Check if v1 template exists (fallback — legacy 2-button)
+        try {
+            $checkV1 = Http::withToken($token)
+                ->timeout(15)
+                ->get("{$this->baseUrl}/{$wabaId}/message_templates", [
+                    'name' => 'order_confirmation',
+                ]);
+
+            if ($checkV1->successful()) {
+                $existingV1 = $checkV1->json('data', []);
+                foreach ($existingV1 as $t) {
+                    if (($t['name'] ?? '') === 'order_confirmation' && ($t['language'] ?? '') === 'ar') {
+                        // v1 exists — still try to create v2, but don't fail if v1 is the only one
+                        break;
+                    }
+                }
+            }
+        } catch (\Throwable) {
+            // Ignore v1 check errors
+        }
+
+        // 2. Create the order_confirmation_v2 template with 3 buttons (confirm, cancel, edit)
         $templatePayload = [
-            'name' => 'order_confirmation',
+            'name' => 'order_confirmation_v2',
             'category' => 'UTILITY',
             'language' => 'ar',
             'components' => [
                 [
                     'type' => 'BODY',
-                    'text' => "أهلاً {{1}}، طلبك رقم {{2}} من {{3}} بإجمالي {{4}} جنيه.\nبرجاء اختيار تأكيد الطلب لتجهيزه فوراً، أو إلغاء الطلب.",
+                    'text' => "أهلاً {{1}}، طلبك رقم {{2}} من {{3}} بإجمالي {{4}} جنيه.\nبرجاء اختيار تأكيد الطلب لتجهيزه فوراً، أو تعديل الطلب، أو إلغائه.",
                     'example' => [
                         'body_text' => [['أحمد', '1045', 'اسم المتجر', '250']],
                     ],
@@ -677,6 +699,7 @@ class MetaWhatsAppService
                     'type' => 'BUTTONS',
                     'buttons' => [
                         ['type' => 'QUICK_REPLY', 'text' => 'تأكيد الطلب'],
+                        ['type' => 'QUICK_REPLY', 'text' => 'تعديل الطلب'],
                         ['type' => 'QUICK_REPLY', 'text' => 'إلغاء الطلب'],
                     ],
                 ],
@@ -759,7 +782,56 @@ class MetaWhatsAppService
         $orderNumber = (string) (! empty($order->order_number) ? $order->order_number : $order->external_order_id);
         $total = (string) ($order->total_price ?? '0');
 
-        $payload = [
+        $payloadV2 = [
+            'messaging_product' => 'whatsapp',
+            'recipient_type' => 'individual',
+            'to' => $normalizedTo,
+            'type' => 'template',
+            'template' => [
+                'name' => 'order_confirmation_v2',
+                'language' => [
+                    'code' => 'ar',
+                ],
+                'components' => [
+                    [
+                        'type' => 'body',
+                        'parameters' => [
+                            ['type' => 'text', 'text' => $customerName],
+                            ['type' => 'text', 'text' => $orderNumber],
+                            ['type' => 'text', 'text' => $resolvedStoreName],
+                            ['type' => 'text', 'text' => $total],
+                        ],
+                    ],
+                    [
+                        'type' => 'button',
+                        'sub_type' => 'quick_reply',
+                        'index' => '0',
+                        'parameters' => [
+                            ['type' => 'payload', 'payload' => 'ORDER_APPROVE_'.$order->id],
+                        ],
+                    ],
+                    [
+                        'type' => 'button',
+                        'sub_type' => 'quick_reply',
+                        'index' => '1',
+                        'parameters' => [
+                            ['type' => 'payload', 'payload' => 'ORDER_EDIT_'.$order->id],
+                        ],
+                    ],
+                    [
+                        'type' => 'button',
+                        'sub_type' => 'quick_reply',
+                        'index' => '2',
+                        'parameters' => [
+                            ['type' => 'payload', 'payload' => 'ORDER_REJECT_'.$order->id],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        // Legacy 2-button template payload for fallback
+        $payloadV1 = [
             'messaging_product' => 'whatsapp',
             'recipient_type' => 'individual',
             'to' => $normalizedTo,
@@ -800,9 +872,21 @@ class MetaWhatsAppService
         ];
 
         try {
+            // First attempt: try sending the 3-button v2 template
             $response = Http::withToken($token)
                 ->timeout(15)
-                ->post("{$this->baseUrl}/{$phoneNumberId}/messages", $payload);
+                ->post("{$this->baseUrl}/{$phoneNumberId}/messages", $payloadV2);
+
+            if (! $response->successful()) {
+                // If v2 fails (e.g. template does not exist or pending approval), try v1
+                $v1Response = Http::withToken($token)
+                    ->timeout(15)
+                    ->post("{$this->baseUrl}/{$phoneNumberId}/messages", $payloadV1);
+
+                if ($v1Response->successful()) {
+                    $response = $v1Response;
+                }
+            }
 
             if ($response->successful()) {
                 $wamid = $response->json('messages.0.id');
@@ -841,7 +925,13 @@ class MetaWhatsAppService
             if (! empty($this->systemUserToken) && $token !== $this->systemUserToken) {
                 $fallbackResponse = Http::withToken($this->systemUserToken)
                     ->timeout(15)
-                    ->post("{$this->baseUrl}/{$phoneNumberId}/messages", $payload);
+                    ->post("{$this->baseUrl}/{$phoneNumberId}/messages", $payloadV2);
+
+                if (! $fallbackResponse->successful()) {
+                    $fallbackResponse = Http::withToken($this->systemUserToken)
+                        ->timeout(15)
+                        ->post("{$this->baseUrl}/{$phoneNumberId}/messages", $payloadV1);
+                }
 
                 if ($fallbackResponse->successful()) {
                     $wamid = $fallbackResponse->json('messages.0.id');
@@ -883,7 +973,7 @@ class MetaWhatsAppService
                 'error' => $error,
             ]);
 
-            // Fallback: If template is PENDING or rejected, attempt sending as an interactive button message
+            // Fallback: If template is PENDING or rejected, attempt sending as an interactive 3-button message
             $interactivePayload = [
                 'messaging_product' => 'whatsapp',
                 'recipient_type' => 'individual',
@@ -892,7 +982,7 @@ class MetaWhatsAppService
                 'interactive' => [
                     'type' => 'button',
                     'body' => [
-                        'text' => "أهلاً {$customerName}، طلبك رقم {$orderNumber} من {$resolvedStoreName} بإجمالي {$total} جنيه.\nبرجاء اختيار تأكيد الطلب لتجهيزه فوراً، أو إلغاء الطلب.",
+                        'text' => "أهلاً {$customerName}، طلبك رقم {$orderNumber} من {$resolvedStoreName} بإجمالي {$total} جنيه.\nبرجاء اختيار تأكيد الطلب لتجهيزه فوراً، أو تعديل الطلب، أو إلغائه.",
                     ],
                     'action' => [
                         'buttons' => [
@@ -901,6 +991,13 @@ class MetaWhatsAppService
                                 'reply' => [
                                     'id' => 'ORDER_APPROVE_'.$order->id,
                                     'title' => 'تأكيد الطلب',
+                                ],
+                            ],
+                            [
+                                'type' => 'reply',
+                                'reply' => [
+                                    'id' => 'ORDER_EDIT_'.$order->id,
+                                    'title' => 'تعديل الطلب',
                                 ],
                             ],
                             [
