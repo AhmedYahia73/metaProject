@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\EcommerceOrder;
+use App\Services\EcommerceStoreService;
 use App\Services\OrderEditService;
 
 test('OrderEditService extracts WooCommerce line items properly', function () {
@@ -295,9 +296,25 @@ test('OrderEditService detects fast-path confirmation intent properly', function
         ->and($service->isConfirmationIntent('تمام'))->toBeTrue()
         ->and($service->isConfirmationIntent('كده تمام'))->toBeTrue()
         ->and($service->isConfirmationIntent('اعتمد يا باشا'))->toBeTrue()
+        ->and($service->isConfirmationIntent('تمام ابعتهم'))->toBeTrue()
+        ->and($service->isConfirmationIntent('أكد الاوردر'))->toBeTrue()
         ->and($service->isConfirmationIntent('اوكي'))->toBeTrue()
         ->and($service->isConfirmationIntent('عاوز قطعتين فقط'))->toBeFalse()
+        ->and($service->isConfirmationIntent('تمام بس عاوز اغير الكمية'))->toBeFalse()
         ->and($service->isConfirmationIntent('مكانكم فين؟'))->toBeFalse();
+});
+
+test('EcommerceStoreService builds universal index.php?rest_route WooCommerce URLs to prevent 404 delays', function () {
+    $url = EcommerceStoreService::buildWooCommerceUrl(
+        'https://woocommerce.smartego.org',
+        '/wc/v3/orders/23',
+        'ck_test',
+        'cs_test'
+    );
+
+    expect($url)->toContain('index.php?rest_route=/wc/v3/orders/23')
+        ->and($url)->toContain('consumer_key=ck_test')
+        ->and($url)->toContain('consumer_secret=cs_test');
 });
 
 test('OrderEditService builds final confirmation message properly', function () {

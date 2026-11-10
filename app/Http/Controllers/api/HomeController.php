@@ -433,11 +433,21 @@ class HomeController extends Controller
      */
     private function resolveWhatsToken(WhatsItem $whatsItem): string
     {
+        $systemToken = (string) (config('services.meta.system_user_token') ?: $whatsItem->access_token);
+
+        // If customer token has failed recently, directly return system user token to avoid dead-call lag
+        if (! empty($systemToken) && (
+            Cache::has("whats_token_failed_{$whatsItem->id}") ||
+            Cache::has("whats_token_failed_{$whatsItem->phone_number_id}")
+        )) {
+            return $systemToken;
+        }
+
         if (($whatsItem->token_type ?? 'system') === 'customer' && ! empty($whatsItem->access_token)) {
             return $whatsItem->access_token;
         }
 
-        return (string) (config('services.meta.system_user_token') ?: $whatsItem->access_token);
+        return $systemToken;
     }
 
     /**
@@ -3486,6 +3496,7 @@ class HomeController extends Controller
     ): void {
         try {
             $response = Http::withToken($accessToken)
+                ->timeout(3)
                 ->post(self::GRAPH_API_BASE."/{$phoneNumberId}/messages", [
                     'messaging_product' => 'whatsapp',
                     'status' => 'read',
@@ -3495,12 +3506,17 @@ class HomeController extends Controller
             if (! $response->successful()) {
                 $systemToken = (string) config('services.meta.system_user_token');
                 if (! empty($systemToken) && $accessToken !== $systemToken) {
-                    Http::withToken($systemToken)
+                    $fallback = Http::withToken($systemToken)
+                        ->timeout(3)
                         ->post(self::GRAPH_API_BASE."/{$phoneNumberId}/messages", [
                             'messaging_product' => 'whatsapp',
                             'status' => 'read',
                             'message_id' => $incomingMessageId,
                         ]);
+
+                    if ($fallback->successful()) {
+                        Cache::put("whats_token_failed_{$phoneNumberId}", true, now()->addHours(12));
+                    }
                 }
             }
         } catch (\Throwable $e) {
@@ -3567,6 +3583,7 @@ class HomeController extends Controller
         }
 
         $response = Http::withToken($accessToken)
+            ->timeout(8)
             ->post(self::GRAPH_API_BASE."/{$phoneNumberId}/messages", [
                 'messaging_product' => 'whatsapp',
                 'recipient_type' => 'individual',
@@ -3584,6 +3601,7 @@ class HomeController extends Controller
         $systemToken = (string) config('services.meta.system_user_token');
         if (! empty($systemToken) && $accessToken !== $systemToken) {
             $fallbackResponse = Http::withToken($systemToken)
+                ->timeout(8)
                 ->post(self::GRAPH_API_BASE."/{$phoneNumberId}/messages", [
                     'messaging_product' => 'whatsapp',
                     'recipient_type' => 'individual',
@@ -3594,6 +3612,7 @@ class HomeController extends Controller
 
             if ($fallbackResponse->successful()) {
                 Log::info("WhatsApp sendTextMessage: fallback to system_user_token succeeded for {$phoneNumberId}");
+                Cache::put("whats_token_failed_{$phoneNumberId}", true, now()->addHours(12));
 
                 return true;
             }

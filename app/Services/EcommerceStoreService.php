@@ -4,6 +4,8 @@ namespace App\Services;
 
 use App\Models\EcommerceOrder;
 use App\Models\WhatsItem;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Facade;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -31,6 +33,65 @@ class EcommerceStoreService
             'custom' => $this->updateCustomOrder($order, $action),
             default => $this->updateWooCommerceOrder($order, $action),
         };
+    }
+
+    /**
+     * Build an optimized WooCommerce REST API URL, avoiding unnecessary 404 retries.
+     * Defaults to index.php?rest_route= which is universally supported across all
+     * WordPress permalink configurations (both plain and pretty permalinks).
+     *
+     * @param  array<string, mixed>  $params
+     */
+    public static function buildWooCommerceUrl(
+        string $baseUrl,
+        string $endpointPath,
+        string $consumerKey,
+        string $consumerSecret,
+        array $params = []
+    ): string {
+        $baseUrl = rtrim($baseUrl, '/');
+        if (! str_starts_with($baseUrl, 'http://') && ! str_starts_with($baseUrl, 'https://')) {
+            $baseUrl = 'https://'.$baseUrl;
+        }
+
+        $hostKey = md5(parse_url($baseUrl, PHP_URL_HOST) ?: $baseUrl);
+        $style = 'rest_route'; // default to rest_route for zero 404s
+        try {
+            if (Facade::getFacadeApplication()) {
+                $style = Cache::get("wc_rest_style_{$hostKey}", 'rest_route');
+            }
+        } catch (\Throwable) {
+            $style = 'rest_route';
+        }
+
+        $endpointPath = '/'.ltrim($endpointPath, '/');
+
+        $queryParams = array_merge([
+            'consumer_key' => $consumerKey,
+            'consumer_secret' => $consumerSecret,
+        ], $params);
+
+        if ($style === 'wp_json') {
+            return "{$baseUrl}/wp-json{$endpointPath}?".http_build_query($queryParams);
+        }
+
+        return "{$baseUrl}/index.php?rest_route={$endpointPath}&".http_build_query($queryParams);
+    }
+
+    /**
+     * Mark which WooCommerce REST API style worked for a host to ensure future calls are instant.
+     */
+    public static function rememberWooCommerceStyle(string $baseUrl, string $style): void
+    {
+        try {
+            if (Facade::getFacadeApplication()) {
+                $baseUrl = rtrim($baseUrl, '/');
+                $hostKey = md5(parse_url($baseUrl, PHP_URL_HOST) ?: $baseUrl);
+                Cache::put("wc_rest_style_{$hostKey}", $style, now()->addDays(14));
+            }
+        } catch (\Throwable) {
+            // Ignore if cache unavailable
+        }
     }
 
     /**
@@ -69,32 +130,34 @@ class EcommerceStoreService
 
         $wcStatus = $action === 'approved' ? 'processing' : 'cancelled';
 
-        $selfLink = data_get($order->raw_payload, '_links.self.0.href');
-        $endpoint = ! empty($selfLink)
-            ? (string) $selfLink
-            : "{$baseUrl}/wp-json/wc/v3/orders/{$order->external_order_id}";
-
-        $separator = str_contains($endpoint, '?') ? '&' : '?';
-        $finalUrl = "{$endpoint}{$separator}consumer_key={$consumerKey}&consumer_secret={$consumerSecret}";
+        $primaryUrl = self::buildWooCommerceUrl($baseUrl, "/wc/v3/orders/{$order->external_order_id}", $consumerKey, $consumerSecret);
 
         try {
             $response = Http::withBasicAuth($consumerKey, $consumerSecret)
-                ->timeout(15)
-                ->put($finalUrl, [
+                ->timeout(8)
+                ->put($primaryUrl, [
                     'status' => $wcStatus,
                 ]);
 
-            if ($response->status() === 404 && ! str_contains($endpoint, 'rest_route')) {
-                $fallbackUrl = "{$baseUrl}/index.php?rest_route=/wc/v3/orders/{$order->external_order_id}&consumer_key={$consumerKey}&consumer_secret={$consumerSecret}";
-                $fallbackResponse = Http::withBasicAuth($consumerKey, $consumerSecret)
-                    ->timeout(15)
-                    ->put($fallbackUrl, [
+            if ($response->status() === 404) {
+                $altStyle = str_contains($primaryUrl, 'rest_route') ? 'wp_json' : 'rest_route';
+                $altUrl = $altStyle === 'wp_json'
+                    ? "{$baseUrl}/wp-json/wc/v3/orders/{$order->external_order_id}?consumer_key={$consumerKey}&consumer_secret={$consumerSecret}"
+                    : "{$baseUrl}/index.php?rest_route=/wc/v3/orders/{$order->external_order_id}&consumer_key={$consumerKey}&consumer_secret={$consumerSecret}";
+
+                $altResponse = Http::withBasicAuth($consumerKey, $consumerSecret)
+                    ->timeout(8)
+                    ->put($altUrl, [
                         'status' => $wcStatus,
                     ]);
 
-                if ($fallbackResponse->successful()) {
-                    $response = $fallbackResponse;
+                if ($altResponse->successful()) {
+                    $response = $altResponse;
+                    self::rememberWooCommerceStyle($baseUrl, $altStyle);
                 }
+            } else {
+                $curStyle = str_contains($primaryUrl, 'rest_route') ? 'rest_route' : 'wp_json';
+                self::rememberWooCommerceStyle($baseUrl, $curStyle);
             }
 
             if ($response->successful()) {

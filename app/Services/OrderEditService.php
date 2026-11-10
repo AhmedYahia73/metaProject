@@ -258,6 +258,7 @@ PROMPT;
                     ['role' => 'user', 'content' => $userMessage],
                 ],
                 'temperature' => 0.1,
+                'max_tokens' => 350,
                 'response_format' => ['type' => 'json_object'],
             ]);
 
@@ -553,34 +554,36 @@ PROMPT;
             return ['success' => false, 'message' => 'لم يتم تحديد أي تعديلات صالحة.'];
         }
 
-        // Check if order payload has a direct self link (e.g. index.php?rest_route=/wc/v3/orders/23)
-        $selfLink = data_get($order->raw_payload, '_links.self.0.href');
-        $endpoint = ! empty($selfLink)
-            ? (string) $selfLink
-            : "{$baseUrl}/wp-json/wc/v3/orders/{$order->external_order_id}";
-
-        $separator = str_contains($endpoint, '?') ? '&' : '?';
-        $finalUrl = "{$endpoint}{$separator}consumer_key={$consumerKey}&consumer_secret={$consumerSecret}";
+        $primaryUrl = EcommerceStoreService::buildWooCommerceUrl($baseUrl, "/wc/v3/orders/{$order->external_order_id}", $consumerKey, $consumerSecret);
 
         try {
             $response = Http::withBasicAuth($consumerKey, $consumerSecret)
-                ->timeout(20)
-                ->put($finalUrl, [
+                ->timeout(8)
+                ->put($primaryUrl, [
                     'line_items' => $lineItemUpdates,
                 ]);
 
-            // Fallback: If pretty URL returned 404, try with index.php?rest_route=
-            if ($response->status() === 404 && ! str_contains($endpoint, 'rest_route')) {
-                $fallbackUrl = "{$baseUrl}/index.php?rest_route=/wc/v3/orders/{$order->external_order_id}&consumer_key={$consumerKey}&consumer_secret={$consumerSecret}";
-                $fallbackResponse = Http::withBasicAuth($consumerKey, $consumerSecret)
-                    ->timeout(20)
-                    ->put($fallbackUrl, [
+            // Fallback: If returned 404, try alternative URL style
+            if ($response->status() === 404) {
+                $altStyle = str_contains($primaryUrl, 'rest_route') ? 'wp_json' : 'rest_route';
+                $altUrl = $altStyle === 'wp_json'
+                    ? "{$baseUrl}/wp-json/wc/v3/orders/{$order->external_order_id}?consumer_key={$consumerKey}&consumer_secret={$consumerSecret}"
+                    : "{$baseUrl}/index.php?rest_route=/wc/v3/orders/{$order->external_order_id}&consumer_key={$consumerKey}&consumer_secret={$consumerSecret}";
+
+                $altResponse = Http::withBasicAuth($consumerKey, $consumerSecret)
+                    ->timeout(8)
+                    ->put($altUrl, [
                         'line_items' => $lineItemUpdates,
                     ]);
 
-                if ($fallbackResponse->successful()) {
-                    $response = $fallbackResponse;
+                if ($altResponse->successful()) {
+                    $response = $altResponse;
+                    $primaryUrl = $altUrl;
+                    EcommerceStoreService::rememberWooCommerceStyle($baseUrl, $altStyle);
                 }
+            } else {
+                $curStyle = str_contains($primaryUrl, 'rest_route') ? 'rest_route' : 'wp_json';
+                EcommerceStoreService::rememberWooCommerceStyle($baseUrl, $curStyle);
             }
 
             // If WooCommerce returns invalid item ID error, refresh order and retry with fresh item IDs
@@ -591,15 +594,8 @@ PROMPT;
                     $remappedUpdates = $this->remapWooCommerceItemUpdates($lineItemUpdates, $items, $freshOrder['line_items']);
                     if (! empty($remappedUpdates)) {
                         $retryResponse = Http::withBasicAuth($consumerKey, $consumerSecret)
-                            ->timeout(20)
-                            ->put($finalUrl, ['line_items' => $remappedUpdates]);
-
-                        if ($retryResponse->status() === 404 && ! str_contains($endpoint, 'rest_route')) {
-                            $retryFallbackUrl = "{$baseUrl}/index.php?rest_route=/wc/v3/orders/{$order->external_order_id}&consumer_key={$consumerKey}&consumer_secret={$consumerSecret}";
-                            $retryResponse = Http::withBasicAuth($consumerKey, $consumerSecret)
-                                ->timeout(20)
-                                ->put($retryFallbackUrl, ['line_items' => $remappedUpdates]);
-                        }
+                            ->timeout(8)
+                            ->put($primaryUrl, ['line_items' => $remappedUpdates]);
 
                         if ($retryResponse->successful()) {
                             $response = $retryResponse;
@@ -647,23 +643,35 @@ PROMPT;
         }
 
         try {
-            $params = [
-                'consumer_key' => $key,
-                'consumer_secret' => $secret,
-                'search' => $name,
-                'per_page' => 1,
-                'status' => 'publish',
-            ];
+            $url = EcommerceStoreService::buildWooCommerceUrl(
+                $baseUrl,
+                '/wc/v3/products',
+                $key,
+                $secret,
+                ['search' => $name, 'per_page' => 1, 'status' => 'publish']
+            );
 
             $response = Http::withBasicAuth($key, $secret)
-                ->timeout(10)
-                ->get("{$baseUrl}/wp-json/wc/v3/products", $params);
+                ->timeout(6)
+                ->get($url);
 
-            if ($response->status() === 404 || ! $response->successful()) {
-                $params['rest_route'] = '/wc/v3/products';
-                $response = Http::withBasicAuth($key, $secret)
-                    ->timeout(10)
-                    ->get("{$baseUrl}/index.php", $params);
+            if ($response->status() === 404) {
+                $altStyle = str_contains($url, 'rest_route') ? 'wp_json' : 'rest_route';
+                $altUrl = $altStyle === 'wp_json'
+                    ? "{$baseUrl}/wp-json/wc/v3/products?search=".urlencode($name)."&per_page=1&status=publish&consumer_key={$key}&consumer_secret={$secret}"
+                    : "{$baseUrl}/index.php?rest_route=/wc/v3/products&search=".urlencode($name)."&per_page=1&status=publish&consumer_key={$key}&consumer_secret={$secret}";
+
+                $altResponse = Http::withBasicAuth($key, $secret)
+                    ->timeout(6)
+                    ->get($altUrl);
+
+                if ($altResponse->successful()) {
+                    $response = $altResponse;
+                    EcommerceStoreService::rememberWooCommerceStyle($baseUrl, $altStyle);
+                }
+            } else {
+                $curStyle = str_contains($url, 'rest_route') ? 'rest_route' : 'wp_json';
+                EcommerceStoreService::rememberWooCommerceStyle($baseUrl, $curStyle);
             }
 
             if ($response->successful()) {
@@ -780,28 +788,30 @@ PROMPT;
             return null;
         }
 
-        $selfLink = data_get($order->raw_payload, '_links.self.0.href');
-        $endpoint = ! empty($selfLink)
-            ? (string) $selfLink
-            : "{$baseUrl}/wp-json/wc/v3/orders/{$order->external_order_id}";
-
-        $separator = str_contains($endpoint, '?') ? '&' : '?';
-        $finalUrl = "{$endpoint}{$separator}consumer_key={$consumerKey}&consumer_secret={$consumerSecret}";
+        $url = EcommerceStoreService::buildWooCommerceUrl($baseUrl, "/wc/v3/orders/{$order->external_order_id}", $consumerKey, $consumerSecret);
 
         try {
             $response = Http::withBasicAuth($consumerKey, $consumerSecret)
-                ->timeout(15)
-                ->get($finalUrl);
+                ->timeout(6)
+                ->get($url);
 
-            if ($response->status() === 404 && ! str_contains($endpoint, 'rest_route')) {
-                $fallbackUrl = "{$baseUrl}/index.php?rest_route=/wc/v3/orders/{$order->external_order_id}&consumer_key={$consumerKey}&consumer_secret={$consumerSecret}";
-                $fallbackResponse = Http::withBasicAuth($consumerKey, $consumerSecret)
-                    ->timeout(15)
-                    ->get($fallbackUrl);
+            if ($response->status() === 404) {
+                $altStyle = str_contains($url, 'rest_route') ? 'wp_json' : 'rest_route';
+                $altUrl = $altStyle === 'wp_json'
+                    ? "{$baseUrl}/wp-json/wc/v3/orders/{$order->external_order_id}?consumer_key={$consumerKey}&consumer_secret={$consumerSecret}"
+                    : "{$baseUrl}/index.php?rest_route=/wc/v3/orders/{$order->external_order_id}&consumer_key={$consumerKey}&consumer_secret={$consumerSecret}";
 
-                if ($fallbackResponse->successful()) {
-                    $response = $fallbackResponse;
+                $altResponse = Http::withBasicAuth($consumerKey, $consumerSecret)
+                    ->timeout(6)
+                    ->get($altUrl);
+
+                if ($altResponse->successful()) {
+                    $response = $altResponse;
+                    EcommerceStoreService::rememberWooCommerceStyle($baseUrl, $altStyle);
                 }
+            } else {
+                $curStyle = str_contains($url, 'rest_route') ? 'rest_route' : 'wp_json';
+                EcommerceStoreService::rememberWooCommerceStyle($baseUrl, $curStyle);
             }
 
             if ($response->successful()) {
@@ -1162,16 +1172,41 @@ PROMPT;
      */
     public function isConfirmationIntent(string $text): bool
     {
-        $trimmed = trim(preg_replace('/[^\p{L}\p{N}\s]/u', '', $text));
+        $normalized = trim(preg_replace('/[^\p{L}\p{N}\s]/u', ' ', $text));
+        $normalized = preg_replace('/\s+/u', ' ', $normalized);
+
         $confirmExact = [
             'تأكيد', 'تاكيد', 'أكد', 'اكد', 'اعتمد', 'تمام', 'موافق', 'كده تمام', 'تمام كدة',
             'تمام كده', 'كده مظبوط', 'كده تمام يا غالي', 'اعتمد الطلب', 'أكد الطلب', 'اكد الطلب',
-            'تمام اعتمد', 'تمام توكل على الله', 'خلاص تمام', 'خلاص اكد', 'أيوة تمام', 'ايوه تمام',
-            'ايوه', 'أيوة', 'تمام جدا', 'تسلم تمام', 'كده حلو', 'اعتمد يا باشا', 'تمام كده تسلم',
-            'تمام شكرا', 'شكرا خلاص', 'نعم', 'اكيد', 'أكيد', 'اوك', 'اوكي', 'ok',
+            'تاكيد الطلب', 'تأكيد الطلب', 'أكد الاوردر', 'اكد الاوردر', 'تاكيد الاوردر', 'تأكيد الاوردر',
+            'تمام اعتمد', 'تمام توكل على الله', 'توكل على الله', 'خلاص تمام', 'خلاص اكد', 'خلاص أكد',
+            'أيوة تمام', 'ايوه تمام', 'ايوه', 'أيوة', 'تمام جدا', 'تسلم تمام', 'كده حلو', 'اعتمد يا باشا',
+            'تمام كده تسلم', 'تمام شكرا', 'شكرا خلاص', 'نعم', 'اكيد', 'أكيد', 'اوك', 'اوكي', 'ok',
+            'تمام ابعتهم', 'تمام ابعت', 'ابعت', 'تمام يا باشا', 'تمام يا فندم', 'كده تمام شكرا',
+            'تمام مظبوط', 'مظبوط', 'اعتمد يا غالي', 'اعتمدوا', 'تم الاعتماد',
         ];
 
-        return in_array($trimmed, $confirmExact, true);
+        if (in_array($normalized, $confirmExact, true)) {
+            return true;
+        }
+
+        // Fast-path for short phrases (<= 5 words) starting with affirmative words
+        $words = explode(' ', $normalized);
+        if (count($words) <= 5) {
+            $firstWord = $words[0] ?? '';
+            if (in_array($firstWord, ['تمام', 'أكد', 'اكد', 'اعتمد', 'تاكيد', 'تأكيد'], true)) {
+                $negativeKeywords = ['غير', 'بدل', 'شيل', 'احذف', 'ضيف', 'زود', 'نقص', 'لا', 'مش', 'لسه', 'بس', 'عاوز', 'عايز'];
+                foreach ($negativeKeywords as $neg) {
+                    if (str_contains($normalized, $neg)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
