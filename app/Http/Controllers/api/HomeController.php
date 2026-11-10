@@ -3834,37 +3834,41 @@ class HomeController extends Controller
         string $senderName,
         string $messageText,
         array $incomingMessage
-    ): JsonResponse {
+    ): ?JsonResponse {
         /** @var OrderEditService $editService */
         $editService = app(OrderEditService::class);
         /** @var MetaWhatsAppService $metaService */
         $metaService = app(MetaWhatsAppService::class);
 
-        // Record customer incoming message in Chat
-        $chat = Chat::create([
-            'user_id' => $restaurant->id,
-            'whats_item_id' => $whatsItem->id,
-            'name' => $senderName,
-            'phone' => $senderPhone,
-            'message' => $messageText,
-            'is_image' => false,
-            'is_admin' => false,
-            'sender_type' => 'customer',
-            'is_read' => true,
-            'channel' => 'whatsapp',
-            'meta_message_id' => data_get($incomingMessage, 'id'),
-        ]);
+        $recordCustomerChat = function () use ($restaurant, $whatsItem, $senderName, $senderPhone, $messageText, $incomingMessage) {
+            $chat = Chat::create([
+                'user_id' => $restaurant->id,
+                'whats_item_id' => $whatsItem->id,
+                'name' => $senderName,
+                'phone' => $senderPhone,
+                'message' => $messageText,
+                'is_image' => false,
+                'is_admin' => false,
+                'sender_type' => 'customer',
+                'is_read' => true,
+                'channel' => 'whatsapp',
+                'meta_message_id' => data_get($incomingMessage, 'id'),
+            ]);
 
-        try {
-            WhatsEvent::dispatch($chat);
-        } catch (\Throwable) {
-            // Ignore broadcast failure
-        }
+            try {
+                WhatsEvent::dispatch($chat);
+            } catch (\Throwable) {
+                // Ignore broadcast failure
+            }
+
+            return $chat;
+        };
 
         // 1. Check if user requested cancellation of edit mode
         $trimmed = trim($messageText);
         $cancelKeywords = ['إلغاء التعديل', 'الغاء التعديل', 'رجوع', 'تراجع', 'إلغاء', 'الغاء', 'مش عاوز اعدل', 'مش عايز اعدل'];
         if (in_array($trimmed, $cancelKeywords, true)) {
+            $recordCustomerChat();
             $order->update(['edit_state' => null]);
             $replyText = 'تم إلغاء وضع تعديل الطلب. طلبك الحالي ما زال معلقاً، يمكنك تأكيده في أي وقت.';
             $token = $this->resolveWhatsToken($whatsItem);
@@ -3882,6 +3886,8 @@ class HomeController extends Controller
 
         // 2. Check Fast-path Confirmation Intent
         if ($editService->isConfirmationIntent($messageText)) {
+            $recordCustomerChat();
+
             return $this->confirmOrderFromEditSession($whatsItem, $restaurant, $order, $senderPhone);
         }
 
@@ -3920,11 +3926,14 @@ class HomeController extends Controller
 
         // Case 1: AI detected confirmation intent
         if ($intent === 'confirm') {
+            $recordCustomerChat();
+
             return $this->confirmOrderFromEditSession($whatsItem, $restaurant, $order, $senderPhone);
         }
 
         // Case 2: AI detected cancellation intent
         if ($intent === 'cancel') {
+            $recordCustomerChat();
             $order->update(['edit_state' => null]);
             $replyText = 'تم إلغاء وضع تعديل الطلب. طلبك الحالي ما زال معلقاً، يمكنك تأكيده في أي وقت.';
             $token = $this->resolveWhatsToken($whatsItem);
@@ -3947,6 +3956,8 @@ class HomeController extends Controller
             // Return null so the webhook controller falls through to regular chatbot
             return null;
         }
+
+        $recordCustomerChat();
 
         // Case 4: Edit requested
         if ($intent === 'edit' && ! empty($aiParsed['edits'])) {
