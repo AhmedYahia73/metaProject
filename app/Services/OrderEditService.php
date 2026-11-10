@@ -416,14 +416,35 @@ PROMPT;
             return ['success' => false, 'message' => 'لم يتم تحديد أي تعديلات صالحة.'];
         }
 
-        $endpoint = "{$baseUrl}/wp-json/wc/v3/orders/{$order->external_order_id}";
+        // Check if order payload has a direct self link (e.g. index.php?rest_route=/wc/v3/orders/23)
+        $selfLink = data_get($order->raw_payload, '_links.self.0.href');
+        $endpoint = ! empty($selfLink)
+            ? (string) $selfLink
+            : "{$baseUrl}/wp-json/wc/v3/orders/{$order->external_order_id}";
+
+        $separator = str_contains($endpoint, '?') ? '&' : '?';
+        $finalUrl = "{$endpoint}{$separator}consumer_key={$consumerKey}&consumer_secret={$consumerSecret}";
 
         try {
             $response = Http::withBasicAuth($consumerKey, $consumerSecret)
                 ->timeout(20)
-                ->put($endpoint, [
+                ->put($finalUrl, [
                     'line_items' => $lineItemUpdates,
                 ]);
+
+            // Fallback: If pretty URL returned 404, try with index.php?rest_route=
+            if ($response->status() === 404 && ! str_contains($endpoint, 'rest_route')) {
+                $fallbackUrl = "{$baseUrl}/index.php?rest_route=/wc/v3/orders/{$order->external_order_id}&consumer_key={$consumerKey}&consumer_secret={$consumerSecret}";
+                $fallbackResponse = Http::withBasicAuth($consumerKey, $consumerSecret)
+                    ->timeout(20)
+                    ->put($fallbackUrl, [
+                        'line_items' => $lineItemUpdates,
+                    ]);
+
+                if ($fallbackResponse->successful()) {
+                    $response = $fallbackResponse;
+                }
+            }
 
             if ($response->successful()) {
                 $updatedOrder = $response->json();
@@ -463,13 +484,25 @@ PROMPT;
         }
 
         try {
+            $url = "{$baseUrl}/wp-json/wc/v3/products?consumer_key={$key}&consumer_secret={$secret}";
             $response = Http::withBasicAuth($key, $secret)
                 ->timeout(10)
-                ->get("{$baseUrl}/wp-json/wc/v3/products", [
+                ->get($url, [
                     'search' => $name,
                     'per_page' => 1,
                     'status' => 'publish',
                 ]);
+
+            if ($response->status() === 404) {
+                $url = "{$baseUrl}/index.php?rest_route=/wc/v3/products&consumer_key={$key}&consumer_secret={$secret}";
+                $response = Http::withBasicAuth($key, $secret)
+                    ->timeout(10)
+                    ->get($url, [
+                        'search' => $name,
+                        'per_page' => 1,
+                        'status' => 'publish',
+                    ]);
+            }
 
             if ($response->successful()) {
                 $products = $response->json();

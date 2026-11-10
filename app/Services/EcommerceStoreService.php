@@ -68,14 +68,34 @@ class EcommerceStoreService
         }
 
         $wcStatus = $action === 'approved' ? 'processing' : 'cancelled';
-        $endpoint = "{$baseUrl}/wp-json/wc/v3/orders/{$order->external_order_id}";
+
+        $selfLink = data_get($order->raw_payload, '_links.self.0.href');
+        $endpoint = ! empty($selfLink)
+            ? (string) $selfLink
+            : "{$baseUrl}/wp-json/wc/v3/orders/{$order->external_order_id}";
+
+        $separator = str_contains($endpoint, '?') ? '&' : '?';
+        $finalUrl = "{$endpoint}{$separator}consumer_key={$consumerKey}&consumer_secret={$consumerSecret}";
 
         try {
             $response = Http::withBasicAuth($consumerKey, $consumerSecret)
                 ->timeout(15)
-                ->put($endpoint, [
+                ->put($finalUrl, [
                     'status' => $wcStatus,
                 ]);
+
+            if ($response->status() === 404 && ! str_contains($endpoint, 'rest_route')) {
+                $fallbackUrl = "{$baseUrl}/index.php?rest_route=/wc/v3/orders/{$order->external_order_id}&consumer_key={$consumerKey}&consumer_secret={$consumerSecret}";
+                $fallbackResponse = Http::withBasicAuth($consumerKey, $consumerSecret)
+                    ->timeout(15)
+                    ->put($fallbackUrl, [
+                        'status' => $wcStatus,
+                    ]);
+
+                if ($fallbackResponse->successful()) {
+                    $response = $fallbackResponse;
+                }
+            }
 
             if ($response->successful()) {
                 Log::info("EcommerceStoreService: WooCommerce order #{$order->external_order_id} updated to [{$wcStatus}]", [
