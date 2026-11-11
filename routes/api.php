@@ -130,6 +130,8 @@ Route::prefix('auth')->group(function () {
 */
 Route::middleware(['auth:sanctum', 'user'])->group(function () {
     // WhatsApp Embedded Signup — connect customer's own WABA (no 20-number limit)
+    Route::post('user/templates/generate-ai-file', [TemplateController::class, 'generateAiFile']);
+    Route::get('user/templates', [TemplateController::class, 'index']);
     Route::post('whats/embedded-signup', [EmbeddedSignupController::class, 'completeSignup']);
     Route::post('whats/embedded-signup/inspect', [EmbeddedSignupController::class, 'inspectCode']);
     Route::post('whats/items/{whatsItem}/resubscribe-webhook', [EmbeddedSignupController::class, 'resubscribeWebhook']);
@@ -137,8 +139,6 @@ Route::middleware(['auth:sanctum', 'user'])->group(function () {
 });
 
 Route::prefix('user')->group(function () {
-    Route::post('templates/generate-ai-file', [TemplateController::class, 'generateAiFile']);
-    Route::get('templates', [TemplateController::class, 'index']);
 
     // Public user routes
     Route::get('packages', [UserHomeController::class, 'packages']);
