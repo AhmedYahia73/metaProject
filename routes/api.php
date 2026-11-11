@@ -137,6 +137,8 @@ Route::middleware(['auth:sanctum', 'user'])->group(function () {
 });
 
 Route::prefix('user')->group(function () {
+    Route::post('templates/generate-ai-file', [TemplateController::class, 'generateAiFile']);
+    
     // Public user routes
     Route::get('packages', [UserHomeController::class, 'packages']);
     Route::post('contact-us', [UserHomeController::class, 'contactUs'])
