@@ -1167,7 +1167,7 @@ class MetaWhatsAppService
      */
     public function ensureBroadcastTemplate(WhatsItem $whatsItem): array
     {
-        $wabaId = $whatsItem->customer_waba_id ?: ($whatsItem->waba_id ?: $this->wabaId);
+        $wabaId = $whatsItem->waba_id ?: ($whatsItem->customer_waba_id ?: $this->wabaId);
         $token = $whatsItem->access_token ?: $this->systemUserToken;
 
         if (empty($wabaId) || empty($token)) {
@@ -1185,15 +1185,31 @@ class MetaWhatsAppService
                     'name' => 'client_broadcast_message',
                 ]);
 
+            if (! $checkResponse->successful() && ! empty($this->systemUserToken) && $token !== $this->systemUserToken) {
+                $checkResponse = Http::withToken($this->systemUserToken)
+                    ->timeout(15)
+                    ->get("{$this->baseUrl}/{$wabaId}/message_templates", [
+                        'name' => 'client_broadcast_message',
+                    ]);
+            }
+
             if ($checkResponse->successful()) {
                 $existing = $checkResponse->json('data', []);
                 foreach ($existing as $t) {
                     if (($t['name'] ?? '') === 'client_broadcast_message' && ($t['language'] ?? '') === 'ar') {
+                        $templateStatus = $t['status'] ?? 'UNKNOWN';
+                        Log::info('MetaWhatsApp: Broadcast template found on WABA', [
+                            'waba_id' => $wabaId,
+                            'status' => $templateStatus,
+                            'template_id' => $t['id'] ?? null,
+                        ]);
+
                         return [
-                            'success' => true,
-                            'message' => 'Broadcast template already exists.',
+                            'success' => $templateStatus === 'APPROVED',
+                            'message' => "Broadcast template exists with status: {$templateStatus}",
                             'template_id' => $t['id'] ?? null,
                             'template_name' => 'client_broadcast_message',
+                            'status' => $templateStatus,
                         ];
                     }
                 }
@@ -1225,6 +1241,12 @@ class MetaWhatsAppService
             $response = Http::withToken($token)
                 ->timeout(15)
                 ->post("{$this->baseUrl}/{$wabaId}/message_templates", $templatePayload);
+
+            if (! $response->successful() && ! empty($this->systemUserToken) && $token !== $this->systemUserToken) {
+                $response = Http::withToken($this->systemUserToken)
+                    ->timeout(15)
+                    ->post("{$this->baseUrl}/{$wabaId}/message_templates", $templatePayload);
+            }
 
             if ($response->successful()) {
                 Log::info('MetaWhatsApp: Client broadcast template created on WABA', [
@@ -1334,24 +1356,42 @@ class MetaWhatsAppService
                 ];
             }
 
-            // Fallback: If template is not approved or pending, attempt sending as direct text
-            $error = $response->json('error', []);
-            Log::warning('MetaWhatsApp: Broadcast template send failed, attempting direct text fallback', [
+            // Retry with systemUserToken if customer token failed
+            if (! empty($this->systemUserToken) && $token !== $this->systemUserToken) {
+                $retry = Http::withToken($this->systemUserToken)
+                    ->timeout(20)
+                    ->post("{$this->baseUrl}/{$phoneNumberId}/messages", $payload);
+
+                if ($retry->successful()) {
+                    $msgId = $retry->json('messages.0.id');
+
+                    Log::info('MetaWhatsApp: Broadcast template message sent via systemUserToken', [
+                        'whats_item_id' => $whatsItem->id,
+                        'to' => $normalizedTo,
+                        'message_id' => $msgId,
+                    ]);
+
+                    return [
+                        'success' => true,
+                        'message' => 'Message sent successfully via system token.',
+                        'message_id' => $msgId,
+                    ];
+                }
+
+                $error = $retry->json('error', []);
+            } else {
+                $error = $response->json('error', []);
+            }
+
+            Log::error('MetaWhatsApp: Broadcast template send failed', [
                 'error' => $error,
                 'to' => $normalizedTo,
+                'whats_item_id' => $whatsItem->id,
             ]);
-
-            $directSent = $this->sendDirectTextMessage($whatsItem, $normalizedTo, $message);
-            if ($directSent) {
-                return [
-                    'success' => true,
-                    'message' => 'Message sent via direct text fallback.',
-                ];
-            }
 
             return [
                 'success' => false,
-                'message' => $error['message'] ?? 'Failed to send WhatsApp message.',
+                'message' => $error['message'] ?? 'Failed to send WhatsApp broadcast message.',
                 'error' => $error,
             ];
         } catch (\Throwable $e) {
