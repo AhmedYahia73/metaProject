@@ -1208,14 +1208,14 @@ class MetaWhatsAppService
         // 2. Create the client_broadcast_message template
         $templatePayload = [
             'name' => 'client_broadcast_message',
-            'category' => 'UTILITY',
+            'category' => 'MARKETING',
             'language' => 'ar',
             'components' => [
                 [
                     'type' => 'BODY',
-                    'text' => "عزيزنا العميل،\n{{1}}",
+                    'text' => 'مرحباً بك عميلنا العزيز، نود إعلامك بالتالي: {{1}}. شكراً لتواصلك معنا ويسعدنا دائماً خدمتك.',
                     'example' => [
-                        'body_text' => [['مرحباً بكم، يسعدنا تواصلكم معنا دائماً.']],
+                        'body_text' => [['خصم خاص 20% على جميع الأصناف اليوم']],
                     ],
                 ],
             ],
@@ -1289,7 +1289,7 @@ class MetaWhatsAppService
             ];
         }
 
-        $normalizedTo = $this->normalizePhoneForMeta($toPhone);
+        $normalizedTo = $this->normalizeRecipientPhone($toPhone);
 
         $payload = [
             'messaging_product' => 'whatsapp',
@@ -1365,5 +1365,13 @@ class MetaWhatsAppService
                 'message' => $e->getMessage(),
             ];
         }
+    }
+
+    /**
+     * Normalize a phone number for Meta Graph API.
+     */
+    public function normalizePhoneForMeta(string $phone): string
+    {
+        return $this->normalizeRecipientPhone($phone);
     }
 }
