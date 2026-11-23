@@ -45,7 +45,7 @@ class OrderController extends Controller
         ]);
 
         $query = Order::with(['package:id,name', 'user:id,name,phone',
-            'whatsItem:id,phone', 'messengerAccount:id,page_name', 'instagramItem:id,username,name', 
+            'whatsItem:id,phone', 'messengerAccount:id,page_name', 'instagramItem:id,username,name',
             'telegramAccount:id,bot_name,bot_username', 'tiktokAccount:id,username'])->latest();
 
         if ($request->filled('user_id')) {
@@ -322,7 +322,7 @@ class OrderController extends Controller
                     'id' => $order->telegramAccount->id,
                     'bot_name' => $order->telegramAccount->bot_name,
                     'bot_username' => $order->telegramAccount->bot_username,
-                ] : null, 
+                ] : null,
                 'tiktok_account' => $order->tiktokAccount ? [
                     'id' => $order->tiktokAccount->id,
                     'username' => $order->tiktokAccount->username,
@@ -521,7 +521,7 @@ class OrderController extends Controller
                     'website_url' => $telegramAccount->fresh()->website_url,
                 ];
             }
-        } elseif($order->isTikTok()) {
+        } elseif ($order->isTikTok()) {
             /** @var TikTokAccount|null $tiktokAccount */
             $tiktokAccount = $order->tiktokAccount;
 
@@ -565,18 +565,25 @@ class OrderController extends Controller
                 ];
             }
 
-        }
-        else {
+        } else {
             // WhatsApp: message quota and optional ai_context / ai_file / website_url
             $whatsItem = $order->whatsItem;
             $msgsToAdd = $order->msgs ?: (int) $package->msg_number;
 
             if ($whatsItem) {
-                $whatsItemUpdate = [
-                    'start_date' => $fromDate->toDateString(),
-                    'end_date' => $toDate->toDateString(),
-                    'phone_status' => 'active',
-                ];
+                if ($order->is_template) {
+                    $whatsItemUpdate = [
+                        't_start_date' => $fromDate->toDateString(),
+                        't_end_date' => $toDate->toDateString(),
+                        'phone_status' => 'active',
+                    ];
+                } else {
+                    $whatsItemUpdate = [
+                        'start_date' => $fromDate->toDateString(),
+                        'end_date' => $toDate->toDateString(),
+                        'phone_status' => 'active',
+                    ];
+                }
 
                 if ($request->has('ai_context')) {
                     $whatsItemUpdate['ai_context'] = $validated['ai_context'] ?? null;
@@ -595,16 +602,24 @@ class OrderController extends Controller
                     $whatsItemUpdate['ai_file'] = $request->input('ai_file');
                 }
 
-                $whatsItemUpdate['msg_number'] = ((int) $whatsItem->msg_number) + $msgsToAdd;
+                if ($order->is_template) {
+                    $whatsItemUpdate['t_msg_number'] = ((int) $whatsItem->t_msg_number) + $msgsToAdd;
+                } else {
+                    $whatsItemUpdate['msg_number'] = ((int) $whatsItem->msg_number) + $msgsToAdd;
+                }
                 $whatsItem->update($whatsItemUpdate);
 
                 $activationResult = [
                     'whats_item_id' => $whatsItem->id,
                     'phone' => $whatsItem->phone,
                     'whatsapp_msgs_added' => $msgsToAdd,
+                    'is_template' => (bool) $order->is_template,
                     'msg_number' => $whatsItem->fresh()->msg_number,
+                    't_msg_number' => $whatsItem->fresh()->t_msg_number,
                     'start_date' => $whatsItem->fresh()->start_date?->toDateString(),
                     'end_date' => $whatsItem->fresh()->end_date?->toDateString(),
+                    't_start_date' => $whatsItem->fresh()->t_start_date?->toDateString(),
+                    't_end_date' => $whatsItem->fresh()->t_end_date?->toDateString(),
                     'ai_context' => $whatsItem->fresh()->ai_context,
                     'ai_file' => $whatsItem->fresh()->ai_file,
                     'website_url' => $whatsItem->fresh()->website_url,

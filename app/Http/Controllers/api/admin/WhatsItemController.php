@@ -3,12 +3,14 @@
 namespace App\Http\Controllers\api\admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Package;
 use App\Models\User;
 use App\Models\WhatsItem;
 use App\Services\EmbeddedSignupService;
 use App\Services\MetaWhatsAppService;
 use App\trait\FiltersDailyTokens;
 use App\trait\image;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -551,6 +553,51 @@ class WhatsItemController extends Controller
             'status' => true,
             'message' => 'Phone number registered and connected to WhatsApp Cloud API successfully!',
             'data' => $whatsItem->fresh()->makeVisible('user_data'),
+        ]);
+    }
+
+    /**
+     * Activate a package directly for a WhatsApp number.
+     */
+    public function activatePackage(Request $request, User $user, WhatsItem $whatsItem): JsonResponse
+    {
+        $this->authorizeItem($user, $whatsItem);
+
+        $validated = $request->validate([
+            'package_id' => 'required|exists:packages,id',
+            'is_template' => 'sometimes|boolean',
+        ]);
+
+        $package = Package::findOrFail($validated['package_id']);
+        $fromDate = Carbon::today();
+        $months = max(1, (int) $package->months);
+        $toDate = $fromDate->copy()->addMonths($months);
+        $msgs = (int) $package->msg_number;
+
+        $isTemplate = isset($validated['is_template'])
+            ? (bool) $validated['is_template']
+            : (bool) $package->is_template;
+
+        if ($isTemplate) {
+            $whatsItem->update([
+                'phone_status' => 'active',
+                't_start_date' => $fromDate->toDateString(),
+                't_end_date' => $toDate->toDateString(),
+                't_msg_number' => ((int) $whatsItem->t_msg_number) + $msgs,
+            ]);
+        } else {
+            $whatsItem->update([
+                'phone_status' => 'active',
+                'start_date' => $fromDate->toDateString(),
+                'end_date' => $toDate->toDateString(),
+                'msg_number' => ((int) $whatsItem->msg_number) + $msgs,
+            ]);
+        }
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Package activated successfully for WhatsApp number.',
+            'data' => $whatsItem->fresh(),
         ]);
     }
 

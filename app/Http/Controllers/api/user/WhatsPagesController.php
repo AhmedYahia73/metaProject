@@ -11,6 +11,7 @@ use App\Services\EmbeddedSignupService;
 use App\Services\MetaWhatsAppService;
 use App\trait\image;
 use App\trait\paymob;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -603,6 +604,9 @@ class WhatsPagesController extends Controller
             'access_token' => $whatsItem->access_token ?: $this->metaService->getSystemUserToken(),
         ]);
 
+        // 4. Ensure broadcast template exists on Meta
+        $this->metaService->ensureBroadcastTemplate($whatsItem);
+
         return response()->json([
             'status' => true,
             'message' => 'Phone number verified and registered on WhatsApp Cloud API successfully!',
@@ -772,6 +776,7 @@ class WhatsPagesController extends Controller
             'msgs' => $msgs,
             'status' => 'faild',
             'channel' => 'whatsapp',
+            'is_template' => (bool) $package->is_template,
             'whats_item_id' => $whatsItem->id,
             'from' => null,
             'to' => null,
@@ -870,6 +875,41 @@ class WhatsPagesController extends Controller
             'status' => true,
             'message' => 'YOU SUBSCRIPED SUCCESS.',
         ], Response::HTTP_CREATED);
+    }
+
+    /**
+     * Get user's WhatsApp items with template subscription status.
+     */
+    public function templateStatusItems(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $today = Carbon::today()->toDateString();
+
+        $items = WhatsItem::where('user_id', $user->id)
+            ->latest()
+            ->get()
+            ->map(function (WhatsItem $item) use ($today) {
+                $hasActiveDates = ! empty($item->t_start_date) && ! empty($item->t_end_date)
+                    && $item->t_start_date->toDateString() <= $today
+                    && $item->t_end_date->toDateString() >= $today;
+
+                $isPackageActive = $hasActiveDates && ((int) $item->t_msg_number > 0);
+
+                return [
+                    'id' => $item->id,
+                    'phone' => $item->phone,
+                    'is_package_active' => $isPackageActive,
+                    't_msg_number' => (int) $item->t_msg_number,
+                    't_start_date' => $item->t_start_date?->toDateString(),
+                    't_end_date' => $item->t_end_date?->toDateString(),
+                    'phone_status' => $item->phone_status,
+                ];
+            });
+
+        return response()->json([
+            'status' => true,
+            'data' => $items,
+        ]);
     }
 
     /**

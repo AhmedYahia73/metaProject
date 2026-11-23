@@ -89,6 +89,16 @@ class User extends Authenticatable
     }
 
     /**
+     * Get all clients for this user.
+     *
+     * @return HasMany<Client, $this>
+     */
+    public function clients(): HasMany
+    {
+        return $this->hasMany(Client::class);
+    }
+
+    /**
      * Get all WhatsApp items (numbers) for this user (restaurant).
      *
      * @return HasMany<WhatsItem, $this>

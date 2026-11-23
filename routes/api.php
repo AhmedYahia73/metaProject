@@ -27,6 +27,7 @@ use App\Http\Controllers\api\StoreWebhookController;
 use App\Http\Controllers\api\TelegramWebhookController;
 use App\Http\Controllers\api\TikTokWebhookController;
 use App\Http\Controllers\api\user\ChatController;
+use App\Http\Controllers\api\user\ClientController;
 use App\Http\Controllers\api\user\EcommerceOrderController;
 use App\Http\Controllers\api\user\EmbeddedSignupController;
 use App\Http\Controllers\api\user\HomeController as UserHomeController;
@@ -171,6 +172,7 @@ Route::prefix('user')->group(function () {
         Route::get('whats/packages', [WhatsPagesController::class, 'whats_packages']);
         Route::get('whats/pages', [WhatsPagesController::class, 'pages']);
         Route::get('whats/items', [WhatsPagesController::class, 'index']);
+        Route::get('whats/template-status-items', [WhatsPagesController::class, 'templateStatusItems']);
         Route::post('whats/items', [WhatsPagesController::class, 'store']);
         Route::get('whats/items/{whatsItem}', [WhatsPagesController::class, 'show']);
         Route::put('whats/items/{whatsItem}', [WhatsPagesController::class, 'update']);
@@ -252,6 +254,10 @@ Route::prefix('user')->group(function () {
 
         Route::get('pending_orders', [UserOrderController::class, 'pending_orders']);
         Route::get('history_orders', [UserOrderController::class, 'history_orders']);
+
+        // Clients Management
+        Route::post('clients/send-messages', [ClientController::class, 'sendMessages']);
+        Route::apiResource('clients', ClientController::class);
     });
 });
 
@@ -337,6 +343,10 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::get(
         'users/{user}/whats-items/{whatsItem}/meta-status',
         [AdminWhatsItemController::class, 'syncMetaStatus']
+    );
+    Route::post(
+        'users/{user}/whats-items/{whatsItem}/activate-package',
+        [AdminWhatsItemController::class, 'activatePackage']
     );
     Route::apiResource('users/{user}/whats-items', AdminWhatsItemController::class);
 

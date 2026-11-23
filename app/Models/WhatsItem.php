@@ -40,10 +40,13 @@ class WhatsItem extends Model
         'product_link',
         'user_data',
         'msg_number',
+        't_msg_number',
         'ai_context',
         'ai_file',
         'start_date',
         'end_date',
+        't_start_date',
+        't_end_date',
         'order_confirmation_enabled',
         'ecommerce_platform',
         'store_webhook_token',
@@ -76,8 +79,11 @@ class WhatsItem extends Model
             'user_data' => 'array',
             'phone_verified_at' => 'datetime',
             'msg_number' => 'integer',
+            't_msg_number' => 'integer',
             'start_date' => 'date',
             'end_date' => 'date',
+            't_start_date' => 'date',
+            't_end_date' => 'date',
             'order_confirmation_enabled' => 'boolean',
         ];
     }
@@ -246,6 +252,23 @@ class WhatsItem extends Model
             'total_msgs' => max(0, $available),
             'used_msgs' => 0,
         ];
+    }
+
+    /**
+     * Check whether this WhatsApp item has an active template subscription.
+     */
+    public function hasActiveTemplatePackage(): bool
+    {
+        $today = Carbon::today()->toDateString();
+
+        if (! empty($this->t_start_date) && ! empty($this->t_end_date)) {
+            $isWithinDates = $this->t_start_date->toDateString() <= $today
+                && $this->t_end_date->toDateString() >= $today;
+
+            return $isWithinDates && ((int) $this->t_msg_number > 0);
+        }
+
+        return false;
     }
 
     /**

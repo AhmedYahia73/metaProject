@@ -374,12 +374,21 @@ trait paymob
             /** @var WhatsItem|null $whatsItem */
             $whatsItem = $order->whatsItem;
             if ($whatsItem) {
-                $whatsItem->update([
-                    'phone_status' => 'active',
-                    'start_date' => $fromDate->toDateString(),
-                    'end_date' => $toDate->toDateString(),
-                    'msg_number' => ((int) $whatsItem->msg_number) + $msgsToAdd,
-                ]);
+                if ($order->is_template) {
+                    $whatsItem->update([
+                        'phone_status' => 'active',
+                        't_start_date' => $fromDate->toDateString(),
+                        't_end_date' => $toDate->toDateString(),
+                        't_msg_number' => ((int) $whatsItem->t_msg_number) + $msgsToAdd,
+                    ]);
+                } else {
+                    $whatsItem->update([
+                        'phone_status' => 'active',
+                        'start_date' => $fromDate->toDateString(),
+                        'end_date' => $toDate->toDateString(),
+                        'msg_number' => ((int) $whatsItem->msg_number) + $msgsToAdd,
+                    ]);
+                }
             }
         } elseif ($order->isMessenger()) {
             /** @var MessengerAccount|null $account */

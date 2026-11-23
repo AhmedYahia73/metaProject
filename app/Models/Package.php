@@ -14,6 +14,7 @@ class Package extends Model
     protected $fillable = [
         'name',
         'type',
+        'is_template',
         'msg_number',
         'price',
         'discount_id',
@@ -30,6 +31,7 @@ class Package extends Model
     {
         return [
             'name' => 'array',
+            'is_template' => 'boolean',
             'msg_number' => 'integer',
             'price' => 'decimal:2',
             'months' => 'integer',

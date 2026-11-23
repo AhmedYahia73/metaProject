@@ -24,6 +24,7 @@ class Order extends Model
         'status',
         'transaction_id',
         'channel',
+        'is_template',
         'messenger_account_id',
         'whats_item_id',
         'instagram_item_id',
@@ -121,6 +122,7 @@ class Order extends Model
             'from' => 'date',
             'to' => 'date',
             'msgs' => 'integer',
+            'is_template' => 'boolean',
         ];
     }
 
