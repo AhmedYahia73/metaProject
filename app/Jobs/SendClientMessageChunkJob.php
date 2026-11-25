@@ -8,6 +8,7 @@ use App\Models\WhatsItem;
 use App\Services\MetaWhatsAppService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class SendClientMessageChunkJob implements ShouldQueue
@@ -111,7 +112,9 @@ class SendClientMessageChunkJob implements ShouldQueue
 
             // ONLY deduct quota and record sent message if delivery/send succeeded
             if ($result['success'] ?? false) {
-                $whatsItem->decrement('t_msg_number');
+                WhatsItem::withoutEvents(function () use ($whatsItem) {
+                    $whatsItem->decrement('t_msg_number');
+                });
                 $newQuota = (int) $whatsItem->fresh()->t_msg_number;
                 $successCount++;
 
@@ -123,12 +126,20 @@ class SendClientMessageChunkJob implements ShouldQueue
                     'remaining_t_msg_number' => $newQuota,
                 ]);
 
+                $msgSend = null;
                 if ($whatsItem->user_id) {
-                    MsgSend::create([
+                    $msgSend = MsgSend::create([
                         'user_id' => $whatsItem->user_id,
                         'whats_item_id' => $whatsItem->id,
                         'channel' => 'whatsapp',
                     ]);
+                }
+
+                if (! empty($result['message_id'])) {
+                    Cache::put("broadcast_wamid_{$result['message_id']}", [
+                        'whats_item_id' => $whatsItem->id,
+                        'msg_send_id' => $msgSend?->id,
+                    ], now()->addHours(24));
                 }
             } else {
                 $failedCount++;

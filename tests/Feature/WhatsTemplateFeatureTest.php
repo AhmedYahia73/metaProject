@@ -257,3 +257,70 @@ test('chunk job only deducts t_msg_number when sending actually succeeds', funct
     // Initial was 10. Only 1 succeeded, so 1 was deducted => 9
     expect($whatsItem->t_msg_number)->toBe(9);
 });
+
+test('webhook refunds t_msg_number when meta asynchronously reports broadcast delivery failed', function () {
+    $whatsItem = WhatsItem::create([
+        'user_id' => $this->user->id,
+        'phone' => '+201043961914',
+        'phone_number_id' => '1280367745167576',
+        'phone_status' => 'active',
+        't_msg_number' => 10,
+        't_start_date' => Carbon::yesterday()->toDateString(),
+        't_end_date' => Carbon::tomorrow()->toDateString(),
+    ]);
+
+    $client = Client::factory()->create([
+        'user_id' => $this->user->id,
+        'whats_number' => '201206610346',
+    ]);
+
+    $mockService = mock(MetaWhatsAppService::class);
+    $mockService->shouldReceive('ensureBroadcastTemplate')->andReturn(['success' => true]);
+    $mockService->shouldReceive('sendBroadcastTemplateMessage')
+        ->once()
+        ->andReturn(['success' => true, 'message_id' => 'wamid.failed.131042']);
+
+    $job = new SendClientMessageChunkJob(
+        $whatsItem->id,
+        [$client->id],
+        'Testing async failure'
+    );
+    $job->handle($mockService);
+
+    expect($whatsItem->fresh()->t_msg_number)->toBe(9);
+
+    $response = $this->postJson('/api/web-hook', [
+        'entry' => [
+            [
+                'changes' => [
+                    [
+                        'value' => [
+                            'metadata' => [
+                                'display_phone_number' => '201043961914',
+                                'phone_number_id' => '1280367745167576',
+                            ],
+                            'statuses' => [
+                                [
+                                    'id' => 'wamid.failed.131042',
+                                    'status' => 'failed',
+                                    'recipient_id' => '201206610346',
+                                    'errors' => [
+                                        [
+                                            'code' => 131042,
+                                            'title' => 'Business eligibility payment issue',
+                                        ],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ],
+    ]);
+
+    $response->assertOk()
+        ->assertJsonPath('status', 'status_logged');
+
+    expect($whatsItem->fresh()->t_msg_number)->toBe(10);
+});

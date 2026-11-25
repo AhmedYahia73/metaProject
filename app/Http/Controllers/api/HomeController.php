@@ -184,6 +184,22 @@ class HomeController extends Controller
                         'errors' => $statusErrors,
                         'raw' => $statusUpdate,
                     ]);
+
+                    $broadcastMeta = Cache::pull("broadcast_wamid_{$wamid}");
+                    if (is_array($broadcastMeta) && ! empty($broadcastMeta['whats_item_id'])) {
+                        WhatsItem::withoutEvents(function () use ($broadcastMeta) {
+                            WhatsItem::whereKey($broadcastMeta['whats_item_id'])->increment('t_msg_number');
+                        });
+
+                        if (! empty($broadcastMeta['msg_send_id'])) {
+                            MsgSend::whereKey($broadcastMeta['msg_send_id'])->delete();
+                        }
+
+                        Log::warning("MetaWhatsApp Webhook: Refunded t_msg_number for WhatsItem #{$broadcastMeta['whats_item_id']} due to async delivery failure", [
+                            'whats_item_id' => $broadcastMeta['whats_item_id'],
+                            'wamid' => $wamid,
+                        ]);
+                    }
                 } else {
                     Log::info("MetaWhatsApp Message Delivery Status: [{$statusName}] for [{$recipientId}] (wamid: {$wamid})");
                 }
